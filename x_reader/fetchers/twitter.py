@@ -84,7 +84,11 @@ async def _fetch_via_playwright(url: str) -> Dict[str, Any]:
         logger.info(f"Using saved X session: {session_path}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            channel="chrome",
+            args=["--disable-blink-features=AutomationControlled"],
+        )
 
         context_kwargs = {}
         if has_session:
