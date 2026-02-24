@@ -155,9 +155,16 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
         try:
             logger.info(f"[Twitter] Tier 1 — oEmbed: {url}")
             data = _fetch_via_oembed(url)
-            if data.get("text") and len(data["text"].strip()) > 20:
+            text = (data.get("text") or "").strip()
+            # Some oEmbed responses are only a t.co stub + author/date.
+            thin_oembed = (
+                len(text) <= 20
+                or text.lower().startswith("https://t.co/")
+                or ("&mdash;" in text and text.count("https://t.co/") >= 1)
+            )
+            if not thin_oembed:
                 return {
-                    "text": data["text"],
+                    "text": text,
                     "author": author or data.get("author", ""),
                     "url": url,
                     "title": data.get("title", ""),
