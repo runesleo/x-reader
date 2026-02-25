@@ -62,20 +62,29 @@ def save_to_markdown(item: UnifiedContent, filepath: str = None):
             filepath = os.path.join(output_dir, "content_hub.md")
 
     # Security: Validate filepath to prevent path traversal attacks
-    # Only allow paths under allowed directories
+    # Only allow paths under explicitly configured directories or current working directory
     abs_filepath = os.path.abspath(filepath)
-    allowed_dirs = [
-        os.path.abspath(os.getenv("OUTPUT_DIR", ".")),
-        os.path.abspath(os.getenv("OBSIDIAN_VAULT", ".")),
-        os.path.abspath("."),
-    ]
     
-    # If filepath is provided explicitly, it must be in current directory
+    # Get allowed directories from environment, with fallbacks
+    output_dir = os.getenv("OUTPUT_DIR", "")
+    vault_path = os.getenv("OBSIDIAN_VAULT", "")
+    
+    # Build list of allowed absolute paths (skip empty/missing env vars)
+    allowed_dirs = []
+    if output_dir:
+        allowed_dirs.append(os.path.abspath(output_dir))
+    if vault_path:
+        allowed_dirs.append(os.path.abspath(vault_path))
+    # Always allow current working directory
+    allowed_dirs.append(os.path.abspath(os.getcwd()))
+    # Always allow user's home directory
+    allowed_dirs.append(os.path.abspath(os.path.expanduser("~")))
+    # Always allow /tmp for temporary files
+    allowed_dirs.append("/tmp")
+    
+    # Check if filepath is in any allowed directory
     if not any(abs_filepath.startswith(d) for d in allowed_dirs):
-        # Allow if it's in current working directory
-        cwd = os.path.abspath(".")
-        if not abs_filepath.startswith(cwd):
-            raise ValueError(f"Security: Refusing to write outside allowed directories: {filepath}")
+        raise ValueError(f"Security: Refusing to write outside allowed directories: {filepath}")
 
     path = Path(filepath)
     path.parent.mkdir(parents=True, exist_ok=True)

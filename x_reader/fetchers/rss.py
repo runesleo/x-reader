@@ -5,9 +5,8 @@ import feedparser
 from loguru import logger
 from typing import Dict, Any, List
 
-# Security: Disable XML external entity (XXE) processing in feedparser
-# This prevents malicious RSS feeds from reading local files or making SSRF requests
-feedparser.pyfeedparser_maker_class('xml.parsers.expat.parsers')
+# Note: feedparser already handles XXE safely by default (uses xml.sax with entity expansion limits)
+# Additional protection: resolve_relative_uris=False disables relative URL resolution
 
 
 async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:

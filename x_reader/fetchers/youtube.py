@@ -50,7 +50,7 @@ def _get_subtitles_via_ytdlp(url: str, lang: str = "en") -> str:
         ]
 
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+            subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         except FileNotFoundError:
             logger.warning("yt-dlp not found. Install with: brew install yt-dlp")
             return ""
@@ -118,7 +118,7 @@ def _transcribe_via_whisper(url: str) -> str:
         ]
 
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=180, check=False)
+            subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         except FileNotFoundError:
             logger.warning("yt-dlp not found for audio download")
             return ""
