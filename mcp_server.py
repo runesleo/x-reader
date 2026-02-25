@@ -101,11 +101,30 @@ if __name__ == "__main__":
     parser.add_argument(
         "--host", default="127.0.0.1",
         help="Host to bind SSE server (default: 127.0.0.1). "
-        "WARNING: binding to 0.0.0.0 exposes the server to the network "
-        "without authentication — use at your own risk.",
+        "WARNING: binding to 0.0.0.0 or external IP exposes the server to the network "
+        "without authentication — use at your own risk. For production, use a reverse proxy with authentication.",
     )
-    parser.add_argument("--port", type=int, default=8000, help="SSE port (default: 8000)")
+    parser.add_argument(
+        "--port", type=int, default=8000, help="SSE port (default: 8000)"
+    )
+    parser.add_argument(
+        "--allow-external",
+        action="store_true",
+        help="EXPLICITLY allow external network binding (--host 0.0.0.0). "
+        "This is insecure for production use. You must understand the risks.",
+        dest="allow_external",
+    )
     args = parser.parse_args()
+
+    # Security: prevent accidental external binding unless explicitly allowed
+    if args.host in ("0.0.0.0", "::", "") and not args.allow_external:
+        print(
+            "\n⚠️  SECURITY WARNING: Refusing to bind to external interface by default.\n"
+            "   To expose the server externally, you must use --allow-external\n"
+            "   and understand this is insecure without additional authentication.\n"
+            "   For production, use a reverse proxy (nginx, cloudflare, etc.)\n"
+        )
+        args.host = "127.0.0.1"
 
     if args.transport == "sse":
         mcp.run(transport="sse", host=args.host, port=args.port)

@@ -14,6 +14,7 @@ dependencies = [
     "feedparser>=6.0",
     "python-dotenv>=1.0",
     "loguru>=0.7",
+    "idna>=3.6",  # For IDN/homograph attack protection in URL validation
 ]
 
 [project.urls]

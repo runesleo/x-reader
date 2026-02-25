@@ -9,6 +9,7 @@ Install: pip install "x-reader[browser]" && playwright install chromium
 """
 
 from loguru import logger
+import os
 from pathlib import Path
 
 SESSION_DIR = Path.home() / ".x-reader" / "sessions"
@@ -27,6 +28,10 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
     Returns:
         dict with keys: title, content, url, author
     """
+    # Security: Validate URL before fetching
+    from x_reader.utils.url_validator import validate_url
+    validate_url(url)
+
     try:
         from playwright.async_api import async_playwright
     except ImportError:
@@ -43,6 +48,16 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
 
         context_kwargs = {}
         if storage_state and Path(storage_state).exists():
+            # Security: Validate session file permissions (should be 0o600)
+            session_stat = os.stat(storage_state)
+            session_mode = session_stat.st_mode & 0o777
+            if session_mode & 0o077:
+                logger.warning(
+                    f"Session file {storage_state} has insecure permissions {oct(session_mode)}. "
+                    "Should be 0o600. Fixing..."
+                )
+                os.chmod(storage_state, 0o600)
+
             context_kwargs["storage_state"] = storage_state
             logger.info(f"Using session: {storage_state}")
 

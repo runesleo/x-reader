@@ -5,6 +5,10 @@ import feedparser
 from loguru import logger
 from typing import Dict, Any, List
 
+# Security: Disable XML external entity (XXE) processing in feedparser
+# This prevents malicious RSS feeds from reading local files or making SSRF requests
+feedparser.pyfeedparser_maker_class('xml.parsers.expat.parsers')
+
 
 async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:
     """
@@ -19,7 +23,8 @@ async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:
     """
     logger.info(f"Fetching RSS: {url}")
 
-    feed = feedparser.parse(url)
+    # Use safe parsing: disable external entities
+    feed = feedparser.parse(url, resolve_relative_uris=False)
 
     if feed.bozo and not feed.entries:
         raise ValueError(f"Failed to parse RSS feed: {feed.bozo_exception}")

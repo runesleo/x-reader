@@ -61,6 +61,22 @@ def save_to_markdown(item: UnifiedContent, filepath: str = None):
                 return
             filepath = os.path.join(output_dir, "content_hub.md")
 
+    # Security: Validate filepath to prevent path traversal attacks
+    # Only allow paths under allowed directories
+    abs_filepath = os.path.abspath(filepath)
+    allowed_dirs = [
+        os.path.abspath(os.getenv("OUTPUT_DIR", ".")),
+        os.path.abspath(os.getenv("OBSIDIAN_VAULT", ".")),
+        os.path.abspath("."),
+    ]
+    
+    # If filepath is provided explicitly, it must be in current directory
+    if not any(abs_filepath.startswith(d) for d in allowed_dirs):
+        # Allow if it's in current working directory
+        cwd = os.path.abspath(".")
+        if not abs_filepath.startswith(cwd):
+            raise ValueError(f"Security: Refusing to write outside allowed directories: {filepath}")
+
     path = Path(filepath)
     path.parent.mkdir(parents=True, exist_ok=True)
 
