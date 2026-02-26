@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-X/Twitter fetcher — three-tier fallback:
+X/Twitter fetcher — four-tier fallback:
 
-1. X oEmbed API (fast, reliable for individual tweets, no login needed)
-2. Jina Reader (handles non-tweet X pages like profiles)
-3. Playwright + saved session (handles login-required content)
+1. FxTwitter API (full text, structured JSON, no auth needed)
+2. X oEmbed API (fast, but truncates long tweets)
+3. Jina Reader (handles non-tweet X pages like profiles)
+4. Playwright + saved session (handles login-required content)
 
 Install browser tier: pip install "x-reader[browser]" && playwright install chromium
 Save X session:       x-reader login twitter
@@ -18,6 +19,7 @@ from typing import Dict, Any
 from x_reader.fetchers.jina import fetch_via_jina
 
 
+FXTWITTER_API = "https://api.fxtwitter.com"
 OEMBED_URL = "https://publish.twitter.com/oembed"
 
 
@@ -30,6 +32,35 @@ def _extract_author(url: str) -> str:
 def _is_tweet_url(url: str) -> bool:
     """Check if this is a direct tweet/status URL (vs profile or other X page)."""
     return bool(re.search(r'x\.com/\w+/status/\d+', url))
+
+
+def _fetch_via_fxtwitter(url: str) -> Dict[str, Any]:
+    """
+    Fetch full tweet text via FxTwitter API.
+    Free, no auth, returns complete text (no truncation).
+    """
+    match = re.search(r'x\.com/(\w+)/status/(\d+)', url)
+    if not match:
+        raise ValueError(f"Cannot parse tweet URL: {url}")
+
+    username, status_id = match.group(1), match.group(2)
+    api_url = f"{FXTWITTER_API}/{username}/status/{status_id}"
+
+    resp = requests.get(api_url, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+
+    tweet = data.get("tweet", {})
+    text = tweet.get("text", "")
+    author_name = tweet.get("author", {}).get("name", "")
+    author_screen = tweet.get("author", {}).get("screen_name", "")
+
+    return {
+        "text": text,
+        "author": f"@{author_screen}" if author_screen else "",
+        "author_name": author_name,
+        "title": text[:100] if text else "",
+    }
 
 
 def _fetch_via_oembed(url: str) -> Dict[str, Any]:
@@ -143,7 +174,7 @@ async def _fetch_via_playwright(url: str) -> Dict[str, Any]:
 
 async def fetch_twitter(url: str) -> Dict[str, Any]:
     """
-    Fetch a tweet or X post with three-tier fallback.
+    Fetch a tweet or X post with four-tier fallback.
 
     Args:
         url: Tweet URL (x.com or twitter.com)
@@ -154,13 +185,30 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
     url = url.replace("twitter.com", "x.com")
     author = _extract_author(url)
 
-    # Tier 1: oEmbed API (best for individual tweets)
+    # Tier 1: FxTwitter API (full text, no truncation)
     if _is_tweet_url(url):
         try:
-            logger.info(f"[Twitter] Tier 1 — oEmbed: {url}")
+            logger.info(f"[Twitter] Tier 1 — FxTwitter: {url}")
+            data = _fetch_via_fxtwitter(url)
+            text = (data.get("text") or "").strip()
+            if text:
+                return {
+                    "text": text,
+                    "author": author or data.get("author", ""),
+                    "url": url,
+                    "title": data.get("title", ""),
+                    "platform": "twitter",
+                }
+            logger.warning("[Twitter] FxTwitter returned empty text")
+        except Exception as e:
+            logger.warning(f"[Twitter] FxTwitter failed ({e})")
+
+    # Tier 2: oEmbed API (fast but truncates long tweets)
+    if _is_tweet_url(url):
+        try:
+            logger.info(f"[Twitter] Tier 2 — oEmbed: {url}")
             data = _fetch_via_oembed(url)
             text = (data.get("text") or "").strip()
-            # Some oEmbed responses are only a t.co stub + author/date.
             thin_oembed = (
                 len(text) <= 20
                 or text.lower().startswith("https://t.co/")
@@ -178,9 +226,9 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"[Twitter] oEmbed failed ({e})")
 
-    # Tier 2: Jina Reader (handles profiles, threads, non-tweet pages)
+    # Tier 3: Jina Reader (handles profiles, threads, non-tweet pages)
     try:
-        logger.info(f"[Twitter] Tier 2 — Jina: {url}")
+        logger.info(f"[Twitter] Tier 3 — Jina: {url}")
         data = fetch_via_jina(url)
         content = data.get("content", "")
         title = data.get("title", "")
@@ -202,9 +250,9 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"[Twitter] Jina failed ({e})")
 
-    # Tier 3: Playwright + session with X-specific extraction
+    # Tier 4: Playwright + session with X-specific extraction
     try:
-        logger.info(f"[Twitter] Tier 3 — Playwright: {url}")
+        logger.info(f"[Twitter] Tier 4 — Playwright: {url}")
         data = await _fetch_via_playwright(url)
         content = data.get("text", "")
         if content and len(content.strip()) > 20:
