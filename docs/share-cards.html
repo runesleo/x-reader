@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>x-reader Share Cards</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0a; font-family: -apple-system, "PingFang SC", "Noto Sans SC", sans-serif; padding: 40px; display: flex; flex-direction: column; gap: 60px; align-items: center; }
+
+  .card {
+    width: 680px;
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 16px;
+    padding: 40px;
+    color: #e0e0e0;
+  }
+
+  .card-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+
+  .card-subtitle {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 28px;
+  }
+
+  /* === Card 1: Platform Matrix === */
+  .platform-grid {
+    display: grid;
+    grid-template-columns: 1fr 100px 100px;
+    gap: 0;
+  }
+
+  .grid-header {
+    font-size: 12px;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 8px 0;
+    border-bottom: 1px solid #222;
+  }
+
+  .grid-header:first-child { text-align: left; }
+  .grid-header:not(:first-child) { text-align: center; }
+
+  .grid-row {
+    display: contents;
+  }
+
+  .grid-row > span {
+    padding: 10px 0;
+    border-bottom: 1px solid #1a1a1a;
+    font-size: 15px;
+  }
+
+  .grid-row > span:first-child {
+    color: #ccc;
+  }
+
+  .grid-row > span:not(:first-child) {
+    text-align: center;
+    font-size: 14px;
+  }
+
+  .yes { color: #4ade80; }
+  .no { color: #333; }
+  .skill-tag { color: #a78bfa; font-size: 12px; }
+
+  .platform-name { display: flex; align-items: center; gap: 8px; }
+  .platform-emoji { font-size: 18px; width: 24px; text-align: center; }
+
+  .footnote {
+    margin-top: 16px;
+    font-size: 12px;
+    color: #444;
+    display: flex;
+    gap: 16px;
+  }
+  .footnote span { display: flex; align-items: center; gap: 4px; }
+
+  /* === Card 2: Architecture === */
+  .arch-layers {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .arch-layer {
+    background: #1a1a1a;
+    border-radius: 12px;
+    padding: 20px 24px;
+    border-left: 3px solid;
+  }
+
+  .layer-1 { border-color: #4ade80; }
+  .layer-2 { border-color: #a78bfa; }
+  .layer-3 { border-color: #38bdf8; }
+
+  .layer-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+
+  .layer-1 .layer-label { color: #4ade80; }
+  .layer-2 .layer-label { color: #a78bfa; }
+  .layer-3 .layer-label { color: #38bdf8; }
+
+  .layer-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+
+  .layer-desc {
+    font-size: 14px;
+    color: #888;
+    line-height: 1.5;
+  }
+
+  .layer-cmd {
+    margin-top: 8px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 13px;
+    color: #666;
+    background: #111;
+    padding: 6px 10px;
+    border-radius: 6px;
+    display: inline-block;
+  }
+
+  .arrow-down {
+    text-align: center;
+    color: #333;
+    font-size: 20px;
+    margin: -4px 0;
+  }
+
+  .badge-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 20px;
+  }
+
+  .badge {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: #1a1a1a;
+    color: #666;
+    border: 1px solid #222;
+  }
+</style>
+</head>
+<body>
+
+<!-- Card 1: Platform Support -->
+<div class="card">
+  <div class="card-title">x-reader — 支持平台</div>
+  <div class="card-subtitle">给它链接，自动识别平台，抓取结构化内容</div>
+
+  <div class="platform-grid">
+    <span class="grid-header">平台</span>
+    <span class="grid-header">文本抓取</span>
+    <span class="grid-header">音视频转写</span>
+
+    <div class="grid-row">
+      <span><span class="platform-name"><span class="platform-emoji">▶️</span> YouTube</span></span>
+      <span class="yes">✓</span>
+      <span class="yes">✓ 字幕 + Whisper</span>
+    </div>
+    <div class="grid-row">
+      <span><span class="platform-name"><span class="platform-emoji">🎬</span> Bilibili (B站)</span></span>
+      <span class="yes">✓ API</span>
+      <span class="yes">✓ Whisper</span>
+    </div>
+    <div class="grid-row">
+      <span><span class="platform-name"><span class="platform-emoji">🐦</span> X / Twitter</span></span>
+      <span class="yes">✓</span>
+      <span class="yes">✓ Whisper</span>
+    </div>
+    <div class="grid-row">
+      <span><span class="platform-name"><span class="platform-emoji">💬</span> 微信公众号</span></span>
+      <span class="yes">✓</span>
+      <span class="no">—</span>
+    </div>
+    <div class="grid-row">
+      <span><span class="platform-name"><span class="platform-emoji">📕</span> 小红书</span></span>
+      <span class="yes">✓</span>
+      <span class="no">—</span>
+    </div>
+    <div class="grid-row">
+      <span><span class="platform-name"><span class="platform-emoji">📢</span> Telegram</span></span>
+      <span class="yes">✓</span>
+      <span class="no">—</span>
+    </div>
+    <div class="grid-row">
+      <span><span class="platform-name"><span class="platform-emoji">📰</span> RSS</span></span>
+      <span class="yes">✓</span>
+      <span class="no">—</span>
+    </div>
+    <div class="grid-row">
+      <span><span class="platform-name"><span class="platform-emoji">🎙️</span> 小宇宙</span></span>
+      <span class="no">—</span>
+      <span class="yes">✓ Whisper</span>
+    </div>
+    <div class="grid-row">
+      <span><span class="platform-name"><span class="platform-emoji">🎧</span> Apple Podcasts</span></span>
+      <span class="no">—</span>
+      <span class="yes">✓ Whisper</span>
+    </div>
+    <div class="grid-row">
+      <span><span class="platform-name"><span class="platform-emoji">🌐</span> 其他网页</span></span>
+      <span class="yes">✓ 通用兜底</span>
+      <span class="no">—</span>
+    </div>
+  </div>
+
+  <div class="footnote">
+    <span><span class="yes">✓</span> Python CLI 即可</span>
+    <span><span style="color:#a78bfa;">Whisper</span> 需配合 Claude Code Skill</span>
+  </div>
+</div>
+
+<!-- Card 2: Architecture -->
+<div class="card">
+  <div class="card-title">x-reader — 三层架构</div>
+  <div class="card-subtitle">按需组合，不用的层不影响使用</div>
+
+  <div class="arch-layers">
+    <div class="arch-layer layer-1">
+      <div class="layer-label">Layer 1 · 基础层</div>
+      <div class="layer-title">Python CLI / Library</div>
+      <div class="layer-desc">pip install 即用。10+ 平台自动识别 → 抓取 → 统一 Markdown 输出 → 存入 Obsidian</div>
+      <div class="layer-cmd">$ x-reader https://mp.weixin.qq.com/s/abc123</div>
+    </div>
+
+    <div class="arrow-down">↓ 可选扩展</div>
+
+    <div class="arch-layer layer-2">
+      <div class="layer-label">Layer 2 · AI 增强层</div>
+      <div class="layer-title">Claude Code Skills</div>
+      <div class="layer-desc">复制 skills/ 到 ~/.claude/skills/ 即可。发视频/播客链接 → 自动 Whisper 转写全文 → 结构化摘要 + 行动清单</div>
+    </div>
+
+    <div class="arrow-down">↓ 可选扩展</div>
+
+    <div class="arch-layer layer-3">
+      <div class="layer-label">Layer 3 · 工具层</div>
+      <div class="layer-title">MCP Server</div>
+      <div class="layer-desc">4 个工具接口：read_url · read_batch · list_inbox · detect_platform — 接入任意 AI 工作流</div>
+    </div>
+  </div>
+
+  <div class="badge-row">
+    <span class="badge">Python 3.10+</span>
+    <span class="badge">MIT License</span>
+    <span class="badge">零 API Key 可用</span>
+    <span class="badge">全程 Claude 辅助开发</span>
+  </div>
+</div>
+
+</body>
+</html>
