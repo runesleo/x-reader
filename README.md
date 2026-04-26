@@ -7,6 +7,8 @@ Universal content reader — fetch, transcribe, and digest content from any plat
 
 Give it a URL (article, video, podcast, tweet), get back structured content. Works as CLI, Python library, MCP server, or Claude Code skills.
 
+**简体中文：** [README.zh-CN.md](./README.zh-CN.md)
+
 ## What It Does
 
 ```
