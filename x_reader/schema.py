@@ -159,16 +159,21 @@ def from_bilibili(video: dict) -> UnifiedContent:
 
 
 def from_twitter(data: dict) -> UnifiedContent:
+    extra = {
+        "likes": data.get('likes', 0),
+        "retweets": data.get('retweets', 0),
+        "fetch_method": data.get('fetch_method', ''),
+    }
+    if data.get('author_url'):
+        extra["author_url"] = data.get('author_url')
+
     return UnifiedContent(
         source_type=SourceType.TWITTER,
         source_name=data.get('author', ''),
         title=data.get('text', '')[:100],
         content=data.get('text', ''),
         url=data.get('url', ''),
-        extra={
-            "likes": data.get('likes', 0),
-            "retweets": data.get('retweets', 0),
-        },
+        extra=extra,
     )
 
 

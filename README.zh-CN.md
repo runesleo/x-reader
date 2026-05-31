@@ -62,13 +62,36 @@ python mcp_server.py
 |------|------|-------------|
 | YouTube | ✅ | ✅ 字幕 / Groq Whisper |
 | Bilibili | ✅ API | ✅（经 Skill） |
-| X / Twitter | ✅ | — |
+| X / Twitter | ✅ oEmbed → FxTwitter → Article/Jina → Playwright | — |
 | 微信公众号 | ✅ | — |
 | 小红书 | ✅（需登录） | — |
 | Telegram | ✅ Telethon | — |
 | RSS | ✅ | — |
 
+> X Article 或需登录的 X 页面，可先运行 `x-reader login twitter` 保存本地浏览器会话。
+>
 > YouTube Whisper 需 `GROQ_API_KEY`（[Groq](https://console.groq.com/keys) 免费申请）。
+
+### X / Twitter 读取链路
+
+`x-reader` 现在按轻量公开链路优先读取 X：
+
+1. oEmbed：快速读取公开推文。
+2. FxTwitter：结构化公开推文 fallback。
+3. Jina Reader：读取公开 Article 和长内容页面。
+4. 通用 Jina Reader：读取 profile 和非 status 页面。
+5. Playwright + 已保存会话：处理需要登录的内容。
+
+```bash
+x-reader login twitter
+x-reader "https://x.com/user/status/123"
+```
+
+默认情况下，本地 X cookie 只留在本机。只有你明确信任 Jina 并设置下面这个环境变量时，x-reader 才会把已保存的 X session 交给 Jina 读取 gated Article：
+
+```bash
+export X_READER_ALLOW_EXTERNAL_SESSION_COOKIES=1
+```
 
 ## 安装
 

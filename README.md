@@ -106,7 +106,7 @@ Claude Code config (`~/.claude/claude_desktop_config.json`):
 |----------|-----------|----------------------|
 | YouTube | ✅ Jina | ✅ yt-dlp subtitles → Groq Whisper fallback |
 | Bilibili (B站) | ✅ API | ✅ via Claude Code skill |
-| X / Twitter | ✅ Jina → Playwright | — |
+| X / Twitter | ✅ oEmbed → FxTwitter → Article/Jina → Playwright | — |
 | WeChat (微信公众号) | ✅ Jina → Playwright | — |
 | Xiaohongshu (小红书) | ✅ Jina → Playwright* | — |
 | Telegram | ✅ Telethon | — |
@@ -117,7 +117,33 @@ Claude Code config (`~/.claude/claude_desktop_config.json`):
 
 > \*XHS requires a one-time login: `x-reader login xhs` (saves session for Playwright fallback)
 >
+> X Articles and login-required X pages can use a saved local browser session: `x-reader login twitter`
+>
 > YouTube Whisper transcription requires `GROQ_API_KEY` — get a free key from [Groq](https://console.groq.com/keys)
+
+### X / Twitter Reading Path
+
+`x-reader` uses a lightweight public-first chain for X:
+
+1. X oEmbed for fast public tweet text.
+2. FxTwitter for structured public tweet fallback.
+3. Jina Reader for public Articles and long-form pages.
+4. Generic Jina Reader for profiles and non-status X pages.
+5. Playwright with saved session for login-required content.
+
+For Articles or gated pages, run:
+
+```bash
+x-reader login twitter
+x-reader "https://x.com/user/status/123"
+```
+
+By default, local X cookies stay local. If you explicitly want to let Jina use
+your saved X session for gated Articles, set:
+
+```bash
+export X_READER_ALLOW_EXTERNAL_SESSION_COOKIES=1
+```
 
 ## Install
 
@@ -209,7 +235,7 @@ x-reader/
 │   │   ├── youtube.py     # yt-dlp subtitle extraction
 │   │   ├── rss.py         # feedparser
 │   │   ├── telegram.py    # Telethon
-│   │   ├── twitter.py     # Jina-based
+│   │   ├── twitter.py     # oEmbed → FxTwitter → Article/Jina → Playwright
 │   │   ├── wechat.py      # Jina → Playwright fallback
 │   │   └── xhs.py         # Jina → Playwright + session fallback
 │   └── utils/
