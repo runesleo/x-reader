@@ -7,7 +7,7 @@ Universal content reader — fetch, transcribe, and digest content from any plat
 
 Give it a URL (article, video, podcast, tweet), get back structured content. Works as CLI, Python library, MCP server, or Claude Code skills.
 
-**简体中文：** [README.zh-CN.md](./README.zh-CN.md)
+**简体中文：** [README.zh.md](./README.zh.md) / [README.zh-CN.md](./README.zh-CN.md)
 
 ## What It Does
 
@@ -29,7 +29,7 @@ x-reader is composable. Use the layers you need:
 | Layer | What | Format | Install |
 |-------|------|--------|---------|
 | **Python CLI/Library** | Basic content fetching + unified schema | See [Install](#install) | Required |
-| **Claude Code Skills** | Video transcription + AI analysis | Copy `skills/` to `~/.claude/skills/` | Optional |
+| **Claude Code Skills** | Video transcription + AI analysis | Copy `skills/` to your Claude Code skills directory | Optional |
 | **MCP Server** | Expose reading as MCP tools | `python mcp_server.py` | Optional |
 
 ### Layer 1: Python CLI
@@ -65,8 +65,10 @@ skills/
 
 Install:
 ```bash
-cp -r skills/video ~/.claude/skills/video
-cp -r skills/analyzer ~/.claude/skills/analyzer
+export CLAUDE_SKILLS_DIR="/path/to/claude-code-skills"
+mkdir -p "$CLAUDE_SKILLS_DIR"
+cp -r skills/video "$CLAUDE_SKILLS_DIR/video"
+cp -r skills/analyzer "$CLAUDE_SKILLS_DIR/analyzer"
 ```
 
 Then in Claude Code, just send a YouTube/Bilibili/podcast link — the video skill auto-triggers and produces a full transcript + summary.
