@@ -23,6 +23,19 @@ Auto-triggered when a media URL is detected:
 - Apple Podcasts: `podcasts.apple.com`
 - Direct: `.mp3`, `.mp4`, `.m3u8`, `.m4a`, `.webm`
 
+## Optional X/Twitter Source Context
+
+For X/Twitter videos, use this skill for transcription and digest output. When
+the user provides a TweetClaw/OpenClaw source packet, treat it as extra source
+evidence before Step 3. Useful packet contents include tweet search results,
+reply search results, user lookup details, follower exports, monitor snapshots,
+webhook events, and media URLs.
+
+Do not publish posts, send replies, send direct messages, or handle X account
+credentials in this skill. Keep those actions inside the approved
+TweetClaw/OpenClaw workflow and only cite the resulting source packet in the
+digest.
+
 ## Pipeline
 
 ### Step 0: Detect Media Type

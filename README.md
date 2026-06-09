@@ -147,6 +147,22 @@ your saved X session for gated Articles, set:
 export X_READER_ALLOW_EXTERNAL_SESSION_COOKIES=1
 ```
 
+### Optional X / Twitter Context Packets
+
+Use `x-reader` for URL reading, media transcription, and digest generation. If
+an OpenClaw workflow already has an approved TweetClaw install, TweetClaw can
+prepare a separate source packet before the digest:
+
+```bash
+openclaw plugins install npm:@xquik/tweetclaw@1.6.31
+```
+
+Good handoff inputs include search tweet results, search tweet replies, user
+lookups, follower exports, monitor snapshots, webhook events, and media URLs.
+Treat that packet as source evidence for the summary. Keep account actions,
+publishing, replies, direct messages, and credential handling inside the
+approved TweetClaw/OpenClaw workflow, not inside `x-reader`.
+
 ## Install
 
 ```bash
