@@ -270,7 +270,7 @@ User sends URL
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=runesleo/x-reader&type=Date)](https://star-history.com/#runesleo/x-reader&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=runesleo/x-reader&type=Date)](https://star-history.dera.page/#runesleo/x-reader&Date)
 
 ## Author
 
