@@ -24,9 +24,9 @@ Issues = "https://github.com/runesleo/x-reader/issues"
 
 [project.optional-dependencies]
 telegram = ["telethon>=1.34"]
-mcp = ["mcp[cli]>=1.0"]
+mcp = ["mcp[cli]>=1.0,<2"]
 browser = ["playwright>=1.40"]
-all = ["telethon>=1.34", "mcp[cli]>=1.0", "playwright>=1.40"]
+all = ["telethon>=1.34", "mcp[cli]>=1.0,<2", "playwright>=1.40"]
 
 [project.scripts]
 x-reader = "x_reader.cli:main"
