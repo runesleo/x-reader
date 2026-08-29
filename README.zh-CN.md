@@ -54,6 +54,9 @@ pip install -e ".[mcp]"
 python mcp_server.py
 ```
 
+当前 MCP Server 适配 FastMCP 1.x。`mcp` 与 `all` extras 会固定 `mcp<2`；
+升级到 MCP 2.x 需要先迁移服务端实现，不能直接移除版本上限。
+
 工具包括：`read_url`、`read_batch`、`list_inbox`、`detect_platform`。Claude Desktop 配置示例见英文 [README](./README.md) 中 JSON 片段。
 
 ## 支持平台（节选）

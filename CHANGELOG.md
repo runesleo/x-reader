@@ -8,7 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 
 ## [Unreleased]
 
-— (no staged release; see History below for recent commits.)
+### Fixed
+
+- Keep the optional MCP dependency on the FastMCP-compatible 1.x line so fresh
+  `x-reader[mcp]` installs do not fail before the protocol handshake; configure
+  SSE through FastMCP settings and run the regression suite on Python 3.10/3.11.
 
 ## History (full git log)
 
@@ -16,7 +20,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 - 2026-04-26 — docs: add examples ([`bda2da3`](https://github.com/runesleo/x-reader/commit/bda2da3dc2f1ef197fe658648e2e2d63bafc99fc))
 - 2026-04-26 — chore: add SECURITY.md and CODE_OF_CONDUCT.md ([`60c551d`](https://github.com/runesleo/x-reader/commit/60c551d46be757eec15a93698a1792fbf8dd0d17))
 - 2026-04-26 — docs: add share card and wechat dom probe ([`90de17c`](https://github.com/runesleo/x-reader/commit/90de17c342eee2fbbf4358507d4265909cb1df82))
-- 2026-04-22 — docs(readme): sync Author section to unified SOP (T078) ([`f7ac0fe`](https://github.com/runesleo/x-reader/commit/f7ac0fe08ad9104ddbd12f907fce9b702f17900f))
+- 2026-04-22 — docs(readme): sync Author section to unified SOP ([`f7ac0fe`](https://github.com/runesleo/x-reader/commit/f7ac0fe08ad9104ddbd12f907fce9b702f17900f))
 - 2026-03-25 — fix: fallback to bundled Chromium when Chrome is unavailable (#13) ([`dd624e5`](https://github.com/runesleo/x-reader/commit/dd624e54035681d07de6eef80092afdab14c858e))
 - 2026-03-04 — docs: add Star History chart to README ([`fdd582c`](https://github.com/runesleo/x-reader/commit/fdd582ccd39c70375d0dba176faeea2e59159ba9))
 - 2026-02-27 — 安全修复: SSRF防护、XXE防护、路径遍历防护及MCP服务器加固 (#6) ([`d3760a5`](https://github.com/runesleo/x-reader/commit/d3760a55d7422acd8f1a54843331a5a4adfcbcfd))

@@ -1,6 +1,8 @@
-import tomllib
+import importlib.util
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,15 +10,33 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class McpDependencyContractTest(unittest.TestCase):
     def test_every_mcp_extra_stays_on_the_fastmcp_compatible_major(self):
-        config = tomllib.loads((ROOT / "pyproject.toml").read_text())
-        extras = config["project"]["optional-dependencies"]
+        config = (ROOT / "pyproject.toml").read_text()
 
-        self.assertIn("mcp[cli]>=1.0,<2", extras["mcp"])
-        self.assertIn("mcp[cli]>=1.0,<2", extras["all"])
-        self.assertFalse(
-            any(dep == "mcp[cli]>=1.0" for deps in extras.values() for dep in deps),
-            "an uncapped MCP extra would resolve to 2.x and crash mcp_server.py",
+        self.assertEqual(
+            config.count('"mcp[cli]>=1.0,<2"'),
+            2,
+            "both the mcp and all extras must cap the FastMCP dependency",
         )
+        self.assertNotIn('"mcp[cli]>=1.0"', config)
+
+    @unittest.skipIf(importlib.util.find_spec("mcp") is None, "MCP extra not installed")
+    def test_sse_uses_fastmcp_settings_instead_of_unsupported_run_kwargs(self):
+        import mcp_server
+
+        class FakeMcp:
+            def __init__(self):
+                self.settings = SimpleNamespace(host="127.0.0.1", port=8000)
+                self.calls = []
+
+            def run(self, **kwargs):
+                self.calls.append(kwargs)
+
+        fake = FakeMcp()
+        with patch.object(mcp_server, "mcp", fake):
+            mcp_server.run_server("sse", "127.0.0.2", 8123)
+
+        self.assertEqual((fake.settings.host, fake.settings.port), ("127.0.0.2", 8123))
+        self.assertEqual(fake.calls, [{"transport": "sse"}])
 
 
 if __name__ == "__main__":

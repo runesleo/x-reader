@@ -84,6 +84,10 @@ pip install -e ".[mcp]"
 python mcp_server.py
 ```
 
+The MCP server currently targets FastMCP 1.x. The `mcp` and `all` extras pin
+`mcp<2`; moving to MCP 2.x requires a server migration rather than removing the
+version cap.
+
 Tools exposed:
 - `read_url(url)` — fetch any URL
 - `read_batch(urls)` — fetch multiple URLs concurrently

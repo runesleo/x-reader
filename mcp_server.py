@@ -90,6 +90,14 @@ async def detect_platform(url: str) -> str:
     return reader._detect_platform(url)
 
 
+def run_server(transport: str, host: str, port: int) -> None:
+    """Run FastMCP using the configuration surface supported by MCP 1.x."""
+    if transport == "sse":
+        mcp.settings.host = host
+        mcp.settings.port = port
+    mcp.run(transport=transport)
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -126,7 +134,4 @@ if __name__ == "__main__":
         )
         args.host = "127.0.0.1"
 
-    if args.transport == "sse":
-        mcp.run(transport="sse", host=args.host, port=args.port)
-    else:
-        mcp.run(transport="stdio")
+    run_server(args.transport, args.host, args.port)
