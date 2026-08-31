@@ -94,7 +94,15 @@ Tools exposed:
 - `list_inbox()` — view previously fetched content
 - `detect_platform(url)` — identify platform from URL
 
-Claude Code config (`~/.claude/claude_desktop_config.json`):
+Register it with Claude Code:
+
+```bash
+claude mcp add x-reader -- python /path/to/x-reader/mcp_server.py
+```
+
+That writes `.mcp.json` in the current project; `--scope user` writes `~/.claude.json`
+instead, making the server available everywhere. The same entry by hand, in `.mcp.json`:
+
 ```json
 {
     "mcpServers": {
@@ -105,6 +113,9 @@ Claude Code config (`~/.claude/claude_desktop_config.json`):
     }
 }
 ```
+
+Claude Desktop is a different product with its own `claude_desktop_config.json`, in its
+application-support directory — not under `~/.claude/`. It takes the same `mcpServers` block.
 
 ## Supported Platforms
 

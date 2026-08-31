@@ -6,7 +6,11 @@ Usage:
     python mcp_server.py                    # stdio transport (for Claude Code)
     python mcp_server.py --transport sse    # SSE transport (for web clients)
 
-Claude Code config (~/.claude/claude_desktop_config.json):
+Register with Claude Code (writes .mcp.json in the project; --scope user writes
+~/.claude.json instead):
+    claude mcp add x-reader -- python /path/to/x-reader/mcp_server.py
+
+The same entry by hand, in .mcp.json:
     {
         "mcpServers": {
             "x-reader": {
@@ -15,6 +19,9 @@ Claude Code config (~/.claude/claude_desktop_config.json):
             }
         }
     }
+
+Claude Desktop is a separate product with its own claude_desktop_config.json, in its
+application-support directory -- not under ~/.claude/.
 """
 
 import asyncio
