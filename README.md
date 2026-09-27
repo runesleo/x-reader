@@ -5,7 +5,7 @@
 
 Universal content reader — fetch, transcribe, and digest content from any platform.
 
-Give it a URL (article, video, podcast, tweet), get back structured content. Works as CLI, Python library, MCP server, or Claude Code skills.
+Give it a URL (article, video, podcast, tweet), get back structured content. Works as an Agent Skill, CLI, Python library, or MCP server.
 
 **简体中文：** [README.zh.md](./README.zh.md) / [README.zh-CN.md](./README.zh-CN.md)
 
@@ -20,7 +20,7 @@ Any URL → Platform Detection → Fetch Content → Unified Output
                                API: Bilibili / RSS / Telegram
 ```
 
-The Python layer handles text fetching and YouTube subtitle extraction. The **Claude Code skills** (optional) add full Whisper transcription for video/podcast and AI-powered content analysis.
+The Python layer handles content fetching and normalized output. The **x-reader Agent Skill** adds the source-first workflow: read the original, consume material media when required, and return explicit evidence/status instead of silently substituting search snippets.
 
 ## Three Layers
 
@@ -29,7 +29,7 @@ x-reader is composable. Use the layers you need:
 | Layer | What | Format | Install |
 |-------|------|--------|---------|
 | **Python CLI/Library** | Basic content fetching + unified schema | See [Install](#install) | Required |
-| **Claude Code Skills** | Video transcription + AI analysis | Copy `skills/` to your Claude Code skills directory | Optional |
+| **Agent Skill** | Source-first URL reading + evidence contract | `npx skills add runesleo/x-reader --skill x-reader` | Recommended |
 | **MCP Server** | Expose reading as MCP tools | `python mcp_server.py` | Optional |
 
 ### Layer 1: Python CLI
@@ -51,27 +51,30 @@ x-reader login xhs
 x-reader list
 ```
 
-### Layer 2: Claude Code Skills
+### Layer 2: Agent Skill
 
-> Requires cloning the repo (not included in pip install).
+The recommended agent-facing entry point is the canonical `x-reader` skill:
 
-For video/podcast transcription and content analysis:
-
-```
-skills/
-├── video/       # YouTube/Bilibili/podcast → full transcript via Whisper
-└── analyzer/    # Any content → structured analysis report
-```
-
-Install:
 ```bash
-export CLAUDE_SKILLS_DIR="/path/to/claude-code-skills"
-mkdir -p "$CLAUDE_SKILLS_DIR"
-cp -r skills/video "$CLAUDE_SKILLS_DIR/video"
-cp -r skills/analyzer "$CLAUDE_SKILLS_DIR/analyzer"
+npx skills add runesleo/x-reader --skill x-reader
 ```
 
-Then in Claude Code, just send a YouTube/Bilibili/podcast link — the video skill auto-triggers and produces a full transcript + summary.
+The skills CLI discovers repository skills from uppercase `SKILL.md` files. The
+canonical skill enforces a source-first contract:
+
+- read the original URL before analysis;
+- use the complete `x-reader --json` payload instead of the 200-character CLI preview;
+- treat attached audio/video as unread until the media itself is consumed;
+- report `PASS`, `PARTIAL`, `FAIL`, or `UNKNOWN` instead of hiding access gaps.
+
+List the skills in this repository without installing:
+
+```bash
+npx skills add runesleo/x-reader --list
+```
+
+The legacy `video` and `analyzer` workflows remain separately discoverable for
+users who want those narrower capabilities.
 
 ### Layer 3: MCP Server
 
@@ -152,6 +155,17 @@ export X_READER_ALLOW_EXTERNAL_SESSION_COOKIES=1
 ```
 
 ## Install
+
+### Agent Skill (recommended for coding agents)
+
+```bash
+npx skills add runesleo/x-reader --skill x-reader
+```
+
+The skill bootstraps the Python CLI into an isolated cache venv on first use when
+`x-reader` is not already available.
+
+### Python CLI / Library
 
 ```bash
 # From GitHub (recommended)
@@ -246,7 +260,8 @@ x-reader/
 │   │   └── xhs.py         # Jina → Playwright + session fallback
 │   └── utils/
 │       └── storage.py     # JSON + Markdown dual output
-├── skills/                # Claude Code skills
+├── skills/                # Agent Skills
+│   ├── x-reader/          # Canonical source-first URL reader
 │   ├── video/             # Video/podcast → transcript + summary
 │   └── analyzer/          # Content → structured analysis
 ├── mcp_server.py          # MCP server entry point
@@ -259,7 +274,7 @@ x-reader/
 User sends URL
     │
     ├─ Text content (article, tweet, WeChat)
-    │   └─ Python fetcher → UnifiedContent → inbox
+    │   └─ Python fetcher → UnifiedContent → inbox / --json
     │
     ├─ Video (YouTube, Bilibili, X video)
     │   ├─ Python fetcher → metadata (title, description)
