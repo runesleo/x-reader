@@ -5,6 +5,7 @@ x-reader CLI — fetch content from any platform.
 Usage:
     x-reader <url>                     # Fetch a single URL
     x-reader <url1> <url2> ...         # Fetch multiple URLs
+    x-reader <url> --json              # Full machine-readable payload
     x-reader list                      # Show inbox contents
     x-reader clear                     # Clear inbox
 """
@@ -26,29 +27,53 @@ def get_inbox_path() -> str:
     return os.getenv("INBOX_FILE", "unified_inbox.json")
 
 
-def cmd_fetch(urls: list[str]):
-    """Fetch one or more URLs."""
+def cmd_fetch(urls: list[str], json_output: bool = False):
+    """Fetch one or more URLs.
+
+    When json_output is True, stdout is machine-readable JSON containing the
+    complete UnifiedContent payload instead of the human preview.
+    """
     inbox = UnifiedInbox(get_inbox_path())
     reader = UniversalReader(inbox=inbox)
 
     async def run():
         if len(urls) == 1:
             item = await reader.read(urls[0])
-            print(f"✅ [{item.source_type.value}] {item.title[:60]}")
-            print(f"   {item.url}")
-            print(f"   {item.content[:200]}...")
+            if json_output:
+                print(json.dumps(item.to_dict(), ensure_ascii=False, indent=2))
+            else:
+                print(f"✅ [{item.source_type.value}] {item.title[:60]}")
+                print(f"   {item.url}")
+                print(f"   {item.content[:200]}...")
         else:
             items = await reader.read_batch(urls)
-            for item in items:
-                print(f"✅ [{item.source_type.value}] {item.title[:60]}")
-            print(f"\n📦 Fetched {len(items)}/{len(urls)} URLs")
+            if json_output:
+                print(json.dumps(
+                    [item.to_dict() for item in items],
+                    ensure_ascii=False,
+                    indent=2,
+                ))
+            else:
+                for item in items:
+                    print(f"✅ [{item.source_type.value}] {item.title[:60]}")
+                print(f"\n📦 Fetched {len(items)}/{len(urls)} URLs")
 
     try:
         asyncio.run(run())
     except KeyboardInterrupt:
-        print("\n⏹ Cancelled")
+        if json_output:
+            print(json.dumps({"ok": False, "error": "cancelled"}, ensure_ascii=False))
+        else:
+            print("\n⏹ Cancelled")
+        sys.exit(130)
     except Exception as e:
-        print(f"❌ {e}")
+        if json_output:
+            print(json.dumps(
+                {"ok": False, "error": str(e), "error_type": type(e).__name__},
+                ensure_ascii=False,
+            ))
+        else:
+            print(f"❌ {e}")
         sys.exit(1)
 
 
@@ -99,6 +124,7 @@ def main():
 Usage:
     x-reader <url>              Fetch content from any URL
     x-reader <url1> <url2>      Fetch multiple URLs
+    x-reader <url> --json       Print complete UnifiedContent as JSON
     x-reader login <platform>   Login to a platform (saves session for browser fallback)
     x-reader list               Show inbox contents
     x-reader clear              Clear inbox
@@ -115,22 +141,32 @@ Examples:
 """)
         return
 
-    cmd = sys.argv[1].lower()
+    args = sys.argv[1:]
+    json_output = "--json" in args
+    args = [arg for arg in args if arg != "--json"]
+    if not args:
+        print("❌ Missing URL or command")
+        sys.exit(1)
+
+    cmd = args[0].lower()
 
     if cmd == "login":
-        if len(sys.argv) < 3:
+        if len(args) < 2:
             print("❌ Usage: x-reader login <platform> [--headless]")
-            print("   Supported: xhs, wechat")
+            print("   Supported: xhs, wechat, twitter")
             sys.exit(1)
-        headless = "--headless" in sys.argv
-        cmd_login(sys.argv[2], headless=headless)
+        headless = "--headless" in args
+        cmd_login(args[1], headless=headless)
     elif cmd == "list":
         cmd_list()
     elif cmd == "clear":
         cmd_clear()
     elif cmd.startswith("http") or cmd.startswith("www.") or "." in cmd:
-        urls = [arg for arg in sys.argv[1:] if arg.startswith(("http", "www.")) or "." in arg]
-        cmd_fetch(urls)
+        urls = [
+            arg for arg in args
+            if arg.startswith(("http", "www.")) or "." in arg
+        ]
+        cmd_fetch(urls, json_output=json_output)
     else:
         print(f"❌ Unknown command: {cmd}")
         print("   Run 'x-reader' with no args for help")
