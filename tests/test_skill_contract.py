@@ -31,13 +31,13 @@ class AgentSkillContractTest(unittest.TestCase):
             self.assertRegex(frontmatter, r"(?m)^description:\s*\S.+")
 
     def test_lowercase_skill_files_are_absent_to_avoid_macos_collisions(self):
-        for relative_path in [
-            "skills/video/skill.md",
-            "skills/analyzer/skill.md",
-        ]:
-            self.assertFalse(
-                (ROOT / relative_path).exists(),
-                f"{relative_path} collides with SKILL.md on case-insensitive filesystems",
+        for skill_dir in ["video", "analyzer"]:
+            entries = {path.name for path in (ROOT / "skills" / skill_dir).iterdir()}
+            self.assertIn("SKILL.md", entries)
+            self.assertNotIn(
+                "skill.md",
+                entries,
+                f"skills/{skill_dir}/skill.md collides with SKILL.md on case-insensitive filesystems",
             )
 
     def test_canonical_skill_contains_source_and_media_failure_gates(self):
