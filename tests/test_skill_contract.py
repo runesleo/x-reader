@@ -30,6 +30,16 @@ class AgentSkillContractTest(unittest.TestCase):
             )
             self.assertRegex(frontmatter, r"(?m)^description:\s*\S.+")
 
+    def test_lowercase_skill_files_are_absent_to_avoid_macos_collisions(self):
+        for relative_path in [
+            "skills/video/skill.md",
+            "skills/analyzer/skill.md",
+        ]:
+            self.assertFalse(
+                (ROOT / relative_path).exists(),
+                f"{relative_path} collides with SKILL.md on case-insensitive filesystems",
+            )
+
     def test_canonical_skill_contains_source_and_media_failure_gates(self):
         text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
         for required in [
