@@ -53,12 +53,21 @@ jobs:
           set -euo pipefail
           if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $VERSION already exists; nothing to do."
-            exit 0
+          else
+            gh release create "$VERSION" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$TARGET_SHA" \
+              --title "$TITLE" \
+              --generate-notes \
+              --notes 'Source-first Agent Skill release. Install: `npx skills add runesleo/x-reader --skill x-reader`. Adds explicit PASS/PARTIAL/FAIL/UNKNOWN coverage, untrusted-source prompt-injection boundaries, immutable bootstrap pinning, and first-success evidence. See CHANGELOG.md and docs/FIRST_SUCCESS.md.'
           fi
 
-          gh release create "$VERSION" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$TARGET_SHA" \
-            --title "$TITLE" \
-            --generate-notes \
-            --notes 'Source-first Agent Skill release. Install: `npx skills add runesleo/x-reader --skill x-reader`. Adds explicit PASS/PARTIAL/FAIL/UNKNOWN coverage, untrusted-source prompt-injection boundaries, immutable bootstrap pinning, and first-success evidence. See CHANGELOG.md and docs/FIRST_SUCCESS.md.'
+      - name: Verify public owner/repo skill install
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d)"
+          cd "$smoke_dir"
+          npx -y skills add runesleo/x-reader --skill x-reader -a codex -y --copy
+          test -f .agents/skills/x-reader/SKILL.md
+          grep -q '^name: x-reader$' .agents/skills/x-reader/SKILL.md
