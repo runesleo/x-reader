@@ -1,0 +1,64 @@
+name: Publish requested release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/release-request"
+      - ".github/workflows/publish-requested-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read release request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^VERSION=//p' .github/release-request)"
+          target="$(sed -n 's/^TARGET_SHA=//p' .github/release-request)"
+          title="$(sed -n 's/^TITLE=//p' .github/release-request)"
+
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid VERSION: $version" >&2
+            exit 1
+          fi
+          if [[ ! "$target" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid TARGET_SHA: $target" >&2
+            exit 1
+          fi
+          if [[ -z "$title" ]]; then
+            echo "TITLE is required" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.request.outputs.version }}
+          TARGET_SHA: ${{ steps.request.outputs.target }}
+          TITLE: ${{ steps.request.outputs.title }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; nothing to do."
+            exit 0
+          fi
+
+          gh release create "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$TARGET_SHA" \
+            --title "$TITLE" \
+            --generate-notes \
+            --notes 'Source-first Agent Skill release. Install: `npx skills add runesleo/x-reader --skill x-reader`. Adds explicit PASS/PARTIAL/FAIL/UNKNOWN coverage, untrusted-source prompt-injection boundaries, immutable bootstrap pinning, and first-success evidence. See CHANGELOG.md and docs/FIRST_SUCCESS.md.'
