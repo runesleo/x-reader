@@ -1,3 +1,3 @@
-"""x-reader: Universal content reader for 7+ platforms."""
+"""x-reader: source-first URL reader for agents and automation."""
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"

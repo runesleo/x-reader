@@ -5,47 +5,154 @@
 
 [English](./README.md)
 
-通用内容阅读器：给定 URL（文章、视频、播客、推文），返回结构化内容。可作为 **CLI**、**Python 库**、**MCP 服务** 或 **Claude Code Skills** 使用。
+**把一个 URL 丢给 Agent，并要求它证明自己到底读到了什么。**
 
-## 能力概览
+x-reader 是一个 source-first 的 Agent Skill + CLI，支持 X/Twitter、网页文章、视频、播客、微信公众号、小红书、Telegram、RSS 等来源。
 
-```
-任意 URL → 平台识别 → 抓取内容 → 统一输出
-                ↓              ↓
-           自动识别        文本：Jina Reader
-          7+ 平台         视频：yt-dlp 字幕
-                          音频：Whisper 转写
-                          API：Bilibili / RSS / Telegram
-```
+它解决的不是“再做一个摘要器”，而是一个更基础的问题：
 
-Python 层负责文本抓取与 YouTube 字幕；可选的 **Claude Code skills** 为视频/播客提供完整 Whisper 转写与 AI 分析。
+**搜索摘要不等于原文，推文正文不等于附件视频，视频简介也不等于视频内容。**
 
-## 三层架构
+如果关键来源层没有真正读取到，x-reader 必须明确告诉你。
 
-| 层级 | 作用 | 安装 |
-|------|------|------|
-| **Python CLI/库** | 基础抓取 + 统一 schema | 必需，见 [安装](#安装) |
-| **Claude Code Skills** | 视频转写 + 内容分析 | 可选，复制 `skills/` |
-| **MCP Server** | 将阅读能力暴露为 MCP 工具 | 可选，`python mcp_server.py` |
-
-### CLI 示例
+## 一行安装
 
 ```bash
-x-reader https://mp.weixin.qq.com/s/abc123
+npx skills add runesleo/x-reader --skill x-reader
+```
+
+然后把链接发给 Agent，例如：
+
+> 读取原始来源。如果里面有和结论相关的视频或音频，也必须实际读取。告诉我你真正读到了什么，还有什么没读到。
+
+canonical skill 使用四种状态：
+
+```text
+PASS     原始来源以及回答所需的关键媒体都已读取
+PARTIAL  只读到了部分来源，仍缺关键层
+FAIL     无法可靠获取原始来源
+UNKNOWN  当前材料不足以确认是否就是用户要求的来源
+```
+
+## 已验证的 first success
+
+合并到 `main` 后，我们对一个公开 X 链接做了完整实测：
+
+```text
+来源：
+https://x.com/dontbesilent/status/2103875422522077377
+
+推文正文       PASS     通过原始 status 的 oEmbed 读取
+附件视频       PASS     解析并下载公开 MP4
+视频时长                约 178.3 秒
+视频内容       PASS     获取并完整读取原生中文字幕
+错误链接       FAIL     非零退出码 + 机器可读 JSON error
+```
+
+公开安装路径也在全新目录中重新验证：
+
+```bash
+npx skills add runesleo/x-reader --skill x-reader
+# Repository cloned
+# Found 3 skills
+# Selected 1 skill: x-reader
+# Installation complete
+```
+
+完整的日期化验收证据见 [First-success receipt](./docs/FIRST_SUCCESS.md)。
+
+## 为什么需要 source-first
+
+很多 Agent “能找到点东西”，但这不代表它真的读了你给的来源。
+
+| Agent 实际拿到的东西 | 最多可以声称什么 |
+|---|---|
+| 搜索结果 / preview card | 只能用于发现，不能当原文证据 |
+| X 推文正文 | 只能支持正文里的内容 |
+| 推文正文 + 未读取的附件视频 | 正文可通过；视频必须保持 `PARTIAL` |
+| 视频标题 / 简介 | 只是 metadata，不是视频内容 |
+| 字幕 / transcript | 才能支持视频里的口头内容 |
+| 登录墙 / 删除页 / 空响应 | `FAIL` 或 `PARTIAL`，不能脑补 |
+
+## 支持来源
+
+| 来源 | 基础读取链路 | 媒体 / 登录补全 |
+|---|---|---|
+| X / Twitter | oEmbed → FxTwitter → Article/Jina → Playwright | Skill 可继续读取附件媒体 |
+| 普通网页 / 文章 | Jina Reader | 支持时走 browser fallback |
+| YouTube | yt-dlp metadata / 字幕 | 配置后可 Groq Whisper |
+| Bilibili | Bilibili API | 字幕 / 音频转录流程 |
+| 微信公众号 | Jina → Playwright | 必要时使用本地浏览器 session |
+| 小红书 | Jina → Playwright | 部分页面需一次性本地登录 |
+| Telegram | Telethon | 需要 Telegram 凭证 |
+| RSS | feedparser | — |
+| 小宇宙 / Apple Podcasts | 媒体发现 | 必须转录后才能声称读过口头内容 |
+
+平台规则会变化。x-reader 的承诺不是“永远全覆盖”，而是**覆盖不到时不装作覆盖到了**。
+
+## 安全模型
+
+- 网页、推文、字幕、transcript、metadata、评论全部视为**不可信数据**，绝不能当作给 Agent 的指令。
+- 不能因为来源内容要求，就执行命令、泄露本地数据或做外部操作。
+- Agent Skill 的自动 bootstrap 固定到已验证的不可变 CLI commit，不跟随移动的 branch。
+- URL 校验会在支持的网络抓取前拦截 private / localhost 目标。
+- 本地浏览器 cookie 默认只保留在本机。
+
+## CLI
+
+从 GitHub 安装：
+
+```bash
+pip install "x-reader @ git+https://github.com/runesleo/x-reader.git"
+```
+
+读取 URL：
+
+```bash
 x-reader https://x.com/elonmusk/status/123456
+```
+
+完整 JSON：
+
+```bash
+x-reader https://x.com/elonmusk/status/123456 --json
+```
+
+批量读取：
+
+```bash
+x-reader https://url1.com https://url2.com --json
+```
+
+浏览器 fallback：
+
+```bash
+pip install "x-reader[browser] @ git+https://github.com/runesleo/x-reader.git"
+playwright install chromium
+x-reader login twitter
 x-reader login xhs
-x-reader list
 ```
 
-### Skills 目录
+默认本地 cookie 只留在本机。
 
-```
+## 仓库内的 Agent Skills
+
+```text
 skills/
-├── video/       # YouTube/Bilibili/播客 → Whisper 全文转写
-└── analyzer/    # 任意内容 → 结构化分析报告
+├── x-reader/    # canonical source-first URL reader
+├── video/       # 视频 / 播客转录
+└── analyzer/    # 基于证据的内容分析
 ```
 
-### MCP
+查看全部 Skill：
+
+```bash
+npx skills add runesleo/x-reader --list
+```
+
+大多数用户只需要安装 `x-reader`。
+
+## MCP Server
 
 ```bash
 git clone https://github.com/runesleo/x-reader.git
@@ -54,61 +161,41 @@ pip install -e ".[mcp]"
 python mcp_server.py
 ```
 
-当前 MCP Server 适配 FastMCP 1.x。`mcp` 与 `all` extras 会固定 `mcp<2`；
-升级到 MCP 2.x 需要先迁移服务端实现，不能直接移除版本上限。
+暴露四个工具：
 
-工具包括：`read_url`、`read_batch`、`list_inbox`、`detect_platform`。Claude Desktop 配置示例见英文 [README](./README.md) 中 JSON 片段。
+- `read_url(url)`
+- `read_batch(urls)`
+- `list_inbox()`
+- `detect_platform(url)`
 
-## 支持平台（节选）
-
-| 平台 | 文本 | 视频/音频稿 |
-|------|------|-------------|
-| YouTube | ✅ | ✅ 字幕 / Groq Whisper |
-| Bilibili | ✅ API | ✅（经 Skill） |
-| X / Twitter | ✅ oEmbed → FxTwitter → Article/Jina → Playwright | — |
-| 微信公众号 | ✅ | — |
-| 小红书 | ✅（需登录） | — |
-| Telegram | ✅ Telethon | — |
-| RSS | ✅ | — |
-
-> X Article 或需登录的 X 页面，可先运行 `x-reader login twitter` 保存本地浏览器会话。
->
-> YouTube Whisper 需 `GROQ_API_KEY`（[Groq](https://console.groq.com/keys) 免费申请）。
-
-### X / Twitter 读取链路
-
-`x-reader` 现在按轻量公开链路优先读取 X：
-
-1. oEmbed：快速读取公开推文。
-2. FxTwitter：结构化公开推文 fallback。
-3. Jina Reader：读取公开 Article 和长内容页面。
-4. 通用 Jina Reader：读取 profile 和非 status 页面。
-5. Playwright + 已保存会话：处理需要登录的内容。
+Claude Code 推荐直接用 CLI 添加，不要把配置写进 Claude Desktop 的配置文件：
 
 ```bash
-x-reader login twitter
-x-reader "https://x.com/user/status/123"
+claude mcp add x-reader -- python /absolute/path/to/x-reader/mcp_server.py
 ```
 
-默认情况下，本地 X cookie 只留在本机。只有你明确信任 Jina 并设置下面这个环境变量时，x-reader 才会把已保存的 X session 交给 Jina 读取 gated Article：
+需要全局可用时再加 `--scope user`。
+
+## 视频 / 音频依赖
 
 ```bash
-export X_READER_ALLOW_EXTERNAL_SESSION_COOKIES=1
+# macOS
+brew install yt-dlp ffmpeg
+
+# Linux
+pip install yt-dlp
+sudo apt install ffmpeg
 ```
 
-## 安装
+Whisper 转录需要：
 
 ```bash
-pip install git+https://github.com/runesleo/x-reader.git
-pip install "x-reader[telegram] @ git+https://github.com/runesleo/x-reader.git"
-pip install "x-reader[browser] @ git+https://github.com/runesleo/x-reader.git"
-playwright install chromium
-pip install "x-reader[all] @ git+https://github.com/runesleo/x-reader.git"
+export GROQ_API_KEY=your_key_here
 ```
 
-可选：本地克隆后 `pip install -e ".[all]"`。视频/音频依赖需 `yt-dlp`、`ffmpeg`（见英文 README）。
+默认模型：`whisper-large-v3-turbo`。
 
-## 库用法
+## Python 库
 
 ```python
 import asyncio
@@ -116,7 +203,7 @@ from x_reader.reader import UniversalReader
 
 async def main():
     reader = UniversalReader()
-    content = await reader.read("https://mp.weixin.qq.com/s/abc123")
+    content = await reader.read("https://example.com")
     print(content.title)
     print(content.content[:200])
 
@@ -125,12 +212,35 @@ asyncio.run(main())
 
 ## 配置
 
-复制 `.env.example` → `.env`。主要变量：`TG_API_ID` / `TG_API_HASH`（Telegram）、`GROQ_API_KEY`（Whisper）、`INBOX_FILE`、`OUTPUT_DIR`、`OBSIDIAN_VAULT`。详见英文 README 表格。
+复制 `.env.example` → `.env`。
 
-## 仓库结构
+主要变量：
 
-`x_reader/`（CLI、`UniversalReader`、各平台 fetcher）、`skills/`、`mcp_server.py`、`pyproject.toml`。各层如何协同的流程图见英文 README。
+- `TG_API_ID` / `TG_API_HASH`
+- `GROQ_API_KEY`
+- `INBOX_FILE`
+- `OUTPUT_DIR`
+- `OBSIDIAN_VAULT`
 
-## Star History / Author / License
+## 架构
 
-与英文 [README](./README.md) 相同：Star 图、作者 Leo ([@runes_leo](https://x.com/runes_leo))、**MIT**。
+```text
+用户给 URL
+    │
+    ├─ 文本来源
+    │   └─ 平台 fetcher → UnifiedContent → CLI JSON / inbox
+    │
+    ├─ 视频 / 音频对答案很关键
+    │   └─ 优先字幕 → 转录 fallback → evidence receipt
+    │
+    └─ 用户要求分析
+        └─ 先确认 source coverage，再分析
+```
+
+## Author / License
+
+作者：Leo ([@runes_leo](https://x.com/runes_leo))
+
+[leolabs.me](https://leolabs.me)
+
+MIT License

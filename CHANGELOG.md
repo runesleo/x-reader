@@ -8,11 +8,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
+### Added
+
+- Canonical `x-reader` Agent Skill with explicit `PASS / PARTIAL / FAIL / UNKNOWN` source-coverage receipts.
+- Complete machine-readable CLI output through `x-reader <url> --json`.
+- Dated first-success verification covering public Agent Skill installation, original X post retrieval, attached-video subtitle evidence, and fail-closed broken URLs.
+
+### Changed
+
+- Make `x-reader` the recommended agent-facing entry point while preserving the narrower `video` and `analyzer` skills.
+- Use uppercase `SKILL.md` consistently so skill discovery works on case-insensitive macOS filesystems.
+- Rework English and Chinese README surfaces around the source-first contract and correct Claude Code MCP setup.
+
+### Security
+
+- Treat all fetched web/social/media content as untrusted data and explicitly forbid following instructions embedded in source content.
+- Pin the Agent Skill's automatic CLI bootstrap to the verified immutable first-success commit instead of a moving GitHub branch.
+- Keep local cookies and credentials outside source content by default.
+
 ### Fixed
 
-- Keep the optional MCP dependency on the FastMCP-compatible 1.x line so fresh
-  `x-reader[mcp]` installs do not fail before the protocol handshake; configure
-  SSE through FastMCP settings and run the regression suite on Python 3.10/3.11.
+- Keep the optional MCP dependency on the FastMCP-compatible 1.x line so fresh `x-reader[mcp]` installs do not fail before the protocol handshake; configure SSE through FastMCP settings and run the regression suite on Python 3.10/3.11.
 
 ## History (full git log)
 

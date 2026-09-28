@@ -1,14 +1,14 @@
 [project]
 name = "x-reader"
-version = "0.2.0"
-description = "Universal content reader — fetch, normalize, and digest content from 7+ platforms"
+version = "0.3.0"
+description = "Source-first Agent Skill and CLI for reading URLs with explicit evidence coverage"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
     {name = "Leo", email = "runes.leo@gmail.com"}
 ]
-keywords = ["content-reader", "rss", "telegram", "bilibili", "xiaohongshu", "digest"]
+keywords = ["agent-skill", "source-reader", "content-reader", "twitter", "video", "rss", "telegram", "bilibili", "xiaohongshu"]
 dependencies = [
     "requests>=2.28",
     "feedparser>=6.0",
