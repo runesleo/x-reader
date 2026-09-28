@@ -166,6 +166,10 @@ def from_twitter(data: dict) -> UnifiedContent:
     }
     if data.get('author_url'):
         extra["author_url"] = data.get('author_url')
+    if data.get('media_status'):
+        extra["media_status"] = data.get('media_status')
+    if data.get('media_probe_method'):
+        extra["media_probe_method"] = data.get('media_probe_method')
 
     return UnifiedContent(
         source_type=SourceType.TWITTER,

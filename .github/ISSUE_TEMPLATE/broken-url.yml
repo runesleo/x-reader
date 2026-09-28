@@ -1,0 +1,57 @@
+name: Broken URL / source coverage
+description: Report a public URL that x-reader could not read correctly
+title: "[broken-url] "
+labels: []
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Web / article
+        - X / Twitter
+        - YouTube
+        - Bilibili
+        - WeChat
+        - Xiaohongshu
+        - Telegram
+        - RSS
+        - Podcast / audio
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: url
+    attributes:
+      label: Public URL or sanitized reproduction
+      description: Do not post private links, cookies, tokens, or account data.
+      placeholder: https://...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: expected
+    attributes:
+      label: Expected coverage
+      options:
+        - READ
+        - PARTIAL
+        - AUTH_REQUIRED
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened?
+      description: Paste the short error or explain what x-reader returned instead.
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment (only if relevant)
+      placeholder: macOS / Linux, Python version, agent client

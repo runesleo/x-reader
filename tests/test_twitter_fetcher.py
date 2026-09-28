@@ -79,7 +79,20 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
             )
         )
 
-    def test_from_twitter_keeps_fetch_metadata(self):
+    def test_structured_media_status_present_none_unknown(self):
+        self.assertEqual(
+            twitter._media_status_from_fxtwitter(
+                {"media": {"videos": [{"url": "https://video"}]}}
+            ),
+            "present",
+        )
+        self.assertEqual(
+            twitter._media_status_from_fxtwitter({"media": {"videos": [], "photos": []}}),
+            "none",
+        )
+        self.assertEqual(twitter._media_status_from_fxtwitter({}), "unknown")
+
+    def test_from_twitter_keeps_fetch_and_media_metadata(self):
         content = from_twitter(
             {
                 "text": "hello",
@@ -87,10 +100,14 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
                 "url": "https://x.com/runesleo/status/1",
                 "fetch_method": "oembed",
                 "author_url": "https://x.com/runesleo",
+                "media_status": "present",
+                "media_probe_method": "fxtwitter",
             }
         )
         self.assertEqual(content.extra["fetch_method"], "oembed")
         self.assertEqual(content.extra["author_url"], "https://x.com/runesleo")
+        self.assertEqual(content.extra["media_status"], "present")
+        self.assertEqual(content.extra["media_probe_method"], "fxtwitter")
 
     def test_session_cookies_require_explicit_external_opt_in(self):
         from x_reader.fetchers import browser
@@ -130,22 +147,58 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
             if "session_path" in locals():
                 os.unlink(session_path)
 
-    def test_fetch_twitter_uses_oembed_when_content_is_complete(self):
-        original = twitter._fetch_via_oembed
+    def test_fetch_twitter_oembed_uses_structured_media_probe(self):
+        original_oembed = twitter._fetch_via_oembed
+        original_fx = twitter._fetch_via_fxtwitter
         try:
             twitter._fetch_via_oembed = lambda _url: {
                 "text": "这是一个完整的公开推文内容，长度足够，可以直接使用。",
                 "author": "Leo",
                 "title": "这是一个完整的公开推文内容",
+                "media_status": "unknown",
+            }
+            twitter._fetch_via_fxtwitter = lambda _url, timeout=10: {
+                "text": "same",
+                "media_status": "none",
             }
             data = asyncio.run(
                 twitter.fetch_twitter("https://x.com/runesleo/status/123?s=20")
             )
         finally:
-            twitter._fetch_via_oembed = original
+            twitter._fetch_via_oembed = original_oembed
+            twitter._fetch_via_fxtwitter = original_fx
 
         self.assertEqual(data["fetch_method"], "oembed")
         self.assertEqual(data["url"], "https://x.com/runesleo/status/123")
+        self.assertEqual(data["media_status"], "none")
+        self.assertEqual(data["media_probe_method"], "fxtwitter")
+
+    def test_fetch_twitter_preserves_oembed_media_presence_without_probe(self):
+        original_oembed = twitter._fetch_via_oembed
+        original_fx = twitter._fetch_via_fxtwitter
+        calls = []
+        try:
+            twitter._fetch_via_oembed = lambda _url: {
+                "text": "完整正文 pic.twitter.com/abc123，长度也足够用于读取。",
+                "author": "Leo",
+                "title": "完整正文",
+                "media_status": "present",
+            }
+
+            def unexpected_probe(*_args, **_kwargs):
+                calls.append(True)
+                raise AssertionError("media probe should not run")
+
+            twitter._fetch_via_fxtwitter = unexpected_probe
+            data = asyncio.run(
+                twitter.fetch_twitter("https://x.com/runesleo/status/123")
+            )
+        finally:
+            twitter._fetch_via_oembed = original_oembed
+            twitter._fetch_via_fxtwitter = original_fx
+
+        self.assertEqual(calls, [])
+        self.assertEqual(data["media_status"], "present")
 
     def test_fetch_twitter_falls_back_after_thin_oembed(self):
         original_oembed = twitter._fetch_via_oembed
@@ -155,11 +208,13 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
                 "text": "https://t.co/abc123",
                 "author": "Leo",
                 "title": "",
+                "media_status": "unknown",
             }
-            twitter._fetch_via_fxtwitter = lambda _url: {
+            twitter._fetch_via_fxtwitter = lambda _url, timeout=10: {
                 "text": "FxTwitter 返回的完整正文",
                 "author": "@runesleo",
                 "title": "FxTwitter 返回的完整正文",
+                "media_status": "none",
             }
             data = asyncio.run(
                 twitter.fetch_twitter("https://x.com/runesleo/status/123")
@@ -170,6 +225,7 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
 
         self.assertEqual(data["fetch_method"], "fxtwitter")
         self.assertEqual(data["text"], "FxTwitter 返回的完整正文")
+        self.assertEqual(data["media_status"], "none")
 
 
 if __name__ == "__main__":

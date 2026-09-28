@@ -58,12 +58,11 @@ class UniversalReader:
 
         The main entry point — give it a URL, get back structured content.
         """
-        # Ensure URL has scheme
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
 
-        # SSRF protection: block private IPs, metadata endpoints, DNS rebinding
-        validate_url(url)
+        # DNS validation is blocking; keep it off the event loop.
+        await asyncio.to_thread(validate_url, url)
 
         platform = self._detect_platform(url)
         logger.info(f"[{platform}] {url[:60]}...")
@@ -71,13 +70,11 @@ class UniversalReader:
         try:
             content = await self._fetch(platform, url)
 
-            # Save to inbox if configured
             if self.inbox:
                 if self.inbox.add(content):
                     self.inbox.save()
                     logger.info(f"Saved to inbox: {content.title[:50]}")
 
-            # Save to markdown output if configured
             from x_reader.utils.storage import save_to_markdown
             save_to_markdown(content)
 
@@ -124,7 +121,6 @@ class UniversalReader:
 
         if platform == "telegram":
             from x_reader.fetchers.telegram import fetch_telegram
-            # Extract channel username from t.me URL
             path = urlparse(url).path.strip("/").split("/")[0]
             channel = path if path else url
             messages = await fetch_telegram(channel, limit=1)
@@ -132,15 +128,23 @@ class UniversalReader:
                 return from_telegram(messages[0], channel, channel)
             raise ValueError(f"No messages from Telegram channel: {url}")
 
-        # Fallback: Jina Reader for any unknown URL
         logger.info(f"Using Jina fallback for: {url}")
-        data = fetch_via_jina(url)
+        try:
+            data = await asyncio.to_thread(fetch_via_jina, url)
+        except Exception as exc:
+            logger.warning(
+                f"Jina generic fallback failed ({exc}); trying direct HTML"
+            )
+            from x_reader.fetchers.jina import fetch_direct_html
+            data = await asyncio.to_thread(fetch_direct_html, url)
+
         return UnifiedContent(
             source_type=SourceType.MANUAL,
             source_name=urlparse(url).netloc,
             title=data["title"],
             content=data["content"],
-            url=url,
+            url=data.get("url", url),
+            extra={"fetch_method": data.get("fetch_method", "jina")},
         )
 
     async def read_batch(self, urls: list[str]) -> list[UnifiedContent]:

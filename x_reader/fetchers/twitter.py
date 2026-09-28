@@ -112,6 +112,21 @@ def _is_thin_oembed_text(text: str) -> bool:
     return False
 
 
+def _media_status_from_fxtwitter(tweet: dict) -> str:
+    """Return present/none/unknown from FxTwitter's structured media field."""
+    if "media" not in tweet:
+        return "unknown"
+
+    media = tweet.get("media")
+    if isinstance(media, dict):
+        return "present" if any(bool(value) for value in media.values()) else "none"
+    if isinstance(media, (list, tuple)):
+        return "present" if media else "none"
+    if media is None:
+        return "none"
+    return "present" if bool(media) else "none"
+
+
 def _session_cookie_header(platform: str = "twitter") -> Optional[str]:
     """Return minimal cookies from a saved Playwright session for authenticated fetches."""
     if os.getenv("X_READER_ALLOW_EXTERNAL_SESSION_COOKIES") != "1":
@@ -140,7 +155,7 @@ def _session_cookie_header(platform: str = "twitter") -> Optional[str]:
         return None
 
 
-def _fetch_via_fxtwitter(url: str) -> Dict[str, Any]:
+def _fetch_via_fxtwitter(url: str, timeout: float = 10) -> Dict[str, Any]:
     """
     Fetch full tweet text via FxTwitter API.
     Free, no auth, returns complete text (no truncation).
@@ -152,7 +167,7 @@ def _fetch_via_fxtwitter(url: str) -> Dict[str, Any]:
     username, status_id = match.group(1), match.group(2)
     api_url = f"{FXTWITTER_API}/{username}/status/{status_id}"
 
-    resp = requests.get(api_url, timeout=10)
+    resp = requests.get(api_url, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
 
@@ -166,6 +181,7 @@ def _fetch_via_fxtwitter(url: str) -> Dict[str, Any]:
         "author": f"@{author_screen}" if author_screen else "",
         "author_name": author_name,
         "title": text[:100] if text else "",
+        "media_status": _media_status_from_fxtwitter(tweet),
     }
 
 
@@ -190,6 +206,9 @@ def _fetch_via_oembed(url: str) -> Dict[str, Any]:
         "author": data.get("author_name", ""),
         "author_url": data.get("author_url", ""),
         "title": text[:100] if text else "",
+        # oEmbed exposes media links inconsistently. Presence is useful evidence,
+        # absence is not proof that the tweet has no media.
+        "media_status": "present" if "pic.twitter.com/" in html.lower() else "unknown",
     }
 
 
@@ -333,6 +352,19 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
             data = _fetch_via_oembed(url)
             text = (data.get("text") or "").strip()
             if text and not _is_thin_oembed_text(text):
+                media_status = data.get("media_status", "unknown")
+                media_probe_method = "oembed_html"
+                if media_status == "unknown":
+                    try:
+                        probe = _fetch_via_fxtwitter(url, timeout=3)
+                        media_status = probe.get("media_status", "unknown")
+                        media_probe_method = "fxtwitter"
+                    except Exception as probe_error:
+                        logger.warning(
+                            f"[Twitter] Media probe unavailable ({probe_error}); "
+                            "keeping media_status=unknown"
+                        )
+
                 return {
                     "text": text,
                     "author": author or data.get("author", ""),
@@ -340,6 +372,8 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                     "title": data.get("title", ""),
                     "platform": "twitter",
                     "fetch_method": "oembed",
+                    "media_status": media_status,
+                    "media_probe_method": media_probe_method,
                 }
             logger.warning("[Twitter] oEmbed returned thin or truncated content")
         except Exception as e:
@@ -359,6 +393,8 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                     "title": data.get("title", ""),
                     "platform": "twitter",
                     "fetch_method": "fxtwitter",
+                    "media_status": data.get("media_status", "unknown"),
+                    "media_probe_method": "fxtwitter",
                 }
             logger.warning("[Twitter] FxTwitter returned empty text")
         except Exception as e:
@@ -379,6 +415,7 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                     "title": data.get("title", ""),
                     "platform": "twitter",
                     "fetch_method": "x_article_jina",
+                    "media_status": "unknown",
                 }
             logger.warning("[Twitter] X Article Jina returned short content")
         except Exception as e:
@@ -404,6 +441,7 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                 "title": title,
                 "platform": "twitter",
                 "fetch_method": "jina",
+                "media_status": "unknown",
             }
         logger.warning("[Twitter] Jina returned unusable content")
     except Exception as e:
@@ -422,6 +460,7 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                 "title": data.get("title", ""),
                 "platform": "twitter",
                 "fetch_method": "playwright",
+                "media_status": "unknown",
             }
         logger.warning("[Twitter] Playwright returned empty content")
     except RuntimeError:
