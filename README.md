@@ -30,6 +30,17 @@ FAIL     the original source could not be fetched reliably
 UNKNOWN  retrieved material is too ambiguous to verify
 ```
 
+## v0.3.1: verified before / after
+
+The source-fetch hardening has a live, reproducible delta against public v0.3.0:
+
+- `https://example.com`: v0.3.0 hit Jina HTTP 401 and failed; v0.3.1 safely falls back to `direct_html_pinned` and returns `READ`.
+- Mixed-media X: v0.3.0 returned the post text without structured media coverage; v0.3.1 returns `media_status=present`, so post text can be `READ` while unconsumed attached media stays `PARTIAL`.
+
+![x-reader v0.3.0 vs v0.3.1 proof](https://github.com/runesleo/x-reader/releases/download/v0.3.1/x-reader-v030-vs-hardening.gif)
+
+[Watch the 12-second MP4 proof](https://github.com/runesleo/x-reader/releases/download/v0.3.1/x-reader-v030-vs-hardening.mp4) · [v0.3.1 release notes](https://github.com/runesleo/x-reader/releases/tag/v0.3.1)
+
 ## Verified first success
 
 A public X benchmark was run end-to-end after the Agent Skill merged to `main`:

@@ -34,6 +34,17 @@ FAIL     无法可靠获取原始来源
 UNKNOWN  当前材料不足以确认是否就是用户要求的来源
 ```
 
+## v0.3.1：真实 before / after
+
+这次 source-fetch hardening 有可复现的真实差异，不只是功能列表：
+
+- `https://example.com`：v0.3.0 遇到 Jina HTTP 401 后直接失败；v0.3.1 会安全 fallback 到 `direct_html_pinned`，最终返回 `READ`。
+- 带附件视频的 X：v0.3.0 只返回推文文字，没有结构化媒体状态；v0.3.1 返回 `media_status=present`，因此可以明确区分“正文已读”和“附件媒体仍是 `PARTIAL`”。
+
+![x-reader v0.3.0 vs v0.3.1 实测](https://github.com/runesleo/x-reader/releases/download/v0.3.1/x-reader-v030-vs-hardening.gif)
+
+[查看 12 秒 MP4 实测](https://github.com/runesleo/x-reader/releases/download/v0.3.1/x-reader-v030-vs-hardening.mp4) · [v0.3.1 Release Notes](https://github.com/runesleo/x-reader/releases/tag/v0.3.1)
+
 ## 已验证的 first success
 
 合并到 `main` 后，我们对一个公开 X 链接做了完整实测：
