@@ -54,12 +54,25 @@ jobs:
           if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $VERSION already exists; nothing to do."
           else
+            changelog_version="${VERSION#v}"
+            notes_file="$RUNNER_TEMP/release-notes.md"
+            awk -v version="$changelog_version" '
+              BEGIN { prefix="## [" version "]" }
+              index($0, prefix) == 1 { capture=1; next }
+              capture && index($0, "## ") == 1 { exit }
+              capture { print }
+            ' CHANGELOG.md > "$notes_file"
+
+            if ! grep -q '[^[:space:]]' "$notes_file"; then
+              echo "No CHANGELOG section found for $VERSION" >&2
+              exit 1
+            fi
+
             gh release create "$VERSION" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$TARGET_SHA" \
               --title "$TITLE" \
-              --generate-notes \
-              --notes 'Source-first Agent Skill release. Install: `npx skills add runesleo/x-reader --skill x-reader`. Adds explicit PASS/PARTIAL/FAIL/UNKNOWN coverage, untrusted-source prompt-injection boundaries, immutable bootstrap pinning, and first-success evidence. See CHANGELOG.md and docs/FIRST_SUCCESS.md.'
+              --notes-file "$notes_file"
           fi
 
       - name: Verify public owner/repo skill install

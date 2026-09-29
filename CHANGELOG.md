@@ -8,6 +8,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-29
+
+### Added
+
+- First-success smoke coverage for generic public web and mixed-media X, plus a reproducible broken-URL issue template and benchmark notes.
+
+### Changed
+
+- Preserve structured X/Twitter media evidence through `media_status=present|none|unknown`, so post text can be `READ` while attached media remains `PARTIAL`.
+- Offload blocking generic fetch work from the async event loop and keep machine-readable source receipts explicit about the fetch path used.
+
+### Security
+
+- Pin generic Jina/direct connections to validated public IPs while preserving original Host/SNI/certificate hostname verification.
+- Revalidate redirect targets, fail closed on private/special/ambiguous destinations, and bound DNS workers, response sizes, fetch deadlines, and resource cleanup.
+- Support TUN fake-IP DNS safely by resolving synthetic `198.18.0.0/15` answers through pinned trusted DoH instead of trusting the synthetic destination.
+- Reject ambiguous legacy numeric host forms and tighten IDNA/public-unicast validation.
+
+### Fixed
+
+- Recover generic public pages through a safe direct HTML fallback when Jina returns an error such as HTTP 401.
+- Prevent login/error/challenge shells and unknown attached-media states from being overstated as fully read source content.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added

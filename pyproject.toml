@@ -1,6 +1,6 @@
 [project]
 name = "x-reader"
-version = "0.3.0"
+version = "0.3.1"
 description = "Source-first Agent Skill and CLI for reading URLs with explicit evidence coverage"
 readme = "README.md"
 license = {text = "MIT"}
