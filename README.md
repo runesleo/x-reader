@@ -171,11 +171,21 @@ cd x-reader
 pip install -e ".[mcp]"
 ```
 
-Run directly:
+Run directly from a clone:
 
 ```bash
 python mcp_server.py
 ```
+
+Or launch the packaged MCP entrypoint straight from GitHub with `uvx`:
+
+```bash
+uvx --with "mcp[cli]>=1.0,<2" \
+  --from git+https://github.com/runesleo/x-reader.git \
+  x-reader-mcp
+```
+
+The `x-reader-mcp` console entrypoint is packaged inside `x_reader`; the root `mcp_server.py` remains as a backward-compatible source-checkout shim.
 
 Tools exposed:
 

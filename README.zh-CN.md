@@ -172,6 +172,14 @@ pip install -e ".[mcp]"
 python mcp_server.py
 ```
 
+也可以直接从 GitHub 用 `uvx` 启动打包后的 MCP 入口：
+
+```bash
+uvx --with "mcp[cli]>=1.0,<2" --from git+https://github.com/runesleo/x-reader.git x-reader-mcp
+```
+
+`x-reader-mcp` 是打包在 `x_reader` 内的 console entrypoint；根目录的 `mcp_server.py` 继续保留，兼容原来的源码 checkout 用法。
+
 暴露四个工具：
 
 - `read_url(url)`
