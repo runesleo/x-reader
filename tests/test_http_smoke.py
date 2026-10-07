@@ -25,6 +25,30 @@ FIXTURE = {
 
 
 class HttpFixtureSmokeTest(unittest.TestCase):
+    def test_bilingual_product_and_app_routes(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), EvidenceRequestHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for path, marker in (
+                ("/", "Your AI says it read the source."),
+                ("/en", "Evidence-aware source reading for AI agents"),
+                ("/zh", "别让 AI 假装读过原文"),
+                ("/app", "Paste a source. Check what was actually read."),
+            ):
+                conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+                conn.request("GET", path)
+                response = conn.getresponse()
+                body = response.read().decode("utf-8")
+                self.assertEqual(response.status, 200, path)
+                self.assertIn("text/html", response.getheader("Content-Type") or "")
+                self.assertIn(marker, body, path)
+                conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_root_accepts_tracking_query_string(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), EvidenceRequestHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -40,7 +64,7 @@ class HttpFixtureSmokeTest(unittest.TestCase):
             body = response.read().decode("utf-8")
             self.assertEqual(response.status, 200)
             self.assertIn("text/html", response.getheader("Content-Type") or "")
-            self.assertIn("<title>x-reader · Evidence Receipt for AI research</title>", body)
+            self.assertIn("<title>x-reader · Evidence-aware source reading for AI agents</title>", body)
         finally:
             server.shutdown()
             server.server_close()

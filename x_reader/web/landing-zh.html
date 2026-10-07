@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>x-reader · 别让 AI 假装读过原文</title>
+<meta name="description" content="x-reader 为 AI Agent 提供可验证的原始来源读取：明确区分搜索摘要、推文正文、附件视频、YouTube 简介与真正读到的证据，并返回 PASS / PARTIAL / FAIL / UNKNOWN。" />
+<meta name="robots" content="index,follow" />
+<link rel="canonical" href="https://xreader.leolabs.me/zh" />
+<link rel="alternate" hreflang="en" href="https://xreader.leolabs.me/en" />
+<link rel="alternate" hreflang="zh-CN" href="https://xreader.leolabs.me/zh" />
+<link rel="alternate" hreflang="x-default" href="https://xreader.leolabs.me/" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="x-reader · 别让 AI 假装读过原文" />
+<meta property="og:description" content="搜索摘要不是原文，推文正文不是附件视频。x-reader 让 AI 把自己真正读到的证据说清楚。" />
+<meta property="og:url" content="https://xreader.leolabs.me/zh" />
+<meta name="twitter:card" content="summary" />
+<meta name="theme-color" content="#f5f2eb" />
+
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111;background:#f5f2eb;--paper:#fff;--line:#d9d3c8;--muted:#6f6a62;--ink:#111;--soft:#ebe6dd;--green:#0d7a43;--amber:#9a6200}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:linear-gradient(180deg,#faf8f3 0,#f5f2eb 55%,#f1eee6 100%)}a{color:inherit}.wrap{max-width:1120px;margin:0 auto;padding:24px 22px 80px}.nav{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:72px}.brand{font-weight:900;letter-spacing:-.05em;font-size:19px}.navlinks{display:flex;align-items:center;gap:16px;font-size:13px}.navlinks a{text-decoration:none}.navlinks .lang{border:1px solid var(--line);border-radius:999px;padding:7px 10px;background:#fff}.hero{max-width:930px}.kicker{display:inline-flex;align-items:center;gap:8px;border:1px solid #bbb4a8;background:rgba(255,255,255,.72);border-radius:999px;padding:7px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#625e57}.dot{width:7px;height:7px;background:#111;border-radius:50%}h1{font-size:clamp(48px,7.8vw,86px);line-height:.96;letter-spacing:-.067em;margin:20px 0 24px;max-width:1000px}.lead{font-size:clamp(19px,2.2vw,24px);line-height:1.55;color:#4f4b45;max-width:800px;margin:0}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 18px;border:1px solid #111;background:#111;color:#fff;text-decoration:none;font-weight:800}.btn.secondary{background:#fff;color:#111;border-color:#bcb5aa}.proof{display:grid;grid-template-columns:1.08fr .92fr;gap:16px;margin-top:54px}.panel{background:rgba(255,255,255,.9);border:1px solid var(--line);padding:26px}.panel.dark{background:#111;color:#fff;border-color:#111}.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#8b857c;margin-bottom:12px}.dark .eyebrow{color:#8f8f8f}.proof h2,.section h2{font-size:clamp(28px,4vw,44px);letter-spacing:-.045em;line-height:1.05;margin:0 0 14px}.proof p,.section p{color:#68635b;line-height:1.65}.dark p{color:#bbb}.receipt-row{display:grid;grid-template-columns:1fr auto;gap:18px;padding:13px 0;border-top:1px solid #333}.receipt-row:first-of-type{margin-top:22px}.receipt-state{font-weight:900;letter-spacing:.02em}.pass{color:#8fe0a2}.partial{color:#ffd47b}.overall{font-size:32px;letter-spacing:-.04em}.section{margin-top:80px}.section-head{max-width:780px;margin-bottom:28px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{background:#fff;border:1px solid var(--line);padding:22px;min-height:180px}.num{font-size:12px;color:#8c867c;margin-bottom:36px}.card strong{display:block;font-size:18px;letter-spacing:-.02em;margin-bottom:8px}.card p{font-size:14px;margin:0}.contract{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.state{border-top:2px solid #111;padding:16px 4px 0}.state strong{display:block;font-size:20px}.state span{font-size:13px;color:#716c64;line-height:1.45;display:block;margin-top:5px}.how{display:grid;grid-template-columns:1fr 1fr;gap:18px}.flow{background:#111;color:#fff;padding:28px}.flow code{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#1e1e1e;border:1px solid #333;padding:14px;overflow-wrap:anywhere;margin-top:15px;color:#eee}.flow p{color:#aaa}.surface{background:#fff;border:1px solid var(--line);padding:22px}.surface small{color:#8b857c;text-transform:uppercase;letter-spacing:.07em}.surface strong{display:block;font-size:22px;margin:8px 0}.cta{margin-top:80px;background:#111;color:#fff;padding:44px;display:flex;justify-content:space-between;gap:28px;align-items:end}.cta h2{font-size:clamp(34px,5vw,56px);letter-spacing:-.05em;line-height:1;margin:0;max-width:700px}.cta p{color:#aaa;margin:13px 0 0;max-width:650px}.footer{margin-top:34px;display:flex;justify-content:space-between;gap:20px;font-size:12px;color:#7d776f}.footerlinks{display:flex;gap:14px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.badge{display:inline-block;padding:4px 8px;border:1px solid var(--line);background:#fff;font-size:12px;margin:4px 4px 0 0}@media(max-width:820px){.nav{margin-bottom:54px}.proof,.how{grid-template-columns:1fr}.grid3{grid-template-columns:1fr}.grid4,.contract{grid-template-columns:1fr 1fr}.cta{display:block}.cta .actions{margin-top:26px}}@media(max-width:520px){.wrap{padding:18px 16px 60px}.navlinks a:not(.lang):not(.app-link){display:none}h1{font-size:46px}.grid4,.contract{grid-template-columns:1fr}.panel,.card,.surface{padding:19px}.cta{padding:28px}.receipt-row{grid-template-columns:1fr auto}}
+</style>
+</head>
+<body><div class="wrap">
+<nav class="nav">
+  <div class="brand">x-reader</div>
+  <div class="navlinks">
+    <a href="#why">为什么</a><a href="#how">怎么用</a><a href="https://github.com/runesleo/x-reader" target="_blank" rel="noreferrer">GitHub ↗</a>
+    <a class="app-link" href="/app">打开工具</a><a class="lang" href="/en">EN</a>
+  </div>
+</nav>
+<main>
+<section class="hero">
+  <div class="kicker"><span class="dot"></span> 开源 · Hosted Beta</div>
+  <h1>别让 AI 假装读过原文。</h1>
+  <p class="lead">把一个公开 URL 交给 x-reader。它不会只说“我看过了”，而是明确告诉你：真正读到了哪一层、哪一层还缺失，以及当前答案最多能说到哪里。</p>
+  <div class="actions"><a class="btn" href="/app">免费试用 x-reader →</a><a class="btn secondary" href="https://github.com/runesleo/x-reader" target="_blank" rel="noreferrer">查看源码</a></div>
+</section>
+
+<section class="proof">
+  <div class="panel">
+    <div class="eyebrow">真正的问题</div>
+    <h2>AI “找到了一些信息”，不等于它真的读了你给的来源。</h2>
+    <p>ChatGPT、Claude、Codex 做研究时，搜索摘要很容易被当成原文，推文正文很容易被当成附件视频，YouTube 简介也很容易被当成视频里的真实内容。只要这几层混在一起，答案就可能非常自信，但证据根本没有被读取。</p>
+    <div><span class="badge">搜索摘要 ≠ 原文</span><span class="badge">推文正文 ≠ 视频</span><span class="badge">视频简介 ≠ transcript</span></div>
+  </div>
+  <div class="panel dark">
+    <div class="eyebrow">Evidence Receipt</div>
+    <div class="receipt-row"><span>推文正文</span><span class="receipt-state pass">PASS</span></div>
+    <div class="receipt-row"><span>附件视频</span><span class="receipt-state partial">PARTIAL</span></div>
+    <div class="receipt-row"><span>总体状态</span><span class="receipt-state partial overall">PARTIAL</span></div>
+    <p>正文可以支撑正文里的结论；没读过的视频就不能假装读过。x-reader 的价值，就是把这条边界直接暴露出来。</p>
+  </div>
+</section>
+
+<section class="section" id="why">
+  <div class="section-head"><div class="eyebrow">为什么需要它</div><h2>“确认 AI 读过来源”应该是基础能力，不应该靠一句 prompt 祈祷。</h2><p>x-reader 不只是提醒模型“谨慎一点”，而是给整个工作流增加一份机器可读的证据契约。</p></div>
+  <div class="grid3">
+    <div class="card"><div class="num">01</div><strong>先读用户真正给的来源</strong><p>从原始 URL 开始，而不是拿一个搜索结果或 preview card 冒充来源。</p></div>
+    <div class="card"><div class="num">02</div><strong>没读到的媒体继续保持缺失</strong><p>附件视频、音频如果对结论重要但没有实际读取，整体状态就不能变成 PASS。</p></div>
+    <div class="card"><div class="num">03</div><strong>把证据边界变成收据</strong><p>人和 Agent 都能看到：读到了什么、没读到什么、为什么不能继续往下声称。</p></div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-head"><div class="eyebrow">证据契约</div><h2>四种状态，不允许“假装完成”。</h2></div>
+  <div class="contract">
+    <div class="state"><strong>PASS</strong><span>用户要求的来源层已经有证据证明实际读取。</span></div>
+    <div class="state"><strong>PARTIAL</strong><span>读到了有用内容，但仍缺少会影响结论的关键层。</span></div>
+    <div class="state"><strong>FAIL</strong><span>无法可靠获取用户要求的原始来源。</span></div>
+    <div class="state"><strong>UNKNOWN</strong><span>现有材料太模糊，无法确认是否真的覆盖了目标来源。</span></div>
+  </div>
+</section>
+
+<section class="section" id="how">
+  <div class="section-head"><div class="eyebrow">怎么用</div><h2>同一套 Evidence Contract，四种产品入口。</h2></div>
+  <div class="grid4">
+    <div class="surface"><small>零安装</small><strong>网页工具</strong><p>直接粘贴公开 X、YouTube 或网页 URL，马上看 Evidence Receipt。</p><a href="/app">打开工具 →</a></div>
+    <div class="surface"><small>给 Agent</small><strong>Agent Skill</strong><p>把 source-first 阅读能力直接装进现有 AI 工作流。</p><span class="mono">npx skills add runesleo/x-reader --skill x-reader</span></div>
+    <div class="surface"><small>给脚本</small><strong>CLI</strong><p>命令行直接读取 URL，返回结构化 JSON，适合自动化。</p><span class="mono">x-reader URL --json</span></div>
+    <div class="surface"><small>给工具链</small><strong>MCP</strong><p>把 source verification 作为 MCP 工具接入 Claude、Agent 或其他工作流。</p><a href="https://github.com/runesleo/x-reader#MCP-Server" target="_blank" rel="noreferrer">查看配置 →</a></div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="how">
+    <div class="flow"><div class="eyebrow">研究者 / 内容作者</div><h2>先看证据边界，再相信结论。</h2><p>Hosted Beta 只处理公开 URL，不继承浏览器登录态、Telegram 凭证、私有 cookie 或外部转录 key。</p><code>URL → reader → evidence coverage → PASS / PARTIAL / FAIL / UNKNOWN</code></div>
+    <div class="panel"><div class="eyebrow">Builder / Agent 开发者</div><h2>把“有没有真正读到来源”变成工作流里的硬门。</h2><p>在摘要、分析、引用、交易研究或自动化决策之前，先让 source coverage 可检查，而不是把 retrieval 当成一个看不见的黑箱。</p><div class="actions"><a class="btn" href="/app">粘一个 URL 试试</a><a class="btn secondary" href="https://github.com/runesleo/x-reader" target="_blank" rel="noreferrer">GitHub</a></div></div>
+  </div>
+</section>
+
+<section class="cta"><div><div class="eyebrow">直接试真实产品</div><h2>别再问 AI“你读了吗？”——让它把收据拿出来。</h2><p>免费 Hosted Beta，无需注册，只处理公开 URL。</p></div><div class="actions"><a class="btn" href="/app">打开 x-reader →</a></div></section>
+</main>
+<footer class="footer"><div>MIT 开源 · source-first by design</div><div class="footerlinks"><a href="/en">English</a><a href="/app">工具</a><a href="https://github.com/runesleo/x-reader" target="_blank" rel="noreferrer">GitHub</a></div></footer>
+</div></body></html>

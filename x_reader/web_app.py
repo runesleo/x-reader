@@ -224,8 +224,8 @@ def _response_from_receipt(
     }
 
 
-def _asset_html() -> bytes:
-    return files("x_reader.web").joinpath("index.html").read_bytes()
+def _asset_html(name: str = "index.html") -> bytes:
+    return files("x_reader.web").joinpath(name).read_bytes()
 
 
 class EvidenceRequestHandler(BaseHTTPRequestHandler):
@@ -255,8 +255,17 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
-        if path == "/":
-            body = _asset_html()
+        page = {
+            "/": "landing-en.html",
+            "/en": "landing-en.html",
+            "/en/": "landing-en.html",
+            "/zh": "landing-zh.html",
+            "/zh/": "landing-zh.html",
+            "/app": "index.html",
+            "/app/": "index.html",
+        }.get(path)
+        if page:
+            body = _asset_html(page)
             self._headers(200, "text/html; charset=utf-8", len(body))
             self.wfile.write(body)
             return

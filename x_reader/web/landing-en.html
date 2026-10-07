@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>x-reader · Evidence-aware source reading for AI agents</title>
+<meta name="description" content="x-reader makes AI agents prove what they actually read. Verify X posts, attached media, YouTube pages and web sources with explicit PASS, PARTIAL, FAIL and UNKNOWN evidence receipts." />
+<meta name="robots" content="index,follow" />
+<link rel="canonical" href="https://xreader.leolabs.me/en" />
+<link rel="alternate" hreflang="en" href="https://xreader.leolabs.me/en" />
+<link rel="alternate" hreflang="zh-CN" href="https://xreader.leolabs.me/zh" />
+<link rel="alternate" hreflang="x-default" href="https://xreader.leolabs.me/" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="x-reader · Make your agent prove what it read" />
+<meta property="og:description" content="Search snippets are not sources. Tweet captions are not attached videos. x-reader makes the evidence boundary explicit." />
+<meta property="og:url" content="https://xreader.leolabs.me/en" />
+<meta name="twitter:card" content="summary" />
+<meta name="theme-color" content="#f5f2eb" />
+
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111;background:#f5f2eb;--paper:#fff;--line:#d9d3c8;--muted:#6f6a62;--ink:#111;--soft:#ebe6dd;--green:#0d7a43;--amber:#9a6200}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:linear-gradient(180deg,#faf8f3 0,#f5f2eb 55%,#f1eee6 100%)}a{color:inherit}.wrap{max-width:1120px;margin:0 auto;padding:24px 22px 80px}.nav{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:72px}.brand{font-weight:900;letter-spacing:-.05em;font-size:19px}.navlinks{display:flex;align-items:center;gap:16px;font-size:13px}.navlinks a{text-decoration:none}.navlinks .lang{border:1px solid var(--line);border-radius:999px;padding:7px 10px;background:#fff}.hero{max-width:930px}.kicker{display:inline-flex;align-items:center;gap:8px;border:1px solid #bbb4a8;background:rgba(255,255,255,.72);border-radius:999px;padding:7px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#625e57}.dot{width:7px;height:7px;background:#111;border-radius:50%}h1{font-size:clamp(48px,7.8vw,86px);line-height:.96;letter-spacing:-.067em;margin:20px 0 24px;max-width:1000px}.lead{font-size:clamp(19px,2.2vw,24px);line-height:1.55;color:#4f4b45;max-width:800px;margin:0}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 18px;border:1px solid #111;background:#111;color:#fff;text-decoration:none;font-weight:800}.btn.secondary{background:#fff;color:#111;border-color:#bcb5aa}.proof{display:grid;grid-template-columns:1.08fr .92fr;gap:16px;margin-top:54px}.panel{background:rgba(255,255,255,.9);border:1px solid var(--line);padding:26px}.panel.dark{background:#111;color:#fff;border-color:#111}.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#8b857c;margin-bottom:12px}.dark .eyebrow{color:#8f8f8f}.proof h2,.section h2{font-size:clamp(28px,4vw,44px);letter-spacing:-.045em;line-height:1.05;margin:0 0 14px}.proof p,.section p{color:#68635b;line-height:1.65}.dark p{color:#bbb}.receipt-row{display:grid;grid-template-columns:1fr auto;gap:18px;padding:13px 0;border-top:1px solid #333}.receipt-row:first-of-type{margin-top:22px}.receipt-state{font-weight:900;letter-spacing:.02em}.pass{color:#8fe0a2}.partial{color:#ffd47b}.overall{font-size:32px;letter-spacing:-.04em}.section{margin-top:80px}.section-head{max-width:780px;margin-bottom:28px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{background:#fff;border:1px solid var(--line);padding:22px;min-height:180px}.num{font-size:12px;color:#8c867c;margin-bottom:36px}.card strong{display:block;font-size:18px;letter-spacing:-.02em;margin-bottom:8px}.card p{font-size:14px;margin:0}.contract{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.state{border-top:2px solid #111;padding:16px 4px 0}.state strong{display:block;font-size:20px}.state span{font-size:13px;color:#716c64;line-height:1.45;display:block;margin-top:5px}.how{display:grid;grid-template-columns:1fr 1fr;gap:18px}.flow{background:#111;color:#fff;padding:28px}.flow code{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#1e1e1e;border:1px solid #333;padding:14px;overflow-wrap:anywhere;margin-top:15px;color:#eee}.flow p{color:#aaa}.surface{background:#fff;border:1px solid var(--line);padding:22px}.surface small{color:#8b857c;text-transform:uppercase;letter-spacing:.07em}.surface strong{display:block;font-size:22px;margin:8px 0}.cta{margin-top:80px;background:#111;color:#fff;padding:44px;display:flex;justify-content:space-between;gap:28px;align-items:end}.cta h2{font-size:clamp(34px,5vw,56px);letter-spacing:-.05em;line-height:1;margin:0;max-width:700px}.cta p{color:#aaa;margin:13px 0 0;max-width:650px}.footer{margin-top:34px;display:flex;justify-content:space-between;gap:20px;font-size:12px;color:#7d776f}.footerlinks{display:flex;gap:14px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.badge{display:inline-block;padding:4px 8px;border:1px solid var(--line);background:#fff;font-size:12px;margin:4px 4px 0 0}@media(max-width:820px){.nav{margin-bottom:54px}.proof,.how{grid-template-columns:1fr}.grid3{grid-template-columns:1fr}.grid4,.contract{grid-template-columns:1fr 1fr}.cta{display:block}.cta .actions{margin-top:26px}}@media(max-width:520px){.wrap{padding:18px 16px 60px}.navlinks a:not(.lang):not(.app-link){display:none}h1{font-size:46px}.grid4,.contract{grid-template-columns:1fr}.panel,.card,.surface{padding:19px}.cta{padding:28px}.receipt-row{grid-template-columns:1fr auto}}
+</style>
+</head>
+<body><div class="wrap">
+<nav class="nav">
+  <div class="brand">x-reader</div>
+  <div class="navlinks">
+    <a href="#why">Why</a><a href="#how">How</a><a href="https://github.com/runesleo/x-reader" target="_blank" rel="noreferrer">GitHub ↗</a>
+    <a class="app-link" href="/app">Open app</a><a class="lang" href="/zh">中文</a>
+  </div>
+</nav>
+<main>
+<section class="hero">
+  <div class="kicker"><span class="dot"></span> Open source · Hosted beta</div>
+  <h1>Your AI says it read the source. x-reader makes it prove it.</h1>
+  <p class="lead">Evidence-aware source reading for AI agents. Give x-reader a public URL and it tells you what was actually retrieved, what is still missing, and how far the answer is allowed to go.</p>
+  <div class="actions"><a class="btn" href="/app">Try x-reader free →</a><a class="btn secondary" href="https://github.com/runesleo/x-reader" target="_blank" rel="noreferrer">View source</a></div>
+</section>
+
+<section class="proof">
+  <div class="panel">
+    <div class="eyebrow">The problem</div>
+    <h2>Agents are good at finding something. That is not the same as reading the source.</h2>
+    <p>A search result can look like the article. An X caption can look like the attached video. A YouTube description can look like spoken content. Once those layers blur together, a confident answer can be built on evidence that was never retrieved.</p>
+    <div><span class="badge">Search snippet ≠ source</span><span class="badge">Post text ≠ video</span><span class="badge">Description ≠ transcript</span></div>
+  </div>
+  <div class="panel dark">
+    <div class="eyebrow">Evidence Receipt</div>
+    <div class="receipt-row"><span>Post text</span><span class="receipt-state pass">PASS</span></div>
+    <div class="receipt-row"><span>Attached video</span><span class="receipt-state partial">PARTIAL</span></div>
+    <div class="receipt-row"><span>Overall</span><span class="receipt-state partial overall">PARTIAL</span></div>
+    <p>The post can support claims from its text. The unread video cannot. x-reader keeps that boundary visible instead of silently upgrading it to “read.”</p>
+  </div>
+</section>
+
+<section class="section" id="why">
+  <div class="section-head"><div class="eyebrow">Why it exists</div><h2>Source verification should be a primitive, not a prompt trick.</h2><p>x-reader does not ask a model to be more careful. It creates a machine-readable evidence contract the model, workflow or researcher can inspect.</p></div>
+  <div class="grid3">
+    <div class="card"><div class="num">01</div><strong>Read the original layer</strong><p>Start from the URL the user actually gave you, not a search preview that merely mentions it.</p></div>
+    <div class="card"><div class="num">02</div><strong>Keep missing media missing</strong><p>If attached video or audio matters but was not consumed, the result stays partial.</p></div>
+    <div class="card"><div class="num">03</div><strong>Return an evidence receipt</strong><p>Humans and agents get the same explicit boundary: what passed, what did not, and why.</p></div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-head"><div class="eyebrow">The contract</div><h2>Four states. No fake completion.</h2></div>
+  <div class="contract">
+    <div class="state"><strong>PASS</strong><span>The requested source layer is actually evidenced as read.</span></div>
+    <div class="state"><strong>PARTIAL</strong><span>Useful material was read, but a material layer is still missing.</span></div>
+    <div class="state"><strong>FAIL</strong><span>The requested source could not be fetched reliably.</span></div>
+    <div class="state"><strong>UNKNOWN</strong><span>The material is too ambiguous to prove coverage.</span></div>
+  </div>
+</section>
+
+<section class="section" id="how">
+  <div class="section-head"><div class="eyebrow">How to use it</div><h2>One evidence model, four product surfaces.</h2></div>
+  <div class="grid4">
+    <div class="surface"><small>Zero install</small><strong>Web</strong><p>Paste a public X, YouTube or web URL and inspect the receipt immediately.</p><a href="/app">Open app →</a></div>
+    <div class="surface"><small>For agents</small><strong>Agent Skill</strong><p>Add source-first reading to an existing agent workflow.</p><span class="mono">npx skills add runesleo/x-reader --skill x-reader</span></div>
+    <div class="surface"><small>For scripts</small><strong>CLI</strong><p>Read URLs directly and return structured JSON for automation.</p><span class="mono">x-reader URL --json</span></div>
+    <div class="surface"><small>For toolchains</small><strong>MCP</strong><p>Expose source reading as a reusable tool inside MCP-capable agents.</p><a href="https://github.com/runesleo/x-reader#MCP-Server" target="_blank" rel="noreferrer">Setup →</a></div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="how">
+    <div class="flow"><div class="eyebrow">For researchers</div><h2>Paste a URL. Check the boundary before trusting the conclusion.</h2><p>The hosted beta is public-only and deliberately does not inherit browser sessions, Telegram credentials, private cookies or transcription keys.</p><code>URL → reader → evidence coverage → PASS / PARTIAL / FAIL / UNKNOWN</code></div>
+    <div class="panel"><div class="eyebrow">For builders</div><h2>Use the receipt as a guardrail inside the workflow.</h2><p>Stop treating source retrieval as an invisible preprocessing step. Make evidence coverage inspectable before summarization, analysis, citation or decision-making.</p><div class="actions"><a class="btn" href="/app">Try a URL</a><a class="btn secondary" href="https://github.com/runesleo/x-reader" target="_blank" rel="noreferrer">GitHub</a></div></div>
+  </div>
+</section>
+
+<section class="cta"><div><div class="eyebrow">Try the actual product</div><h2>Do not ask your agent whether it read the source. Ask for the receipt.</h2><p>Free hosted beta. No signup. Public URLs only.</p></div><div class="actions"><a class="btn" href="/app">Open x-reader →</a></div></section>
+</main>
+<footer class="footer"><div>MIT licensed · source-first by design</div><div class="footerlinks"><a href="/zh">中文</a><a href="/app">App</a><a href="https://github.com/runesleo/x-reader" target="_blank" rel="noreferrer">GitHub</a></div></footer>
+</div></body></html>
