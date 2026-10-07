@@ -62,6 +62,30 @@ jobs:
           cat /tmp/cloudflared.log
           exit 1
 
+      - name: Wait for public preview readiness
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+
+          base = os.environ["PREVIEW_URL"].rstrip("/")
+          last_error = None
+          for attempt in range(60):
+              try:
+                  with urllib.request.urlopen(base + "/healthz", timeout=10) as response:
+                      health = json.load(response)
+                  if health.get("ok") is True:
+                      print(f"PUBLIC_PREVIEW_READY after {attempt + 1} attempt(s)")
+                      break
+              except Exception as exc:
+                  last_error = exc
+              time.sleep(2)
+          else:
+              raise RuntimeError(f"public preview did not become ready: {last_error}")
+          PY
+
       - name: Live preview canary
         run: |
           python - <<'PY'
@@ -70,10 +94,6 @@ jobs:
           import urllib.request
 
           base = os.environ["PREVIEW_URL"].rstrip("/")
-
-          with urllib.request.urlopen(base + "/healthz", timeout=20) as response:
-              health = json.load(response)
-          assert health.get("ok") is True, health
 
           def read(url):
               body = json.dumps({"url": url}).encode()
