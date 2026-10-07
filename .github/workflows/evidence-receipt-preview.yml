@@ -1,0 +1,108 @@
+name: Evidence Receipt Temporary Preview
+
+on:
+  push:
+    branches:
+      - product/evidence-receipt-mvp-20261007
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - name: Checkout product branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install x-reader
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Start Evidence Receipt
+        run: |
+          nohup python -m x_reader.web_app --host 127.0.0.1 --port 8787 >/tmp/x-reader-web.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/x-reader-web.log
+          exit 1
+
+      - name: Install pinned cloudflared
+        run: |
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-linux-amd64 -o /tmp/cloudflared
+          chmod +x /tmp/cloudflared
+          /tmp/cloudflared --version
+
+      - name: Start temporary public tunnel
+        run: |
+          nohup /tmp/cloudflared tunnel --url http://127.0.0.1:8787 --no-autoupdate >/tmp/cloudflared.log 2>&1 &
+          for i in $(seq 1 45); do
+            url=$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/cloudflared.log | head -n1 || true)
+            if [ -n "$url" ]; then
+              echo "PREVIEW_URL=$url" >> "$GITHUB_ENV"
+              echo "### x-reader Evidence Receipt temporary preview" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "$url" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/cloudflared.log
+          exit 1
+
+      - name: Live preview canary
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          base = os.environ["PREVIEW_URL"].rstrip("/")
+
+          with urllib.request.urlopen(base + "/healthz", timeout=20) as response:
+              health = json.load(response)
+          assert health.get("ok") is True, health
+
+          def read(url):
+              body = json.dumps({"url": url}).encode()
+              request = urllib.request.Request(
+                  base + "/api/read",
+                  data=body,
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  return json.load(response)
+
+          generic = read("https://example.com")
+          assert generic["ok"] is True
+          assert generic["receipt"]["status"] == "PASS", generic["receipt"]
+
+          mixed = read("https://x.com/dontbesilent/status/2103875422522077377")
+          assert mixed["ok"] is True
+          assert mixed["receipt"]["status"] == "PARTIAL", mixed["receipt"]
+          assert mixed["receipt"]["components"]["post_text"] == "PASS"
+          assert mixed["receipt"]["components"]["attached_media"] == "PARTIAL"
+
+          print("HEALTH=PASS")
+          print("GENERIC_WEB=PASS")
+          print("MIXED_MEDIA_X=PARTIAL_EXPECTED")
+          print("LIVE_PREVIEW_CANARY=PASS")
+          PY
+
+      - name: Keep preview available for review
+        run: |
+          echo "Preview remains available for up to 60 minutes: $PREVIEW_URL"
+          sleep 3600
