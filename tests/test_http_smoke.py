@@ -25,6 +25,27 @@ FIXTURE = {
 
 
 class HttpFixtureSmokeTest(unittest.TestCase):
+    def test_root_accepts_tracking_query_string(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), EvidenceRequestHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = http.client.HTTPConnection(
+                "127.0.0.1",
+                server.server_port,
+                timeout=3,
+            )
+            conn.request("GET", "/?utm_source=chatgpt.com")
+            response = conn.getresponse()
+            body = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertIn("text/html", response.getheader("Content-Type") or "")
+            self.assertIn("<title>x-reader · Evidence Receipt for AI research</title>", body)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_http_post_projects_fixture_into_partial_receipt(self):
         def fake_run_cli(_url):
             return subprocess.CompletedProcess([], 0, json.dumps(FIXTURE), "")

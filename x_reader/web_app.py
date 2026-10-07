@@ -254,18 +254,20 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/":
+        path = urlparse(self.path).path
+        if path == "/":
             body = _asset_html()
             self._headers(200, "text/html; charset=utf-8", len(body))
             self.wfile.write(body)
             return
-        if self.path == "/healthz":
+        if path == "/healthz":
             self._json(200, {"ok": True, "service": "x-reader-evidence"})
             return
         self._json(404, {"ok": False, "error": "not_found"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/api/read":
+        path = urlparse(self.path).path
+        if path != "/api/read":
             self._json(404, {"ok": False, "error": "not_found"})
             return
 
