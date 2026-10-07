@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>x-reader · Evidence Receipt</title>
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#101010;background:#f6f4ef}*{box-sizing:border-box}body{margin:0}.wrap{max-width:980px;margin:0 auto;padding:28px 22px 80px}nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:76px}.brand{font-weight:800;letter-spacing:-.04em}.tag{font-size:12px;border:1px solid #bbb;padding:6px 9px;border-radius:999px;color:#555}.hero{max-width:820px}h1{font-size:clamp(46px,8vw,82px);letter-spacing:-.065em;line-height:.96;margin:0 0 24px}.lead{font-size:20px;color:#4d4b46;max-width:720px;line-height:1.55}.box{margin-top:40px;background:#fff;border:1px solid #d9d5cc;padding:18px;box-shadow:0 14px 40px rgba(0,0,0,.05)}form{display:flex;gap:10px}input{flex:1;padding:15px 16px;border:1px solid #aaa;font:inherit;min-width:0}button{padding:0 20px;border:1px solid #111;background:#111;color:#fff;font:inherit;font-weight:700;cursor:pointer}button:disabled{opacity:.55;cursor:wait}.note{font-size:12px;color:#777;margin:10px 0 0}.result{display:none;margin-top:28px}.receipt{background:#111;color:#fff;padding:24px}.row{display:grid;grid-template-columns:160px 1fr;gap:16px;padding:10px 0;border-top:1px solid #303030}.row:first-of-type{border-top:0}.key{color:#aaa}.status{font-size:42px;font-weight:850;letter-spacing:-.04em}.status.PASS{color:#93e7a6}.status.PARTIAL{color:#ffd37b}.status.FAIL{color:#ff8b8b}.status.UNKNOWN{color:#c4b5fd}.components{display:flex;gap:8px;flex-wrap:wrap}.pill{border:1px solid #555;border-radius:999px;padding:5px 9px;font-size:12px}.source{margin-top:14px;border:1px solid #d9d5cc;background:#fff;padding:22px}.source h2{font-size:20px;margin:0 0 12px}.preview{white-space:pre-wrap;color:#555;max-height:250px;overflow:auto}.error{display:none;margin-top:18px;padding:15px;border:1px solid #c33;background:#fff;color:#8a1f1f}.policy{margin-top:32px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.policy div{border-top:1px solid #bbb;padding-top:10px;font-size:13px;color:#666}.policy strong{display:block;color:#111;margin-bottom:3px}@media(max-width:700px){nav{margin-bottom:48px}form{display:block}button{width:100%;padding:14px;margin-top:8px}.row{grid-template-columns:1fr;gap:3px}.policy{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><div class="brand">x-reader</div><div class="tag">Evidence Receipt MVP</div></nav>
+<section class="hero">
+<h1>Give your agent a URL. Make it prove what it actually read.</h1>
+<p class="lead">Paste a public X, YouTube, or web URL. x-reader returns an explicit evidence receipt instead of silently treating snippets, captions, or page metadata as the source.</p>
+</section>
+<div class="box">
+<form id="form">
+<input id="url" name="url" type="url" autocomplete="off" placeholder="https://x.com/..." required />
+<button id="submit" type="submit">Read source</button>
+</form>
+<p class="note">Public URLs only. No saved login sessions, private cookies, Telegram credentials, Groq transcription key, or persistent inbox.</p>
+</div>
+<div id="error" class="error"></div>
+<div id="result" class="result">
+<div class="receipt">
+<div id="status" class="status">—</div>
+<div class="row"><div class="key">Evidence</div><div id="evidence"></div></div>
+<div class="row"><div class="key">Source type</div><div id="sourceType"></div></div>
+<div class="row"><div class="key">Fetch method</div><div id="fetchMethod">—</div></div>
+<div class="row"><div class="key">Components</div><div id="components" class="components"></div></div>
+</div>
+<div id="source" class="source">
+<h2 id="title"></h2>
+<div id="canonical" class="note"></div>
+<p id="preview" class="preview"></p>
+</div>
+</div>
+<div class="policy">
+<div><strong>Public-only</strong>SSRF-safe URL validation</div>
+<div><strong>No sessions</strong>Fresh temporary HOME per request</div>
+<div><strong>No secret inheritance</strong>Minimal child environment</div>
+<div><strong>No persistence</strong>Temporary inbox destroyed after read</div>
+</div>
+</div>
+<script>
+const form=document.getElementById('form'),submit=document.getElementById('submit'),error=document.getElementById('error'),result=document.getElementById('result');
+const byId=id=>document.getElementById(id);
+function clearNode(node){while(node.firstChild)node.removeChild(node.firstChild)}
+form.addEventListener('submit',async e=>{e.preventDefault();error.style.display='none';result.style.display='none';submit.disabled=true;submit.textContent='Reading…';
+try{const res=await fetch('/api/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:byId('url').value})});const data=await res.json();if(!res.ok||!data.ok){throw new Error(data.detail||data.error||'Read failed')}
+const r=data.receipt;byId('status').textContent=r.status;byId('status').className='status '+r.status;byId('evidence').textContent=r.evidence||'—';byId('sourceType').textContent=r.source_type||'—';byId('fetchMethod').textContent=r.fetch_method||'—';
+const c=byId('components');clearNode(c);Object.entries(r.components||{}).forEach(([k,v])=>{const span=document.createElement('span');span.className='pill';span.textContent=k+': '+v;c.appendChild(span)});
+if(data.source){byId('source').style.display='block';byId('title').textContent=data.source.title||'(untitled)';byId('canonical').textContent=data.source.canonical_url||'';byId('preview').textContent=data.source.content_preview||''}else{byId('source').style.display='none'}result.style.display='block'}catch(err){error.textContent=String(err.message||err);error.style.display='block'}finally{submit.disabled=false;submit.textContent='Read source'}});
+</script>
+</body>
+</html>
