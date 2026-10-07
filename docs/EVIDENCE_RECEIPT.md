@@ -79,6 +79,12 @@ media_status    present
 
 That does **not** claim the attached video was consumed. The Agent Skill can continue into the media path when the answer requires it.
 
+## Output-native sharing
+
+The web surface includes `Copy receipt`, `Copy JSON`, and `Share` actions. The share projection contains the receipt status, source URL, evidence sentence, component states, and x-reader attribution. It intentionally excludes the fetched source preview and never converts `PARTIAL`, `FAIL`, or `UNKNOWN` into `PASS`.
+
+This is a distribution feature, not a second evidence model. The underlying receipt remains canonical.
+
 ## Verification
 
 The product branch was independently exercised on GitHub-hosted Ubuntu with:
