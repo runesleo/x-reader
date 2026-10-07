@@ -70,8 +70,7 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "status": PARTIAL,
                 "reason_code": "attached_media_unread",
                 "evidence": (
-                    f"post text retrieved via {method}; attached media is present "
-                    "but was not consumed by the base read"
+                    f"post text retrieved via {method}; attached media present but not retrieved"
                 ),
                 "components": {"post_text": PASS, "attached_media": PARTIAL},
             }
@@ -79,7 +78,7 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
             return {
                 "status": PASS,
                 "reason_code": "source_complete",
-                "evidence": f"post text retrieved via {method}; no attached media reported",
+                "evidence": f"post text retrieved via {method}; no media reported",
                 "components": {"post_text": PASS},
             }
         return {
