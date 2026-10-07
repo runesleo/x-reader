@@ -217,6 +217,11 @@ def from_youtube(video: dict) -> UnifiedContent:
         extra={
             "duration": video.get('duration', ''),
             "view_count": video.get('view_count', 0),
+            # Preserve whether spoken content was actually read so downstream
+            # Evidence Receipts can distinguish transcript coverage from a
+            # page-description fallback.
+            "has_transcript": bool(video.get('has_transcript', False)),
+            "video_id": video.get('video_id', ''),
         },
     )
 
