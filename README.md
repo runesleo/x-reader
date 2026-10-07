@@ -30,6 +30,21 @@ FAIL     the original source could not be fetched reliably
 UNKNOWN  retrieved material is too ambiguous to verify
 ```
 
+## Evidence Receipt web preview (experimental)
+
+Run the same evidence contract through a small local web surface:
+
+```bash
+pip install -e .
+x-reader-web --host 127.0.0.1 --port 8787
+```
+
+The current hosted-MVP policy accepts public X/Twitter, YouTube, and generic web URLs only. It uses a fresh temporary HOME/inbox per request and does not inherit saved browser sessions, Telegram credentials, Groq keys, Obsidian/output paths, or external X cookies.
+
+The web layer does **not** add a second reader or evidence state machine: it invokes the existing `x-reader URL --json` path in the isolated environment and projects the result into `PASS / PARTIAL / FAIL / UNKNOWN`.
+
+See [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md) for API examples, the isolation boundary, and the mixed-media receipt contract.
+
 ## v0.3.1: verified before / after
 
 The source-fetch hardening has a live, reproducible delta against public v0.3.0:
