@@ -1,9 +1,7 @@
 name: Evidence Receipt Temporary Preview
 
 on:
-  push:
-    branches:
-      - product/evidence-receipt-mvp-20261007
+  workflow_dispatch:
 
 permissions:
   contents: read

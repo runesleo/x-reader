@@ -13,9 +13,9 @@ It does one thing differently: **a search snippet is not the source, a tweet cap
 
 ## Evidence Receipt web utility
 
-The product branch includes a zero-signup web surface for public X, YouTube, and generic web URLs. Paste a URL and it returns the same canonical evidence states used by x-reader: `PASS`, `PARTIAL`, `FAIL`, or `UNKNOWN`. Results can be copied as a human-readable receipt or JSON, and shared without upgrading missing evidence into success.
+The stable beta is live at **https://xreader.leolabs.me** for public X, YouTube, and generic web URLs. Paste a URL and it returns the same canonical evidence states used by x-reader: `PASS`, `PARTIAL`, `FAIL`, or `UNKNOWN`. Results can be copied as a human-readable receipt or JSON, and shared without upgrading missing evidence into success.
 
-Run it locally with `x-reader-web`. See [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md), the [distribution plan](./docs/DISTRIBUTION.md), and the [public-beta gate](./docs/PUBLIC_BETA_GATE.md). A stable hosted URL is intentionally not claimed until the public-beta gate passes.
+Run it locally with `x-reader-web`, or use the hosted beta above. See [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md), the [distribution plan](./docs/DISTRIBUTION.md), and the [public-beta gate](./docs/PUBLIC_BETA_GATE.md).
 
 ## Install the Agent Skill
 
