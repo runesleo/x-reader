@@ -34,6 +34,21 @@ FAIL     无法可靠获取原始来源
 UNKNOWN  当前材料不足以确认是否就是用户要求的来源
 ```
 
+## Evidence Receipt 网页预览（实验性）
+
+现在可以把同一套 evidence contract 通过一个很小的本地网页界面跑起来：
+
+```bash
+pip install -e .
+x-reader-web --host 127.0.0.1 --port 8787
+```
+
+当前 hosted MVP 只接受公开的 X/Twitter、YouTube 和普通网页 URL。每次请求都使用独立的临时 HOME / inbox，不继承浏览器登录态、Telegram 凭证、Groq key、Obsidian/output 路径，也不会向外部服务转发 X cookie。
+
+网页层**没有再造第二套 reader 或 evidence 状态机**：它仍然调用现有的 `x-reader URL --json`，只是在隔离环境中运行，再把结果投影为 `PASS / PARTIAL / FAIL / UNKNOWN`。
+
+API 示例、隔离边界和 mixed-media receipt 细节见 [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md)。
+
 ## v0.3.1：真实 before / after
 
 这次 source-fetch hardening 有可复现的真实差异，不只是功能列表：
