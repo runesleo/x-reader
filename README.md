@@ -13,7 +13,7 @@ It does one thing differently: **a search snippet is not the source, a tweet cap
 
 ## Evidence Receipt web utility
 
-The stable beta is live at **https://xreader.leolabs.me** for public X, YouTube, and generic web URLs. Paste a URL and it returns the same canonical evidence states used by x-reader: `PASS`, `PARTIAL`, `FAIL`, or `UNKNOWN`. Results can be copied as a human-readable receipt or JSON, and shared without upgrading missing evidence into success.
+The stable beta is live for public X, YouTube, and generic web URLs: **[Product](https://xreader.leolabs.me/en) · [中文](https://xreader.leolabs.me/zh) · [Open app](https://xreader.leolabs.me/app)**. Paste a URL and it returns the same canonical evidence states used by x-reader: `PASS`, `PARTIAL`, `FAIL`, or `UNKNOWN`. Results can be copied as a human-readable receipt or JSON, and shared without upgrading missing evidence into success.
 
 Run it locally with `x-reader-web`, or use the hosted beta above. See [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md), the [distribution plan](./docs/DISTRIBUTION.md), and the [public-beta gate](./docs/PUBLIC_BETA_GATE.md).
 

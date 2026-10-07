@@ -17,7 +17,7 @@ x-reader 是一个 source-first 的 Agent Skill + CLI，支持 X/Twitter、网�
 
 ## Evidence Receipt 网页工具
 
-稳定 Beta 已上线：**https://xreader.leolabs.me**，面向公开 X、YouTube 和普通网页 URL。粘贴链接后，它直接返回与 x-reader 相同的四种证据状态：`PASS`、`PARTIAL`、`FAIL`、`UNKNOWN`。结果可以复制为可读收据或 JSON，也可以分享；任何分享都不会把缺失证据包装成成功。
+稳定 Beta 已上线：**[中文介绍](https://xreader.leolabs.me/zh) · [English](https://xreader.leolabs.me/en) · [打开工具](https://xreader.leolabs.me/app)**，面向公开 X、YouTube 和普通网页 URL。粘贴链接后，它直接返回与 x-reader 相同的四种证据状态：`PASS`、`PARTIAL`、`FAIL`、`UNKNOWN`。结果可以复制为可读收据或 JSON，也可以分享；任何分享都不会把缺失证据包装成成功。
 
 本地运行使用 `x-reader-web`，也可以直接使用上面的 Hosted Beta。详见 [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md)、[分发方案](./docs/DISTRIBUTION.md) 和 [公开 Beta 发布门](./docs/PUBLIC_BETA_GATE.md)。
 
