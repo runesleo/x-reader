@@ -122,6 +122,18 @@ jobs:
           print("LIVE_PREVIEW_CANARY=PASS")
           PY
 
+      - name: Write preview URL receipt
+        run: |
+          printf '%s\n' "$PREVIEW_URL" > /tmp/x-reader-preview-url.txt
+
+      - name: Upload preview URL receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: x-reader-preview-url
+          path: /tmp/x-reader-preview-url.txt
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Keep preview available for review
         run: |
           echo "Preview remains available for up to 60 minutes: $PREVIEW_URL"
