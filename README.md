@@ -3,11 +3,11 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Give your agent a URL. Make it prove what it actually read.**
+**Give your agent a URL. Let x-reader handle the source.**
 
-x-reader is a source-first Agent Skill + CLI for X/Twitter, articles, video, podcasts, WeChat, Xiaohongshu, Telegram, RSS, and the open web.
+x-reader is a universal content reader for AI agents. It reads X/Twitter, articles, YouTube, Bilibili, podcasts, WeChat, Xiaohongshu, Telegram, RSS, and the open web, then normalizes the result into structured source content for downstream research, summarization, and automation.
 
-It does one thing differently: **a search snippet is not the source, a tweet caption is not the attached video, and a video description is not a transcript.** If a material source layer was not actually retrieved, x-reader says so.
+Its differentiator is evidence-aware reading: **a search snippet is not the source, a tweet caption is not the attached video, and a video description is not a transcript.** When a material source layer is still missing, x-reader keeps that gap explicit instead of pretending the read is complete.
 
 **简体中文：** [README.zh-CN.md](./README.zh-CN.md)
 

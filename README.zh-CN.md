@@ -5,15 +5,15 @@
 
 [English](./README.md)
 
-**把一个 URL 丢给 Agent，并要求它证明自己到底读到了什么。**
+**给 Agent 一个 URL，剩下的来源读取交给 x-reader。**
 
-x-reader 是一个 source-first 的 Agent Skill + CLI，支持 X/Twitter、网页文章、视频、播客、微信公众号、小红书、Telegram、RSS 等来源。
+x-reader 是给 AI Agent 用的通用内容读取层（Universal Content Reader）。它负责读取 X/Twitter、网页文章、YouTube、Bilibili、播客、微信公众号、小红书、Telegram、RSS 和开放网页，再把结果统一整理成 Agent 可以继续研究、总结和自动化处理的结构化来源内容。
 
-它解决的不是“再做一个摘要器”，而是一个更基础的问题：
+它的差异化不是“再做一个摘要器”，而是 evidence-aware reading：
 
-**搜索摘要不等于原文，推文正文不等于附件视频，视频简介也不等于视频内容。**
+**搜索摘要不等于原文，推文正文不等于附件视频，视频简介也不等于视频里的口头内容。**
 
-如果关键来源层没有真正读取到，x-reader 必须明确告诉你。
+如果关键来源层还没读到，x-reader 会把缺口保留下来，而不是假装这次读取已经完成。
 
 ## Evidence Receipt 网页工具
 

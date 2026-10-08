@@ -18,17 +18,32 @@ class WebSurfaceProductTest(unittest.TestCase):
         self.assertIn('hreflang="en"', self.zh)
         self.assertIn('href="/app"', self.zh)
 
-    def test_landing_pages_explain_evidence_contract(self):
+    def test_product_positioning_is_universal_reader_first(self):
+        self.assertIn("Universal content reader", self.en)
+        self.assertIn("Turn a URL into source content your AI agent can actually use.", self.en)
+        self.assertIn("通用内容读取层", self.zh)
+        self.assertIn("把一个链接，真正读成 AI 能用的内容。", self.zh)
+        self.assertIn("Evidence Receipt is a guardrail", self.en)
+        self.assertIn("Evidence Receipt 是 reader 上面的可信度机制", self.zh)
+
+    def test_full_reader_platform_scope_is_visible(self):
+        for marker in ("X / Twitter", "YouTube", "Bilibili", "Podcasts", "WeChat", "Xiaohongshu", "Telegram", "RSS"):
+            self.assertIn(marker, self.en)
+        for marker in ("微信公众号", "小红书", "Telegram", "RSS", "Bilibili"):
+            self.assertIn(marker, self.zh)
+
+    def test_hosted_web_is_clearly_a_subset(self):
+        self.assertIn("Hosted subset", self.en)
+        self.assertIn("Public X, YouTube and generic web URLs", self.en)
+        self.assertIn("Hosted 子集", self.zh)
+        self.assertIn("当前公开版只处理公开 X、YouTube 和普通网页", self.zh)
+
+    def test_landing_pages_keep_evidence_contract_as_guardrail(self):
         for html in (self.en, self.zh):
             for state in ("PASS", "PARTIAL", "FAIL", "UNKNOWN"):
                 self.assertIn(state, html)
             self.assertIn("npx skills add runesleo/x-reader --skill x-reader", html)
             self.assertIn("MCP", html)
-
-    def test_localized_positioning_is_not_literal_duplicate(self):
-        self.assertIn("Your AI says it read the source.", self.en)
-        self.assertIn("别让 AI 假装读过原文", self.zh)
-        self.assertNotEqual(self.en, self.zh)
 
     def test_app_has_search_social_metadata_and_product_links(self):
         self.assertIn('name="description"', self.app)

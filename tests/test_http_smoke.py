@@ -31,9 +31,9 @@ class HttpFixtureSmokeTest(unittest.TestCase):
         thread.start()
         try:
             for path, marker in (
-                ("/", "Your AI says it read the source."),
-                ("/en", "Evidence-aware source reading for AI agents"),
-                ("/zh", "别让 AI 假装读过原文"),
+                ("/", "Turn a URL into source content your AI agent can actually use."),
+                ("/en", "Universal content reader for AI agents"),
+                ("/zh", "把一个链接，真正读成 AI 能用的内容。"),
                 ("/app", "Paste a source. Check what was actually read."),
             ):
                 conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
@@ -64,7 +64,7 @@ class HttpFixtureSmokeTest(unittest.TestCase):
             body = response.read().decode("utf-8")
             self.assertEqual(response.status, 200)
             self.assertIn("text/html", response.getheader("Content-Type") or "")
-            self.assertIn("<title>x-reader · Evidence-aware source reading for AI agents</title>", body)
+            self.assertIn("<title>x-reader · Universal content reader for AI agents</title>", body)
         finally:
             server.shutdown()
             server.server_close()
