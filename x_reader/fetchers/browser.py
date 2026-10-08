@@ -147,17 +147,30 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
                     "author": "",
                 }
             else:
-                # Generic fallback for non-XHS/WeChat pages
-                await page.wait_for_timeout(2000)
-
-                title = await page.title()
-                content = await page.evaluate("""() => {
-                    const el = document.querySelector('article')
-                        || document.querySelector('main')
-                        || document.querySelector('.content')
-                        || document.body;
-                    return el ? el.innerText : '';
-                }""")
+                # Generic fallback: a Bilibili page may navigate after the
+                # initial HTTP 412 response. Allow DOM stabilization and retry
+                # extraction only for navigation-context races.
+                is_bilibili = "bilibili.com" in url or "b23.tv" in url
+                await page.wait_for_timeout(3500 if is_bilibili else 2000)
+                for attempt in range(3):
+                    try:
+                        title = await page.title()
+                        content = await page.evaluate("""() => {
+                            const el = document.querySelector('article')
+                                || document.querySelector('main')
+                                || document.querySelector('.content')
+                                || document.body;
+                            return el ? el.innerText : '';
+                        }""")
+                        break
+                    except Exception as exc:
+                        message = str(exc).lower()
+                        if attempt == 2 or not any(word in message for word in (
+                            "execution context was destroyed", "navigation", "frame was detached"
+                        )):
+                            raise
+                        logger.warning("Browser page navigated during extraction; retrying")
+                        await page.wait_for_timeout(1200)
 
                 result = {
                     "title": (title or "").strip()[:200],

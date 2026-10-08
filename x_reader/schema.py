@@ -154,6 +154,9 @@ def from_bilibili(video: dict) -> UnifiedContent:
             "bvid": video.get('bvid', ''),
             "duration": video.get('duration', 0),
             "view_count": video.get('view_count', 0),
+            "fetch_method": video.get('fetch_method', ''),
+            "media_status": video.get('media_status', 'present'),
+            "has_transcript": bool(video.get('has_transcript', False)),
         },
     )
 
