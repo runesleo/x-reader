@@ -11,14 +11,6 @@ import threading
 import time
 from pathlib import Path
 
-from cryptography.fernet import Fernet
-from fastmcp import FastMCP
-from fastmcp.server.auth import AuthContext
-from fastmcp.server.auth.providers.github import GitHubProvider
-from key_value.aio.stores.disk import DiskStore
-from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
-from starlette.responses import JSONResponse
-
 from x_reader.cloud_config import CloudConfig, load_cloud_config
 
 # Restrict one-process / one-Volume instance. GitHub OAuth is not a free
@@ -31,11 +23,12 @@ budget_window_start = time.monotonic()
 budget_count = 0
 
 
-def owner_only(ctx: AuthContext, expected_login: str) -> bool:
-    token = ctx.token
-    if token is None or not isinstance(token.claims, dict):
+def owner_only(ctx: object, expected_login: str) -> bool:
+    token = getattr(ctx, "token", None)
+    claims = getattr(token, "claims", None)
+    if not isinstance(claims, dict):
         return False
-    login = token.claims.get("login")
+    login = claims.get("login")
     return isinstance(login, str) and login.lower() == expected_login.lower()
 
 
@@ -52,7 +45,16 @@ def reserve_request() -> bool:
         return True
 
 
-def build_mcp(config: CloudConfig) -> FastMCP:
+def build_mcp(config: CloudConfig) -> "FastMCP":
+    # Lazy imports preserve legacy MCP SDK 1.x isolation: the stdio server
+    # still runs in its original environment without installing FastMCP 4.
+    from cryptography.fernet import Fernet
+    from fastmcp import FastMCP
+    from fastmcp.server.auth.providers.github import GitHubProvider
+    from key_value.aio.stores.disk import DiskStore
+    from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
+    from starlette.responses import JSONResponse
+
     # Explicit encryption key + disk store on a Railway Volume. No plaintext
     # bearer/upstream tokens are persisted, and registrations survive restart.
     storage = FernetEncryptionWrapper(

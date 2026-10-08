@@ -9,6 +9,18 @@ permissions:
   contents: read
 
 jobs:
+  legacy-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install legacy MCP SDK 1.x
+        run: python -m pip install -e ".[mcp]"
+      - name: Full suite against original stdio/SSE MCP
+        run: python -m unittest discover -s tests -p "test_*.py"
+
   cloud-test:
     runs-on: ubuntu-latest
     steps:
@@ -16,10 +28,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install cloud dependencies
+      - name: Install isolated FastMCP 4 Cloud dependencies
         run: python -m pip install -e ".[cloud]"
-      - name: Repository tests (including cloud auth and policy)
-        run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Cloud authorization/config tests
+        run: python -m unittest discover -s tests -p "test_cloud_*.py"
+      - name: Public-reader HTTP and SSRF regression tests
+        run: |
+          python -m unittest discover -s tests -p "test_web_*.py"
+          python -m unittest discover -s tests -p "test_http_*.py"
+          python -m unittest discover -s tests -p "test_url_validator.py"
       - name: Compile package
         run: python -m compileall -q x_reader
       - name: Build Docker image
