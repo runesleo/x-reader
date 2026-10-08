@@ -4,6 +4,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 import subprocess
+import hashlib
+from x_reader.schema import from_podcast
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "benchmarks" / "moat" / "corpus.jsonl"
@@ -19,6 +21,51 @@ class MoatBenchmarkTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.rows = moat.load_corpus(CORPUS)
+
+    def test_full_short_podcast_benchmark_requires_verified_receipt(self):
+        row = {"id": "short-full", "category": "podcast",
+               "url": "https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445",
+               "min_chars": 200, "media_expected": True}
+        transcript = "这是完整的十三秒公开音频转录。"
+        good = from_podcast({
+            "url": row["url"], "title": "Short public episode",
+            "description": "Public show notes " * 10,
+            "full_transcript": transcript,
+            "has_transcript": True, "transcript_coverage": "full",
+            "coverage_basis": "complete_encoded_bytes_and_full_decoded_pcm",
+            "transcription_method": "local_whisper_tiny_cpu",
+            "coverage_intervals": [{"start_seconds": 0.0, "end_seconds": 13.12}],
+            "media_duration_seconds": 13.12,
+            "decoded_duration_seconds": 13.12,
+            "processed_seconds": 13.12,
+            "coverage_ratio": 1.0, "audio_bytes": 97989,
+            "media_sha256": "a" * 64,
+            "media_url_sha256": "b" * 64,
+            "transcript_sha256": hashlib.sha256(transcript.encode()).hexdigest(),
+            "asr_segments": 2, "verified_complete_bytes": True,
+        }).to_dict()
+        done = subprocess.CompletedProcess([], 0, json.dumps(good), "")
+        with patch.dict("os.environ", {"OBSIDIAN_VAULT": "/private/vault"}):
+            with patch("subprocess.run", return_value=done) as run:
+                result = moat.x_reader_provider(
+                    row, timeout=120, podcast_full_short=True
+                )
+        command = run.call_args.args[0]
+        self.assertIn("--media-full-short", command)
+        self.assertEqual(run.call_args.kwargs["env"]["OUTPUT_DIR"].startswith("/"), True)
+        self.assertNotIn("OBSIDIAN_VAULT", run.call_args.kwargs["env"])
+        self.assertTrue(result["media_complete"])
+        self.assertEqual(result["evidence_status"], "PASS")
+        self.assertEqual(moat.classify(row, result), "MEDIA_COMPLETE")
+
+        bad = json.loads(json.dumps(good))
+        bad["extra"]["transcript_sha256"] = "0" * 64
+        with patch("subprocess.run", return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps(bad), "")):
+            result = moat.x_reader_provider(row, timeout=120, podcast_full_short=True)
+        self.assertFalse(result["media_complete"])
+        self.assertEqual(result["evidence_status"], "PARTIAL")
+        self.assertNotEqual(moat.classify(row, result), "MEDIA_COMPLETE")
 
     def test_podcast_preview_benchmark_is_explicit_and_still_partial(self):
         row = next(r for r in self.rows if r["category"] == "podcast")

@@ -232,33 +232,56 @@ def from_youtube(video: dict) -> UnifiedContent:
 
 
 def from_podcast(episode: dict) -> UnifiedContent:
-    """Model show notes and a bounded audio preview without claiming full audio."""
+    """Normalize podcast notes, previews and audited short full audio."""
     notes = str(episode.get("description") or "").strip()
     preview = str(episode.get("preview_transcript") or "").strip()
+    complete_transcript = str(episode.get("full_transcript") or "").strip()
     preview_seconds = int(episode.get("preview_seconds") or 0) if preview else 0
-    if preview:
-        notes += (
-            f"\n\n[Machine-generated audio preview: first {preview_seconds} seconds; "
-            f"NOT a full-episode transcript]\n{preview}"
-        )
 
+    if complete_transcript:
+        # For full mode, the canonical content is the actual ASR transcript.
+        # This lets the receipt recompute the transcript hash independently.
+        content = complete_transcript
+    elif preview:
+        content = (
+            notes
+            + f"\n\n[Machine-generated audio preview: first {preview_seconds} seconds; "
+            + f"NOT a full-episode transcript]\n{preview}"
+        )
+    else:
+        content = notes
+
+    coverage = "full" if complete_transcript else ("preview" if preview else "none")
     return UnifiedContent(
         source_type=SourceType.PODCAST,
         source_name=episode.get("author") or "podcast",
         title=episode.get("title") or "",
-        content=notes,
+        content=content,
         url=episode.get("url") or "",
         media_type=MediaType.AUDIO,
         extra={
             "fetch_method": episode.get("fetch_method") or "",
             "media_status": "present",
-            "transcript_coverage": "preview" if preview else "none",
+            "transcript_coverage": coverage,
             "preview_seconds": preview_seconds,
             "transcription_method": episode.get("transcription_method") or "",
-            # This means full spoken-media coverage, NOT merely a sampled clip.
-            "has_transcript": False,
+            "has_transcript": bool(episode.get("has_transcript", False) and complete_transcript),
             "preview_transcript_chars": len(preview),
             "preview_error": episode.get("preview_error") or "",
+            "full_error": episode.get("full_error") or "",
+            "notes_chars": len(notes),
+            "coverage_basis": episode.get("coverage_basis") or "",
+            "coverage_intervals": episode.get("coverage_intervals") or [],
+            "media_duration_seconds": episode.get("media_duration_seconds") or 0,
+            "decoded_duration_seconds": episode.get("decoded_duration_seconds") or 0,
+            "processed_seconds": episode.get("processed_seconds") or 0,
+            "coverage_ratio": episode.get("coverage_ratio") or 0,
+            "audio_bytes": episode.get("audio_bytes") or 0,
+            "media_sha256": episode.get("media_sha256") or "",
+            "media_url_sha256": episode.get("media_url_sha256") or "",
+            "transcript_sha256": episode.get("transcript_sha256") or "",
+            "asr_segments": episode.get("asr_segments") or 0,
+            "verified_complete_bytes": episode.get("verified_complete_bytes") is True,
         },
     )
 

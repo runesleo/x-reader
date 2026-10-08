@@ -1,4 +1,4 @@
-"""Public podcast-page ingestion with opt-in, bounded audio preview.
+"""Public podcast-page ingestion with optional bounded preview/full-short ASR.
 
 Page show notes and episode metadata are *not* spoken content.
 """
@@ -12,12 +12,15 @@ from loguru import logger
 from x_reader.fetchers.jina import fetch_direct_html, fetch_via_jina
 
 
-async def fetch_podcast(url: str, preview_seconds: int = 0) -> dict:
-    """Return metadata normally; optionally sample at most 30s of audio.
+async def fetch_podcast(url: str, preview_seconds: int = 0,
+                        full_short_audio: bool = False) -> dict:
+    """Return metadata normally; optionally sample 30s or prove a short full source.
 
     For source portability Apple Podcasts is metadata-only for now.
     Only public Xiaoyuzhou episodes are eligible for local audio preview.
     """
+    if preview_seconds and full_short_audio:
+        raise ValueError("Preview and short-full audio modes are mutually exclusive")
     try:
         data = await asyncio.to_thread(fetch_direct_html, url)
     except Exception as exc:
@@ -43,7 +46,21 @@ async def fetch_podcast(url: str, preview_seconds: int = 0) -> dict:
         "preview_transcript": "",
     }
 
-    if preview_seconds > 0:
+    if full_short_audio:
+        host = urlsplit(url).hostname or ""
+        if host not in {"xiaoyuzhoufm.com", "www.xiaoyuzhoufm.com"}:
+            result["full_error"] = "full_audio_unsupported_for_this_podcast_host"
+        else:
+            try:
+                from x_reader.full_audio import transcribe_full_short
+                full = await asyncio.to_thread(transcribe_full_short, url)
+                result.update(full)
+            except Exception as exc:
+                # Fail only the optional media upgrade. Never claim PASS when
+                # byte-for-byte source or decoded coverage proof is missing.
+                logger.warning(f"Full short podcast audio not verified: {type(exc).__name__}")
+                result["full_error"] = type(exc).__name__
+    elif preview_seconds > 0:
         host = urlsplit(url).hostname or ""
         if host not in {"xiaoyuzhoufm.com", "www.xiaoyuzhoufm.com"}:
             result["preview_error"] = "preview_unsupported_for_this_podcast_host"

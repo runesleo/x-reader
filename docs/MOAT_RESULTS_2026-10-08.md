@@ -72,3 +72,14 @@ A new isolated branch adds a dedicated `podcast` source type, audio media covera
 - The ASR transcript can have recognition errors/hallucinations and covers only the sample; the complete episode is still unread. This is incremental capability validation, **not proof of a commercial moat**.
 
 **Benchmark runner verification:** The new explicit `--podcast-preview-seconds 12` flag was exercised on `pod-01` with `--workers 1 --limit 1` using local Whisper tiny CPU. One case returned `PARTIAL_MEDIA` in 11,783 ms; `full_read_rate=0.0`, `usable_text_rate=1.0`. The flag is disabled by default and refuses concurrent multi-case ASR previews. This is a time-limited audio sample, not full transcript coverage. Code/tests/README are in the product development branch; main, PyPI and stable NBG server remain unchanged.
+
+## Short full-source public audio proof — 2026-10-08 evening
+
+A new opt-in mode, `--media-full-short`, has been tested on the public Xiaoyuzhou episode [每日极客资讯｜2026-05-26](https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445), which contains 13.12 seconds of compressed audio.
+
+- The public CDN independently reported **97,989 total bytes** by strict HTTP 206 `Content-Range`; complete-source retrieval required **exactly** those bytes. Transient ETag/HTTP and early-close responses were handled with a **maximum of three fresh validated requests**, never by accepting a partial response.
+- SHA-256 calculated over the complete encoded source (prefix: `4a9ab95ab580`). Local-only ffprobe and ffmpeg measured the **13.12-second encoded duration** and **13.12-second decoded/processed duration**, with one source coverage interval `[0.0,13.12]` and processed coverage ratio **1.0**.
+- Local Whisper tiny CPU produced **4 speech segments / 62 Chinese characters** from the complete decoded audio. The canonical `UnifiedContent` transcript SHA matched its content; the Evidence Receipt passed `spoken_media_complete_verified`, with integrity metadata but no raw audio CDN URL or full transcript in the receipt.
+- The new standard CLI Moat Benchmark (one isolated case, `--podcast-full-short`, one worker) classified **1/1 `MEDIA_COMPLETE`**, latency **25,660 ms**. It uses the receipt as a strict gate, so a source with forged/missing hash or duration falls back to `PARTIAL_MEDIA`.
+- A long public (~47-minute) Xiaoyuzhou episode with a >2-MiB source was negatively tested. It retained show notes and `PARTIAL / spoken_media_unread`, with `full_error=RuntimeError`, and never upgraded to PASS.
+- No full long-form podcast, Bilibili video audio, YouTube authenticated media, or XHS private source capability is claimed. Recognized words may be inaccurate; the complete-source claim refers to processing all audio, **not linguistic correctness**.

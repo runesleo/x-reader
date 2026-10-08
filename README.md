@@ -241,7 +241,13 @@ python -m pip install -e '.[media]'
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6abb9b69195d838e2aeb9c2b' --media-preview-seconds 12 --json
 ```
 
-Only public Xiaoyuzhou episodes on an allowlisted CDN currently support this experimental opt-in preview. A pinned-IP, max-2-MiB Range fetch and local-only ffmpeg sandbox prevent unbounded remote audio downloads. See [Podcast media-preview contract](./docs/PODCAST_MEDIA_PREVIEW.md). **Full spoken-media completion has not been implemented for podcasts.**
+For an **explicit complete short-audio read** (public Xiaoyuzhou only, **≤2 MiB encoded / ≤120 seconds**) on the same experimental branch:
+
+```bash
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445' --media-full-short --json
+```
+
+This mode returns **PASS** only after exact HTTP 206 complete-source bytes, SHA-256, audio/PCM durations and full-input local ASR processing are verified. Longer or blocked episodes remain **PARTIAL** and cannot be upgraded by a claimed transcript flag alone. Transcript wording is still machine-generated and may contain mistakes. No background runs or paid API calls. See [podcast media coverage](./docs/PODCAST_MEDIA_PREVIEW.md) and [short full-source proof](./docs/FULL_SHORT_AUDIO_PROOF.md).
 
 ## Video / audio dependencies
 

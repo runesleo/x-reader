@@ -8,6 +8,9 @@ contract used by the Agent Skill and the Evidence Receipt web surface.
 from __future__ import annotations
 
 from typing import Any
+import hashlib
+import math
+import re
 
 
 PASS = "PASS"
@@ -43,6 +46,58 @@ def _generic_shell_state(title: str, content: str) -> str | None:
     ):
         return "challenge_or_error"
     return None
+
+
+def _podcast_full_audio_proof_valid(content: str, extra: dict) -> bool:
+    """Verify the short-full audio proof, not just a self-asserted boolean."""
+    if (
+        extra.get("transcript_coverage") != "full"
+        or extra.get("has_transcript") is not True
+        or extra.get("verified_complete_bytes") is not True
+        or extra.get("coverage_basis") != "complete_encoded_bytes_and_full_decoded_pcm"
+        or extra.get("transcription_method") != "local_whisper_tiny_cpu"
+        or len(content) < 4
+    ):
+        return False
+
+    hex_sha = re.compile(r"[0-9a-f]{64}").fullmatch
+    if not all(hex_sha(str(extra.get(key) or "")) for key in (
+        "media_sha256", "media_url_sha256", "transcript_sha256"
+    )):
+        return False
+    if hashlib.sha256(content.encode("utf-8")).hexdigest() != extra["transcript_sha256"]:
+        return False
+
+    try:
+        size = extra["audio_bytes"]
+        segments = extra["asr_segments"]
+        if type(size) is not int or not 8192 <= size <= 2 * 1024 * 1024:
+            return False
+        if type(segments) is not int or segments < 1:
+            return False
+        duration = float(extra["media_duration_seconds"])
+        decoded = float(extra["decoded_duration_seconds"])
+        processed = float(extra["processed_seconds"])
+        ratio = float(extra["coverage_ratio"])
+        if not all(math.isfinite(v) for v in (duration, decoded, processed, ratio)):
+            return False
+        if not 0 < duration <= 120 or abs(decoded - duration) > max(0.75, duration * 0.01):
+            return False
+        if abs(processed - decoded) > 0.1 or not 0.999 <= ratio <= 1.001:
+            return False
+        intervals = extra.get("coverage_intervals")
+        if not isinstance(intervals, list) or len(intervals) != 1:
+            return False
+        span = intervals[0]
+        start = float(span["start_seconds"])
+        end = float(span["end_seconds"])
+        if not math.isfinite(start) or not math.isfinite(end):
+            return False
+        if abs(start) > 0.01 or abs(end - decoded) > 0.1:
+            return False
+    except (TypeError, KeyError, ValueError, OverflowError):
+        return False
+    return True
 
 
 def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -115,12 +170,24 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "evidence": "Podcast source returned no readable episode metadata",
                 "components": {"page_metadata": FAIL, "spoken_media": UNKNOWN},
             }
-        if extra.get("transcript_coverage") == "full" and bool(extra.get("has_transcript")):
+        if extra.get("transcript_coverage") == "full":
+            if _podcast_full_audio_proof_valid(content, extra):
+                seconds = round(float(extra["processed_seconds"]), 2)
+                return {
+                    "status": PASS,
+                    "reason_code": "spoken_media_complete_verified",
+                    "evidence": (
+                        f"Full public audio source verified byte-for-byte and all {seconds}s "
+                        "of decoded audio processed by local ASR; transcript is machine-generated "
+                        "and may still contain recognition errors"
+                    ),
+                    "components": {"page_metadata": PASS, "spoken_media": PASS},
+                }
             return {
-                "status": PASS,
-                "reason_code": "spoken_media_read",
-                "evidence": "Full episode transcript evidence provided",
-                "components": {"page_metadata": PASS, "spoken_media": PASS},
+                "status": PARTIAL,
+                "reason_code": "full_media_proof_unverified",
+                "evidence": "Full audio claimed but byte, duration, transcript, or coverage proof is incomplete",
+                "components": {"page_metadata": PASS, "spoken_media": PARTIAL},
             }
         if extra.get("transcript_coverage") == "preview" and extra.get("preview_transcript_chars", 0):
             seconds = max(0, min(30, int(extra.get("preview_seconds") or 0)))
@@ -235,6 +302,18 @@ def build_receipt(payload: dict[str, Any], requested_url: str | None = None) -> 
         receipt["transcript_coverage"] = str(extra.get("transcript_coverage"))
     if "preview_seconds" in extra:
         receipt["preview_seconds"] = int(extra.get("preview_seconds") or 0)
+    if payload.get("source_type") == "podcast" and extra.get("transcript_coverage") == "full":
+        # The receipt includes only integrity metadata, never full transcripts,
+        # signed CDN URLs, private session state or model cache paths.
+        for key in (
+            "media_duration_seconds", "decoded_duration_seconds",
+            "processed_seconds", "coverage_ratio", "audio_bytes",
+            "media_sha256", "media_url_sha256", "transcript_sha256",
+            "coverage_intervals", "asr_segments", "verified_complete_bytes",
+            "coverage_basis",
+        ):
+            if key in extra:
+                receipt[key] = extra[key]
     return receipt
 
 

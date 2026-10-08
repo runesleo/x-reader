@@ -73,23 +73,30 @@ def classify(row: dict[str, Any], result: dict[str, Any]) -> str:
 
     if strong_shell:
         return "BLOCK_SHELL"
-    if len(content.strip()) < int(row.get("min_chars") or 200):
-        return "THIN"
-
     if result.get("media_complete"):
         return "MEDIA_COMPLETE"
+    if len(content.strip()) < int(row.get("min_chars") or 200):
+        return "THIN"
     if row.get("media_expected") is True or result.get("media_status") == "present":
         return "PARTIAL_MEDIA"
     return "READ"
 
-def x_reader_provider(row: dict[str, Any], timeout: int, podcast_preview_seconds: int = 0) -> dict[str, Any]:
+def x_reader_provider(row: dict[str, Any], timeout: int,
+                      podcast_preview_seconds: int = 0,
+                      podcast_full_short: bool = False) -> dict[str, Any]:
     started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="xr-moat-") as tmp:
         env = os.environ.copy()
         env["INBOX_FILE"] = str(Path(tmp) / "inbox.json")
+        # Benchmark reads must not write into a user's Obsidian vault or
+        # persistent content hub, even if the invoking shell has those set.
+        env.pop("OBSIDIAN_VAULT", None)
+        env["OUTPUT_DIR"] = tmp
         command = [sys.executable, "-m", "x_reader.cli", row["url"], "--json"]
         if row.get("category") == "podcast" and podcast_preview_seconds:
             command += ["--media-preview-seconds", str(podcast_preview_seconds)]
+        if row.get("category") == "podcast" and podcast_full_short:
+            command.append("--media-full-short")
         proc = subprocess.run(
             command,
             capture_output=True,
@@ -114,7 +121,15 @@ def x_reader_provider(row: dict[str, Any], timeout: int, podcast_preview_seconds
     media_status = extra.get("media_status")
     media_complete = bool(extra.get("has_transcript")) and extra.get("transcript_coverage") != "preview"
     evidence_status = "PASS"
-    if media_status == "present" and not media_complete:
+    if payload.get("source_type") == "podcast":
+        from x_reader.evidence import build_receipt
+        receipt = build_receipt(payload)
+        evidence_status = receipt["status"]
+        media_complete = bool(
+            extra.get("transcript_coverage") == "full"
+            and receipt["status"] == "PASS"
+        )
+    elif media_status == "present" and not media_complete:
         evidence_status = "PARTIAL"
     return {
         "ok": True,
@@ -129,6 +144,11 @@ def x_reader_provider(row: dict[str, Any], timeout: int, podcast_preview_seconds
         "media_complete": media_complete,
         "transcript_coverage": extra.get("transcript_coverage") or "unknown",
         "preview_seconds": int(extra.get("preview_seconds") or 0),
+        "processed_seconds": extra.get("processed_seconds") or 0,
+        "media_duration_seconds": extra.get("media_duration_seconds") or 0,
+        "coverage_ratio": extra.get("coverage_ratio") or 0,
+        "audio_bytes": extra.get("audio_bytes") or 0,
+        "media_sha256": extra.get("media_sha256") or "",
         "evidence_status": evidence_status,
     }
 
@@ -225,8 +245,9 @@ PROVIDERS = {
 }
 
 def run_one(provider: str, row: dict[str, Any], timeout: int,
-            podcast_preview_seconds: int = 0) -> dict[str, Any]:
-    result = (x_reader_provider(row, timeout, podcast_preview_seconds)
+            podcast_preview_seconds: int = 0,
+            podcast_full_short: bool = False) -> dict[str, Any]:
+    result = (x_reader_provider(row, timeout, podcast_preview_seconds, podcast_full_short)
               if provider == "x_reader" else PROVIDERS[provider](row, timeout))
     result["provider"] = provider
     result["id"] = row["id"]
@@ -293,6 +314,8 @@ def main() -> int:
     parser.add_argument("--podcast-preview-seconds", type=int, default=0,
                         choices=range(0, 31),
                         help="Opt-in local ASR for exactly one podcast case with --workers 1")
+    parser.add_argument("--podcast-full-short", action="store_true",
+                        help="Opt-in complete source/ASR proof for exactly one <=120s podcast")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -309,17 +332,20 @@ def main() -> int:
         parser.error(f"unknown providers: {', '.join(unknown)}")
 
     jobs = [(p, r) for p in providers for r in rows]
-    if args.podcast_preview_seconds:
+    if args.podcast_preview_seconds and args.podcast_full_short:
+        parser.error("Preview and full-short audio flags are mutually exclusive")
+    if args.podcast_preview_seconds or args.podcast_full_short:
         if not (providers == ["x_reader"] and len(rows) == 1
                 and rows[0]["category"] == "podcast" and args.workers == 1):
             parser.error(
-                "Podcast preview requires exactly one x_reader podcast case "
+                "Podcast ASR requires exactly one x_reader podcast case "
                 "(--providers x_reader --category podcast --limit 1 --workers 1)"
             )
     results: list[dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         future_map = {
-            pool.submit(run_one, p, r, args.timeout, args.podcast_preview_seconds): (p, r)
+            pool.submit(run_one, p, r, args.timeout, args.podcast_preview_seconds,
+                        args.podcast_full_short): (p, r)
             for p, r in jobs
         }
         for future in concurrent.futures.as_completed(future_map):

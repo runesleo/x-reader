@@ -232,7 +232,13 @@ python -m pip install -e '.[media]'
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6abb9b69195d838e2aeb9c2b' --media-preview-seconds 12 --json
 ```
 
-当前只支持公开小宇宙播客及白名单 CDN；最多 30 秒、最多读取 2 MiB 压缩音频，公网 IP 校验、禁止重定向、ffmpeg 只处理本地临时文件。**尚未实现整期播客完整转录。** 具体见 [播客媒体覆盖契约](./docs/PODCAST_MEDIA_PREVIEW.md)。
+对于真实的**公开短播客**，可显式开启整期短音频转录：源文件**≤2 MiB、音频时长≤120 秒**，所有完整性证据成立才给 `PASS`：
+
+```bash
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445' --media-full-short --json
+```
+
+这条模式要求严格 HTTP 206、完整源文件字节、SHA-256 校验、解码与处理时长一致，并让本地 ASR 处理全部音频。更长播客仍是 `PARTIAL`，不会下载整期内容或假装读完。**模型识别文字可能有错误，音频处理覆盖率不是识字准确率。** 具体见 [播客媒体覆盖契约](./docs/PODCAST_MEDIA_PREVIEW.md) 与 [完整短音频证明](./docs/FULL_SHORT_AUDIO_PROOF.md)。
 
 ## 视频 / 音频依赖
 
