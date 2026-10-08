@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional
 from x_reader.schema import (
     UnifiedContent, UnifiedInbox, SourceType,
     from_bilibili, from_twitter, from_wechat,
-    from_xiaohongshu, from_youtube, from_rss, from_telegram,
+    from_xiaohongshu, from_youtube, from_rss, from_telegram, from_podcast,
 )
 from x_reader.fetchers.jina import fetch_via_jina
 from x_reader.utils.url_validator import validate_url
@@ -25,8 +25,11 @@ class UniversalReader:
     Falls back to Jina Reader for unknown platforms.
     """
 
-    def __init__(self, inbox: Optional[UnifiedInbox] = None):
+    def __init__(self, inbox: Optional[UnifiedInbox] = None, media_preview_seconds: int = 0):
+        if type(media_preview_seconds) is not int or not 0 <= media_preview_seconds <= 30:
+            raise ValueError("media_preview_seconds must be 0 through 30")
         self.inbox = inbox
+        self.media_preview_seconds = media_preview_seconds
 
     def _detect_platform(self, url: str) -> str:
         """Detect platform from URL."""
@@ -111,6 +114,11 @@ class UniversalReader:
             from x_reader.fetchers.youtube import fetch_youtube
             data = await fetch_youtube(url)
             return from_youtube(data)
+
+        if platform == "podcast":
+            from x_reader.fetchers.podcast import fetch_podcast
+            data = await fetch_podcast(url, preview_seconds=self.media_preview_seconds)
+            return from_podcast(data)
 
         if platform == "rss":
             from x_reader.fetchers.rss import fetch_rss

@@ -1,7 +1,7 @@
 [project]
 name = "x-reader"
 version = "0.3.1"
-description = "Source-first Agent Skill and CLI for reading URLs with explicit evidence coverage"
+description = "Universal content reader for AI agents with structured sources and evidence coverage"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -26,6 +26,7 @@ Issues = "https://github.com/runesleo/x-reader/issues"
 telegram = ["telethon>=1.34"]
 mcp = ["mcp[cli]>=1.0,<2"]
 browser = ["playwright>=1.40"]
+media = ["faster-whisper>=1.0"]
 all = ["telethon>=1.34", "mcp[cli]>=1.0,<2", "playwright>=1.40"]
 
 [project.scripts]

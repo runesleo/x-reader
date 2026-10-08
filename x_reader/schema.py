@@ -6,6 +6,7 @@ Defines the standard data format for all content sources:
 - Telegram channels
 - RSS feeds
 - Bilibili videos
+- Podcasts (show notes vs spoken-media coverage)
 - Xiaohongshu (RED) notes
 - WeChat articles
 - X/Twitter posts
@@ -30,6 +31,7 @@ class SourceType(str, Enum):
     TWITTER = "twitter"
     WECHAT = "wechat"
     YOUTUBE = "youtube"
+    PODCAST = "podcast"
     MANUAL = "manual"
 
 
@@ -225,6 +227,38 @@ def from_youtube(video: dict) -> UnifiedContent:
             # page-description fallback.
             "has_transcript": bool(video.get('has_transcript', False)),
             "video_id": video.get('video_id', ''),
+        },
+    )
+
+
+def from_podcast(episode: dict) -> UnifiedContent:
+    """Model show notes and a bounded audio preview without claiming full audio."""
+    notes = str(episode.get("description") or "").strip()
+    preview = str(episode.get("preview_transcript") or "").strip()
+    preview_seconds = int(episode.get("preview_seconds") or 0) if preview else 0
+    if preview:
+        notes += (
+            f"\n\n[Machine-generated audio preview: first {preview_seconds} seconds; "
+            f"NOT a full-episode transcript]\n{preview}"
+        )
+
+    return UnifiedContent(
+        source_type=SourceType.PODCAST,
+        source_name=episode.get("author") or "podcast",
+        title=episode.get("title") or "",
+        content=notes,
+        url=episode.get("url") or "",
+        media_type=MediaType.AUDIO,
+        extra={
+            "fetch_method": episode.get("fetch_method") or "",
+            "media_status": "present",
+            "transcript_coverage": "preview" if preview else "none",
+            "preview_seconds": preview_seconds,
+            "transcription_method": episode.get("transcription_method") or "",
+            # This means full spoken-media coverage, NOT merely a sampled clip.
+            "has_transcript": False,
+            "preview_transcript_chars": len(preview),
+            "preview_error": episode.get("preview_error") or "",
         },
     )
 

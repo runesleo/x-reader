@@ -216,6 +216,24 @@ claude mcp add x-reader -- python /absolute/path/to/x-reader/mcp_server.py
 
 需要全局可用时再加 `--scope user`。
 
+## 播客：节目简介不等于音频内容
+
+x-reader 现将播客 URL 作为 `source_type=podcast` 处理。只读到节目简介时明确标记 `PARTIAL`，不能宣称听完了整期音频。
+
+本地可显式开启**前 12 秒音频预览转录**，不使用付费 API；仍然属于 `PARTIAL`，不是完整 transcript：
+
+```bash
+# 目前只在产品开发分支，main / PyPI 的旧版本尚不包含本功能。
+git clone https://github.com/runesleo/x-reader.git
+cd x-reader
+git switch product/evidence-receipt-mvp-20261007
+python -m pip install -e '.[media]'
+# 还需在 PATH 中安装 ffmpeg 和 yt-dlp
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6abb9b69195d838e2aeb9c2b' --media-preview-seconds 12 --json
+```
+
+当前只支持公开小宇宙播客及白名单 CDN；最多 30 秒、最多读取 2 MiB 压缩音频，公网 IP 校验、禁止重定向、ffmpeg 只处理本地临时文件。**尚未实现整期播客完整转录。** 具体见 [播客媒体覆盖契约](./docs/PODCAST_MEDIA_PREVIEW.md)。
+
 ## 视频 / 音频依赖
 
 ```bash
@@ -233,7 +251,7 @@ Whisper 转录需要：
 export GROQ_API_KEY=your_key_here
 ```
 
-默认模型：`whisper-large-v3-turbo`。
+当前 YouTube Groq 转录代码使用 `whisper-large-v3`。
 
 ## Python 库
 

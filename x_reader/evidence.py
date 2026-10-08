@@ -107,6 +107,39 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "components": {"page_metadata": PASS, "spoken_media": PARTIAL},
         }
 
+    if source == "podcast" and media_type == "audio":
+        if not content:
+            return {
+                "status": FAIL,
+                "reason_code": "empty_source",
+                "evidence": "Podcast source returned no readable episode metadata",
+                "components": {"page_metadata": FAIL, "spoken_media": UNKNOWN},
+            }
+        if extra.get("transcript_coverage") == "full" and bool(extra.get("has_transcript")):
+            return {
+                "status": PASS,
+                "reason_code": "spoken_media_read",
+                "evidence": "Full episode transcript evidence provided",
+                "components": {"page_metadata": PASS, "spoken_media": PASS},
+            }
+        if extra.get("transcript_coverage") == "preview" and extra.get("preview_transcript_chars", 0):
+            seconds = max(0, min(30, int(extra.get("preview_seconds") or 0)))
+            return {
+                "status": PARTIAL,
+                "reason_code": "spoken_media_preview_only",
+                "evidence": (
+                    f"Podcast page metadata read and first {seconds}s of audio sampled "
+                    "with local ASR; the rest of the episode remains unread"
+                ),
+                "components": {"page_metadata": PASS, "spoken_media": PARTIAL},
+            }
+        return {
+            "status": PARTIAL,
+            "reason_code": "spoken_media_unread",
+            "evidence": "Podcast show notes were read; spoken episode audio was not transcribed",
+            "components": {"page_metadata": PASS, "spoken_media": PARTIAL},
+        }
+
     if source == "bilibili" and media_type == "video":
         return {
             "status": PARTIAL,
@@ -198,6 +231,10 @@ def build_receipt(payload: dict[str, Any], requested_url: str | None = None) -> 
         receipt["media_status"] = media_status
     if "has_transcript" in extra:
         receipt["has_transcript"] = bool(extra.get("has_transcript"))
+    if "transcript_coverage" in extra:
+        receipt["transcript_coverage"] = str(extra.get("transcript_coverage"))
+    if "preview_seconds" in extra:
+        receipt["preview_seconds"] = int(extra.get("preview_seconds") or 0)
     return receipt
 
 

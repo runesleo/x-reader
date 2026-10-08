@@ -82,13 +82,16 @@ def classify(row: dict[str, Any], result: dict[str, Any]) -> str:
         return "PARTIAL_MEDIA"
     return "READ"
 
-def x_reader_provider(row: dict[str, Any], timeout: int) -> dict[str, Any]:
+def x_reader_provider(row: dict[str, Any], timeout: int, podcast_preview_seconds: int = 0) -> dict[str, Any]:
     started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="xr-moat-") as tmp:
         env = os.environ.copy()
         env["INBOX_FILE"] = str(Path(tmp) / "inbox.json")
+        command = [sys.executable, "-m", "x_reader.cli", row["url"], "--json"]
+        if row.get("category") == "podcast" and podcast_preview_seconds:
+            command += ["--media-preview-seconds", str(podcast_preview_seconds)]
         proc = subprocess.run(
-            [sys.executable, "-m", "x_reader.cli", row["url"], "--json"],
+            command,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -109,7 +112,7 @@ def x_reader_provider(row: dict[str, Any], timeout: int) -> dict[str, Any]:
     extra = payload.get("extra") or {}
     content = str(payload.get("content") or "")
     media_status = extra.get("media_status")
-    media_complete = bool(extra.get("has_transcript"))
+    media_complete = bool(extra.get("has_transcript")) and extra.get("transcript_coverage") != "preview"
     evidence_status = "PASS"
     if media_status == "present" and not media_complete:
         evidence_status = "PARTIAL"
@@ -124,6 +127,8 @@ def x_reader_provider(row: dict[str, Any], timeout: int) -> dict[str, Any]:
         "fetch_method": extra.get("fetch_method") or "",
         "media_status": media_status,
         "media_complete": media_complete,
+        "transcript_coverage": extra.get("transcript_coverage") or "unknown",
+        "preview_seconds": int(extra.get("preview_seconds") or 0),
         "evidence_status": evidence_status,
     }
 
@@ -219,8 +224,10 @@ PROVIDERS = {
     "firecrawl": firecrawl_provider,
 }
 
-def run_one(provider: str, row: dict[str, Any], timeout: int) -> dict[str, Any]:
-    result = PROVIDERS[provider](row, timeout)
+def run_one(provider: str, row: dict[str, Any], timeout: int,
+            podcast_preview_seconds: int = 0) -> dict[str, Any]:
+    result = (x_reader_provider(row, timeout, podcast_preview_seconds)
+              if provider == "x_reader" else PROVIDERS[provider](row, timeout))
     result["provider"] = provider
     result["id"] = row["id"]
     result["category"] = row["category"]
@@ -283,6 +290,9 @@ def main() -> int:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--timeout", type=int, default=45)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--podcast-preview-seconds", type=int, default=0,
+                        choices=range(0, 31),
+                        help="Opt-in local ASR for exactly one podcast case with --workers 1")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -299,9 +309,19 @@ def main() -> int:
         parser.error(f"unknown providers: {', '.join(unknown)}")
 
     jobs = [(p, r) for p in providers for r in rows]
+    if args.podcast_preview_seconds:
+        if not (providers == ["x_reader"] and len(rows) == 1
+                and rows[0]["category"] == "podcast" and args.workers == 1):
+            parser.error(
+                "Podcast preview requires exactly one x_reader podcast case "
+                "(--providers x_reader --category podcast --limit 1 --workers 1)"
+            )
     results: list[dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
-        future_map = {pool.submit(run_one, p, r, args.timeout): (p, r) for p, r in jobs}
+        future_map = {
+            pool.submit(run_one, p, r, args.timeout, args.podcast_preview_seconds): (p, r)
+            for p, r in jobs
+        }
         for future in concurrent.futures.as_completed(future_map):
             p, row = future_map[future]
             try:

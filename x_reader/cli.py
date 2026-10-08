@@ -27,14 +27,14 @@ def get_inbox_path() -> str:
     return os.getenv("INBOX_FILE", "unified_inbox.json")
 
 
-def cmd_fetch(urls: list[str], json_output: bool = False):
+def cmd_fetch(urls: list[str], json_output: bool = False, media_preview_seconds: int = 0):
     """Fetch one or more URLs.
 
     When json_output is True, stdout is machine-readable JSON containing the
     complete UnifiedContent payload instead of the human preview.
     """
     inbox = UnifiedInbox(get_inbox_path())
-    reader = UniversalReader(inbox=inbox)
+    reader = UniversalReader(inbox=inbox, media_preview_seconds=media_preview_seconds)
 
     async def run():
         if len(urls) == 1:
@@ -88,7 +88,7 @@ def cmd_list():
 
     emoji_map = {
         SourceType.TELEGRAM: "📢", SourceType.RSS: "📰",
-        SourceType.BILIBILI: "🎬", SourceType.XIAOHONGSHU: "📕",
+        SourceType.BILIBILI: "🎬", SourceType.PODCAST: "🎧", SourceType.XIAOHONGSHU: "📕",
         SourceType.TWITTER: "🐦", SourceType.WECHAT: "💬",
         SourceType.YOUTUBE: "▶️", SourceType.MANUAL: "✏️",
     }
@@ -116,6 +116,24 @@ def cmd_login(platform: str, headless: bool = False):
     login(platform, headless=headless)
 
 
+def parse_media_preview_option(args: list[str]) -> tuple[list[str], int]:
+    """Only explicit --media-preview-seconds N enables bounded audio work."""
+    if "--media-preview-seconds" not in args:
+        return args, 0
+    if args.count("--media-preview-seconds") != 1:
+        raise ValueError("Specify --media-preview-seconds at most once")
+    index = args.index("--media-preview-seconds")
+    if index + 1 >= len(args):
+        raise ValueError("Missing number after --media-preview-seconds")
+    try:
+        seconds = int(args[index + 1])
+    except ValueError as exc:
+        raise ValueError("Media preview seconds must be an integer") from exc
+    if not 1 <= seconds <= 30:
+        raise ValueError("Media preview must be between 1 and 30 seconds")
+    return args[:index] + args[index + 2:], seconds
+
+
 def main():
     if len(sys.argv) < 2:
         print("""
@@ -125,13 +143,15 @@ Usage:
     x-reader <url>              Fetch content from any URL
     x-reader <url1> <url2>      Fetch multiple URLs
     x-reader <url> --json       Print complete UnifiedContent as JSON
+    x-reader <podcast-url> --media-preview-seconds 12 --json
+                                Opt-in local ASR of 1-30s; never a full episode
     x-reader login <platform>   Login to a platform (saves session for browser fallback)
     x-reader list               Show inbox contents
     x-reader clear              Clear inbox
 
 Supported platforms:
     WeChat, Telegram, X/Twitter, YouTube,
-    Bilibili, Xiaohongshu, RSS, and any web page
+    Bilibili, podcasts, Xiaohongshu, RSS, and any web page
 
 Examples:
     x-reader https://mp.weixin.qq.com/s/abc123
@@ -144,6 +164,11 @@ Examples:
     args = sys.argv[1:]
     json_output = "--json" in args
     args = [arg for arg in args if arg != "--json"]
+    try:
+        args, media_preview_seconds = parse_media_preview_option(args)
+    except ValueError as exc:
+        print(f"❌ {exc}")
+        sys.exit(2)
     if not args:
         print("❌ Missing URL or command")
         sys.exit(1)
@@ -166,7 +191,10 @@ Examples:
             arg for arg in args
             if arg.startswith(("http", "www.")) or "." in arg
         ]
-        cmd_fetch(urls, json_output=json_output)
+        if media_preview_seconds:
+            cmd_fetch(urls, json_output=json_output, media_preview_seconds=media_preview_seconds)
+        else:
+            cmd_fetch(urls, json_output=json_output)
     else:
         print(f"❌ Unknown command: {cmd}")
         print("   Run 'x-reader' with no args for help")

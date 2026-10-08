@@ -2,6 +2,8 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "benchmarks" / "moat" / "corpus.jsonl"
@@ -17,6 +19,39 @@ class MoatBenchmarkTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.rows = moat.load_corpus(CORPUS)
+
+    def test_podcast_preview_benchmark_is_explicit_and_still_partial(self):
+        row = next(r for r in self.rows if r["category"] == "podcast")
+        payload = {
+            "source_type": "podcast", "title": "Episode",
+            "content": "Episode show notes " * 25,
+            "extra": {
+                "media_status": "present", "has_transcript": False,
+                "transcript_coverage": "preview", "preview_seconds": 12,
+                "preview_transcript_chars": 60,
+            },
+        }
+        done = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+        with patch("subprocess.run", return_value=done) as run:
+            result = moat.x_reader_provider(row, timeout=90, podcast_preview_seconds=12)
+        cmd = run.call_args.args[0]
+        self.assertIn("--media-preview-seconds", cmd)
+        self.assertEqual(cmd[cmd.index("--media-preview-seconds") + 1], "12")
+        self.assertEqual(result["preview_seconds"], 12)
+        self.assertFalse(result["media_complete"])
+        self.assertEqual(moat.classify(row, result), "PARTIAL_MEDIA")
+
+    def test_normal_benchmark_does_not_call_media_preview(self):
+        row = next(r for r in self.rows if r["category"] == "podcast")
+        payload = {
+            "source_type": "podcast", "title": "Episode",
+            "content": "Episode show notes " * 25,
+            "extra": {"media_status": "present", "has_transcript": False},
+        }
+        done = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+        with patch("subprocess.run", return_value=done) as run:
+            moat.x_reader_provider(row, timeout=30)
+        self.assertNotIn("--media-preview-seconds", run.call_args.args[0])
 
     def test_corpus_has_exactly_50_unique_real_urls(self):
         self.assertEqual(len(self.rows), 50)

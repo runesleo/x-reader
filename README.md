@@ -225,6 +225,24 @@ Use `--scope user` if you want the server available beyond the current project.
 
 The MCP server currently targets FastMCP 1.x; the `mcp` and `all` extras intentionally pin `mcp<2`.
 
+## Podcast reading: metadata versus spoken audio
+
+Podcast episode show notes are **not** an audio transcript. x-reader classifies supported podcast episode URLs as `source_type=podcast` and marks metadata-only reads `PARTIAL`.
+
+For a local, explicitly requested and bounded 12-second sample using free on-device Whisper (still **PARTIAL**, never a full episode):
+
+```bash
+# Experimental product branch only; not released on main/PyPI.
+git clone https://github.com/runesleo/x-reader.git
+cd x-reader
+git switch product/evidence-receipt-mvp-20261007
+python -m pip install -e '.[media]'
+# Also install ffmpeg and yt-dlp to PATH
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6abb9b69195d838e2aeb9c2b' --media-preview-seconds 12 --json
+```
+
+Only public Xiaoyuzhou episodes on an allowlisted CDN currently support this experimental opt-in preview. A pinned-IP, max-2-MiB Range fetch and local-only ffmpeg sandbox prevent unbounded remote audio downloads. See [Podcast media-preview contract](./docs/PODCAST_MEDIA_PREVIEW.md). **Full spoken-media completion has not been implemented for podcasts.**
+
 ## Video / audio dependencies
 
 For local media extraction:
@@ -244,7 +262,7 @@ For Whisper transcription, set a Groq API key:
 export GROQ_API_KEY=your_key_here
 ```
 
-The default transcription model is `whisper-large-v3-turbo`.
+The current YouTube Groq transcription code uses `whisper-large-v3`.
 
 ## Python library
 

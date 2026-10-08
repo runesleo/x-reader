@@ -60,3 +60,15 @@ Real-network reruns on the benchmark environment:
   `PYTHONPATH=. python benchmarks/moat/run.py --providers x_reader --category bilibili --timeout 70 --workers 3`
   `PYTHONPATH=. python benchmarks/moat/run.py --providers x_reader --category xiaohongshu --timeout 60 --workers 3`
 - Initial and post-fix raw JSONL results remain **private inside benchmark artifacts**, not included in source-control promotion.
+
+## Follow-on podcast media-contract milestone — later 2026-10-08
+
+A new isolated branch adds a dedicated `podcast` source type, audio media coverage, and explicit metadata-versus-preview Evidence Receipts.
+
+- Five real Xiaoyuzhou episodes in default mode: **5/5 `PARTIAL_MEDIA`**, usable show-note text 5/5, full spoken-media 0/5; median default retrieval ~2.309 seconds.
+- One public episode test: **12 seconds** of audio extracted and locally transcribed by faster-whisper tiny CPU, producing 91 machine-generated Chinese characters. The typed receipt is `PARTIAL / spoken_media_preview_only / preview_seconds=12 / transcript_coverage=preview`.
+- Media access was subsequently tightened: validated allowlisted `media.xyzcdn.net` source, pinned-IP **HTTP 206** byte-range request capped at **2 MiB**, no redirects, local temporary M4A, and **local-file-only ffmpeg** to derive an ASR clip. The same public 12-second ASR canary passed again.
+- Explicit user opt-in is required via `--media-preview-seconds 1..30`; no default audio download, full-episode ASR claim, Groq/OpenAI API call, or production deploy.
+- The ASR transcript can have recognition errors/hallucinations and covers only the sample; the complete episode is still unread. This is incremental capability validation, **not proof of a commercial moat**.
+
+**Benchmark runner verification:** The new explicit `--podcast-preview-seconds 12` flag was exercised on `pod-01` with `--workers 1 --limit 1` using local Whisper tiny CPU. One case returned `PARTIAL_MEDIA` in 11,783 ms; `full_read_rate=0.0`, `usable_text_rate=1.0`. The flag is disabled by default and refuses concurrent multi-case ASR previews. This is a time-limited audio sample, not full transcript coverage. Code/tests/README are in the product development branch; main, PyPI and stable NBG server remain unchanged.
