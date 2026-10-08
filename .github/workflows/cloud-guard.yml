@@ -71,4 +71,26 @@ jobs:
             --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
           test "$STATUS" = 401
           echo "HEALTHZ=PASS UNAUTHENTICATED_MCP=401"
+          echo "LIVE_X_CANARY: cloud Docker image reading public X source"
+          docker exec --user xreader -i x-reader-cloud-ci python - <<'PY'
+          import json
+          from x_reader.web_app import read_public_url
+
+          url = "https://x.com/dontbesilent/status/2103875422522077377"
+          result = read_public_url(url)
+          receipt = result["receipt"]
+          summary = {
+              "url": url,
+              "status": receipt["status"],
+              "post_text": receipt.get("components", {}).get("post_text"),
+              "attached_media": receipt.get("components", {}).get("attached_media"),
+              "reason_code": receipt.get("reason_code"),
+              "fetch_method": receipt.get("fetch_method"),
+          }
+          print("LIVE_X_RECEIPT=" + json.dumps(summary, ensure_ascii=False))
+          assert receipt["status"] == "PARTIAL", summary
+          assert receipt["components"]["post_text"] == "PASS", summary
+          assert receipt["components"]["attached_media"] == "PARTIAL", summary
+          print("LIVE_X_CANARY=PASS")
+          PY
           docker stop x-reader-cloud-ci
