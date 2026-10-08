@@ -1,0 +1,16 @@
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/data \
+    XDG_DATA_HOME=/data/.local/share
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates gosu util-linux && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --system xreader && useradd --system --gid xreader --home /data xreader
+WORKDIR /app
+COPY . .
+RUN python -m pip install --no-cache-dir ".[cloud]"
+RUN chmod 0755 /app/scripts/cloud_entrypoint.sh
+EXPOSE 8000
+ENTRYPOINT ["/app/scripts/cloud_entrypoint.sh"]

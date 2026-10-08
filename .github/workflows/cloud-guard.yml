@@ -1,0 +1,57 @@
+name: x-reader Cloud guard
+
+on:
+  push:
+    branches: [feat/cloud-railway-oauth-20261008]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install cloud dependencies
+        run: python -m pip install -e ".[cloud]"
+      - name: Repository tests (including cloud auth and policy)
+        run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Compile package
+        run: python -m compileall -q x_reader
+      - name: Build Docker image
+        run: docker build --pull -f Dockerfile.cloud -t x-reader-cloud-ci .
+      - name: Volume and HTTP auth canary (fake test credentials only)
+        run: |
+          mkdir -p "$RUNNER_TEMP/xreader-oauth"
+          KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')
+          FERNET=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')
+          docker run --rm -d --name x-reader-cloud-ci \
+            -p 127.0.0.1:18787:8000 \
+            -v "$RUNNER_TEMP/xreader-oauth:/data" \
+            -e PORT=8000 \
+            -e PUBLIC_URL=https://x-reader-test.example.com \
+            -e GITHUB_OAUTH_CLIENT_ID=ci-placeholder \
+            -e GITHUB_OAUTH_CLIENT_SECRET=ci-placeholder \
+            -e X_READER_ALLOWED_GITHUB_LOGIN=runesleo \
+            -e X_READER_JWT_SIGNING_KEY="$KEY" \
+            -e X_READER_STORAGE_FERNET_KEY="$FERNET" \
+            x-reader-cloud-ci
+          for i in $(seq 1 40); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18787/healthz; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:18787/healthz | grep -q x-reader-cloud
+          STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+            -X POST http://127.0.0.1:18787/mcp \
+            -H 'Accept: application/json, text/event-stream' \
+            -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+          test "$STATUS" = 401
+          echo "HEALTHZ=PASS UNAUTHENTICATED_MCP=401"
+          docker stop x-reader-cloud-ci

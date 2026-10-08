@@ -1,0 +1,7 @@
+*
+!README.md
+!pyproject.toml
+!x_reader
+!x_reader/**
+!scripts
+!scripts/cloud_entrypoint.sh
