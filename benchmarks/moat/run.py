@@ -83,7 +83,8 @@ def classify(row: dict[str, Any], result: dict[str, Any]) -> str:
 
 def x_reader_provider(row: dict[str, Any], timeout: int,
                       podcast_preview_seconds: int = 0,
-                      podcast_full_short: bool = False) -> dict[str, Any]:
+                      podcast_full_short: bool = False,
+                      podcast_full_long: bool = False) -> dict[str, Any]:
     started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="xr-moat-") as tmp:
         env = os.environ.copy()
@@ -92,11 +93,20 @@ def x_reader_provider(row: dict[str, Any], timeout: int,
         # persistent content hub, even if the invoking shell has those set.
         env.pop("OBSIDIAN_VAULT", None)
         env["OUTPUT_DIR"] = tmp
+        if podcast_full_long:
+            # A benchmark's default must not silently persist raw audio or
+            # public transcripts in the user's normal ~/.cache directory.
+            # Explicit X_READER_LONG_CACHE_DIR enables a deliberate resume.
+            env["X_READER_LONG_CACHE_DIR"] = os.environ.get(
+                "X_READER_LONG_CACHE_DIR", str(Path(tmp) / "long-audio")
+            )
         command = [sys.executable, "-m", "x_reader.cli", row["url"], "--json"]
         if row.get("category") == "podcast" and podcast_preview_seconds:
             command += ["--media-preview-seconds", str(podcast_preview_seconds)]
         if row.get("category") == "podcast" and podcast_full_short:
             command.append("--media-full-short")
+        if row.get("category") == "podcast" and podcast_full_long:
+            command.append("--media-full-long")
         proc = subprocess.run(
             command,
             capture_output=True,
@@ -149,6 +159,12 @@ def x_reader_provider(row: dict[str, Any], timeout: int,
         "coverage_ratio": extra.get("coverage_ratio") or 0,
         "audio_bytes": extra.get("audio_bytes") or 0,
         "media_sha256": extra.get("media_sha256") or "",
+        "chunk_count": extra.get("chunk_count") or 0,
+        "segment_count": extra.get("segment_count") or 0,
+        "reused_source_chunks": extra.get("reused_source_chunks") or 0,
+        "reused_asr_segments": extra.get("reused_asr_segments") or 0,
+        "asr_boundary_adjustments": extra.get("asr_boundary_adjustments") or 0,
+        "max_boundary_overrun_seconds": extra.get("max_boundary_overrun_seconds") or 0.0,
         "evidence_status": evidence_status,
     }
 
@@ -246,8 +262,12 @@ PROVIDERS = {
 
 def run_one(provider: str, row: dict[str, Any], timeout: int,
             podcast_preview_seconds: int = 0,
-            podcast_full_short: bool = False) -> dict[str, Any]:
-    result = (x_reader_provider(row, timeout, podcast_preview_seconds, podcast_full_short)
+            podcast_full_short: bool = False,
+            podcast_full_long: bool = False) -> dict[str, Any]:
+    result = (x_reader_provider(
+                  row, timeout, podcast_preview_seconds, podcast_full_short,
+                  podcast_full_long
+              )
               if provider == "x_reader" else PROVIDERS[provider](row, timeout))
     result["provider"] = provider
     result["id"] = row["id"]
@@ -316,6 +336,8 @@ def main() -> int:
                         help="Opt-in local ASR for exactly one podcast case with --workers 1")
     parser.add_argument("--podcast-full-short", action="store_true",
                         help="Opt-in complete source/ASR proof for exactly one <=120s podcast")
+    parser.add_argument("--podcast-full-long", action="store_true",
+                        help="Opt-in resumable full-source ASR proof for exactly one <=90m / 64MiB podcast")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -332,9 +354,15 @@ def main() -> int:
         parser.error(f"unknown providers: {', '.join(unknown)}")
 
     jobs = [(p, r) for p in providers for r in rows]
-    if args.podcast_preview_seconds and args.podcast_full_short:
-        parser.error("Preview and full-short audio flags are mutually exclusive")
-    if args.podcast_preview_seconds or args.podcast_full_short:
+    media_modes = (
+        bool(args.podcast_preview_seconds), args.podcast_full_short,
+        args.podcast_full_long,
+    )
+    if sum(media_modes) > 1:
+        parser.error("Preview, full-short and full-long audio flags are mutually exclusive")
+    if args.podcast_full_long and args.timeout < 120:
+        parser.error("Full-long media benchmark requires --timeout >= 120")
+    if any(media_modes):
         if not (providers == ["x_reader"] and len(rows) == 1
                 and rows[0]["category"] == "podcast" and args.workers == 1):
             parser.error(
@@ -345,7 +373,7 @@ def main() -> int:
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         future_map = {
             pool.submit(run_one, p, r, args.timeout, args.podcast_preview_seconds,
-                        args.podcast_full_short): (p, r)
+                        args.podcast_full_short, args.podcast_full_long): (p, r)
             for p, r in jobs
         }
         for future in concurrent.futures.as_completed(future_map):

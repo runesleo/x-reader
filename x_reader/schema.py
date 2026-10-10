@@ -235,11 +235,13 @@ def from_podcast(episode: dict) -> UnifiedContent:
     """Normalize podcast notes, previews and audited short full audio."""
     notes = str(episode.get("description") or "").strip()
     preview = str(episode.get("preview_transcript") or "").strip()
-    complete_transcript = str(episode.get("full_transcript") or "").strip()
+    complete_transcript = str(episode.get("full_transcript") or "")
+    has_full_text = bool(complete_transcript.strip())
     preview_seconds = int(episode.get("preview_seconds") or 0) if preview else 0
 
-    if complete_transcript:
-        # For full mode, the canonical content is the actual ASR transcript.
+    if has_full_text:
+        # For full mode, preserve exact newlines so each segment's transcript
+        # SHA-256 can be independently recomputed from the payload.
         # This lets the receipt recompute the transcript hash independently.
         content = complete_transcript
     elif preview:
@@ -251,7 +253,7 @@ def from_podcast(episode: dict) -> UnifiedContent:
     else:
         content = notes
 
-    coverage = "full" if complete_transcript else ("preview" if preview else "none")
+    coverage = "full" if has_full_text else ("preview" if preview else "none")
     return UnifiedContent(
         source_type=SourceType.PODCAST,
         source_name=episode.get("author") or "podcast",
@@ -265,7 +267,7 @@ def from_podcast(episode: dict) -> UnifiedContent:
             "transcript_coverage": coverage,
             "preview_seconds": preview_seconds,
             "transcription_method": episode.get("transcription_method") or "",
-            "has_transcript": bool(episode.get("has_transcript", False) and complete_transcript),
+            "has_transcript": bool(episode.get("has_transcript", False) and has_full_text),
             "preview_transcript_chars": len(preview),
             "preview_error": episode.get("preview_error") or "",
             "full_error": episode.get("full_error") or "",
@@ -282,6 +284,16 @@ def from_podcast(episode: dict) -> UnifiedContent:
             "transcript_sha256": episode.get("transcript_sha256") or "",
             "asr_segments": episode.get("asr_segments") or 0,
             "verified_complete_bytes": episode.get("verified_complete_bytes") is True,
+            "chunk_count": episode.get("chunk_count") or 0,
+            "chunk_manifest_sha256": episode.get("chunk_manifest_sha256") or "",
+            "chunks_manifest": episode.get("chunks_manifest") or {},
+            "segment_count": episode.get("segment_count") or 0,
+            "segments_manifest": episode.get("segments_manifest") or [],
+            "segments_manifest_sha256": episode.get("segments_manifest_sha256") or "",
+            "reused_source_chunks": episode.get("reused_source_chunks") or 0,
+            "reused_asr_segments": episode.get("reused_asr_segments") or 0,
+            "asr_boundary_adjustments": episode.get("asr_boundary_adjustments") or 0,
+            "max_boundary_overrun_seconds": episode.get("max_boundary_overrun_seconds") or 0.0,
         },
     )
 

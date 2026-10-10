@@ -72,6 +72,12 @@ The development runner supports `--podcast-full-short` but **only** with `--prov
 
 A 13.12-second publicly accessible Xiaoyuzhou episode (ID `6a14e9dd3209346094186445`) completed in 25.660 seconds on the isolated benchmark host (97,989 complete bytes, full decoded 13.12s, ASR 4 speech segments). **This proves a short-file mechanism, not a long-podcast moat or cross-provider win.**
 
+### Long-audio provenance and resume benchmark (experimental)
+
+For a **single, public, eligible Xiaoyuzhou episode**, use the development branch and `--podcast-full-long --workers 1 --timeout 180` with a single-row corpus. The reference 50-URL corpus remains unchanged; opt-in ASR must never silently run on all sources. By default, the harness keeps audio/transcripts in a temporary private cache; only setting `X_READER_LONG_CACHE_DIR` explicitly enables checkpoint reuse across benchmark processes. The canonical Evidence Receipt must validate byte/chunk hashes, uninterrupted PCM time intervals, segment transcript hashes, and bounded Whisper timestamp adjustments before a case can be classified `MEDIA_COMPLETE`.
+
+A 277.9-second public episode returned **MEDIA_COMPLETE** from the standard CLI/benchmark in **15,704 ms** on 2026-10-10 when resuming existing verified source/ASR checkpoints. The 5/5 chunks and 5/5 ASR checkpoints were independently reused in an additional direct reader call. This is one successful public case, **not** a general long-form accuracy or commercial moat result. See [dated evidence](./LONG_AUDIO_RESUME_2026-10-10.md).
+
 ## Recommended sequence
 
 First establish x-reader's own 50-case baseline:

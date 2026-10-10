@@ -238,7 +238,16 @@ x-reader 'https://www.xiaoyuzhoufm.com/episode/6abb9b69195d838e2aeb9c2b' --media
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445' --media-full-short --json
 ```
 
-这条模式要求严格 HTTP 206、完整源文件字节、SHA-256 校验、解码与处理时长一致，并让本地 ASR 处理全部音频。更长播客仍是 `PARTIAL`，不会下载整期内容或假装读完。**模型识别文字可能有错误，音频处理覆盖率不是识字准确率。** 具体见 [播客媒体覆盖契约](./docs/PODCAST_MEDIA_PREVIEW.md) 与 [完整短音频证明](./docs/FULL_SHORT_AUDIO_PROOF.md)。
+短音频模式要求严格 HTTP 206、完整源文件字节、SHA-256、音频解码与转录处理时长一致。超过短音频限额时，这个模式继续标记 `PARTIAL`。
+
+**实验性长音频断点续传**已经在同一个开发分支加入：仅对**单条公开小宇宙播客**显式启用，源文件限 **64 MiB**、时长限 **90 分钟**。通过 1 MiB 的 HTTP 206 字节块、强 ETag 来源版本、SHA-256、60 秒 PCM/ASR 时间段和本地私有检查点核验完整来源：
+
+```bash
+# 仅产品开发分支提供；main / Hosted Web 尚未上线。
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6aab4896051af796b9e966c5' --media-full-long --json
+```
+
+一条真实 **277.9 秒**节目已通过完整收据，再次运行时复用 **5/5 音频块和 5/5 转录段**。无法完整读取、超过限制或证据缺失时保持 `PARTIAL`。本地缓存会保留音频分块及机器转录，请为需要隔离的数据使用单独的 `X_READER_LONG_CACHE_DIR`。**音频处理覆盖率不等于逐字转录准确率。** 详见 [播客契约](./docs/PODCAST_MEDIA_PREVIEW.md)、[短音频证明](./docs/FULL_SHORT_AUDIO_PROOF.md) 和 [2026-10-10 长音频续传验收](./docs/LONG_AUDIO_RESUME_2026-10-10.md)。
 
 ## 视频 / 音频依赖
 

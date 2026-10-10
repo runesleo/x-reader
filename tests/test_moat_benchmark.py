@@ -22,6 +22,46 @@ class MoatBenchmarkTest(unittest.TestCase):
     def setUpClass(cls):
         cls.rows = moat.load_corpus(CORPUS)
 
+    def test_full_long_benchmark_is_explicit_and_isolated(self):
+        row = {
+            "id": "long", "category": "podcast",
+            "url": "https://www.xiaoyuzhoufm.com/episode/6aab4896051af796b9e966c5",
+            "media_expected": True, "min_chars": 100,
+        }
+        false_claim = from_podcast({
+            "url": row["url"], "title": "Public long show",
+            "description": "Show notes " * 30,
+            "full_transcript": "Unverified transcription",
+            "transcript_coverage": "full", "has_transcript": True,
+            "coverage_basis": "verified_chunk_manifest_and_contiguous_pcm_asr",
+        }).to_dict()
+        false_claim["extra"].update({
+            "chunk_count": 5, "segment_count": 5,
+            "reused_source_chunks": 5, "reused_asr_segments": 2,
+            "asr_boundary_adjustments": 1, "max_boundary_overrun_seconds": 1.36,
+        })
+        done = subprocess.CompletedProcess([], 0, json.dumps(false_claim), "")
+        with patch.dict("os.environ", {
+            "OBSIDIAN_VAULT": "/sensitive/home/notes",
+        }, clear=False):
+            with patch("subprocess.run", return_value=done) as run:
+                result = moat.x_reader_provider(
+                    row, timeout=180, podcast_full_long=True
+                )
+        command = run.call_args.args[0]
+        env = run.call_args.kwargs["env"]
+        self.assertIn("--media-full-long", command)
+        self.assertNotIn("OBSIDIAN_VAULT", env)
+        self.assertIn("X_READER_LONG_CACHE_DIR", env)
+        self.assertIn("xr-moat-", env["X_READER_LONG_CACHE_DIR"])
+        self.assertFalse(result["media_complete"])
+        self.assertEqual(result["evidence_status"], "PARTIAL")
+        self.assertEqual(result["reused_source_chunks"], 5)
+        self.assertEqual(result["reused_asr_segments"], 2)
+        self.assertEqual(result["asr_boundary_adjustments"], 1)
+        self.assertAlmostEqual(result["max_boundary_overrun_seconds"], 1.36)
+        self.assertNotEqual(moat.classify(row, result), "MEDIA_COMPLETE")
+
     def test_full_short_podcast_benchmark_requires_verified_receipt(self):
         row = {"id": "short-full", "category": "podcast",
                "url": "https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445",

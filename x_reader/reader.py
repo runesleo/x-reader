@@ -26,16 +26,17 @@ class UniversalReader:
     """
 
     def __init__(self, inbox: Optional[UnifiedInbox] = None, media_preview_seconds: int = 0,
-                 full_short_audio: bool = False):
+                 full_short_audio: bool = False, full_long_audio: bool = False):
         if type(media_preview_seconds) is not int or not 0 <= media_preview_seconds <= 30:
             raise ValueError("media_preview_seconds must be 0 through 30")
-        if type(full_short_audio) is not bool:
-            raise ValueError("full_short_audio must be boolean")
-        if full_short_audio and media_preview_seconds:
-            raise ValueError("Preview and short-full modes cannot be enabled together")
+        if type(full_short_audio) is not bool or type(full_long_audio) is not bool:
+            raise ValueError("full media flags must be boolean")
+        if sum((bool(media_preview_seconds), full_short_audio, full_long_audio)) > 1:
+            raise ValueError("Preview, full-short and full-long modes cannot be enabled together")
         self.inbox = inbox
         self.media_preview_seconds = media_preview_seconds
         self.full_short_audio = full_short_audio
+        self.full_long_audio = full_long_audio
 
     def _detect_platform(self, url: str) -> str:
         """Detect platform from URL."""
@@ -74,8 +75,8 @@ class UniversalReader:
         await asyncio.to_thread(validate_url, url)
 
         platform = self._detect_platform(url)
-        if self.full_short_audio and platform != "podcast":
-            raise ValueError("Full-short audio mode supports podcast episodes only")
+        if (self.full_short_audio or self.full_long_audio) and platform != "podcast":
+            raise ValueError("Full-audio mode supports podcast episodes only")
         logger.info(f"[{platform}] {url[:60]}...")
 
         try:
@@ -125,7 +126,9 @@ class UniversalReader:
 
         if platform == "podcast":
             from x_reader.fetchers.podcast import fetch_podcast
-            if self.full_short_audio:
+            if self.full_long_audio:
+                data = await fetch_podcast(url, full_long_audio=True)
+            elif self.full_short_audio:
                 data = await fetch_podcast(url, full_short_audio=True)
             else:
                 data = await fetch_podcast(url, preview_seconds=self.media_preview_seconds)
@@ -168,8 +171,8 @@ class UniversalReader:
 
     async def read_batch(self, urls: list[str]) -> list[UnifiedContent]:
         """Fetch multiple URLs concurrently, except costly full-short audio."""
-        if self.full_short_audio and len(urls) != 1:
-            raise ValueError("Full-short audio mode supports exactly one URL")
+        if (self.full_short_audio or self.full_long_audio) and len(urls) != 1:
+            raise ValueError("Full-audio mode supports exactly one URL")
         tasks = [self.read(url) for url in urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 

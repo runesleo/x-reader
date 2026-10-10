@@ -13,14 +13,15 @@ from x_reader.fetchers.jina import fetch_direct_html, fetch_via_jina
 
 
 async def fetch_podcast(url: str, preview_seconds: int = 0,
-                        full_short_audio: bool = False) -> dict:
+                        full_short_audio: bool = False,
+                        full_long_audio: bool = False) -> dict:
     """Return metadata normally; optionally sample 30s or prove a short full source.
 
     For source portability Apple Podcasts is metadata-only for now.
     Only public Xiaoyuzhou episodes are eligible for local audio preview.
     """
-    if preview_seconds and full_short_audio:
-        raise ValueError("Preview and short-full audio modes are mutually exclusive")
+    if sum((bool(preview_seconds), full_short_audio, full_long_audio)) > 1:
+        raise ValueError("Podcast media preview, full-short and full-long modes are mutually exclusive")
     try:
         data = await asyncio.to_thread(fetch_direct_html, url)
     except Exception as exc:
@@ -46,7 +47,19 @@ async def fetch_podcast(url: str, preview_seconds: int = 0,
         "preview_transcript": "",
     }
 
-    if full_short_audio:
+    if full_long_audio:
+        host = urlsplit(url).hostname or ""
+        if host not in {"xiaoyuzhoufm.com", "www.xiaoyuzhoufm.com"}:
+            result["full_error"] = "full_audio_unsupported_for_this_podcast_host"
+        else:
+            try:
+                from x_reader.long_audio import transcribe_long
+                complete = await asyncio.to_thread(transcribe_long, url)
+                result.update(complete)
+            except Exception as exc:
+                logger.warning(f"Full long podcast audio not verified: {type(exc).__name__}")
+                result["full_error"] = type(exc).__name__
+    elif full_short_audio:
         host = urlsplit(url).hostname or ""
         if host not in {"xiaoyuzhoufm.com", "www.xiaoyuzhoufm.com"}:
             result["full_error"] = "full_audio_unsupported_for_this_podcast_host"

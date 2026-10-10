@@ -247,7 +247,16 @@ For an **explicit complete short-audio read** (public Xiaoyuzhou only, **≤2 Mi
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445' --media-full-short --json
 ```
 
-This mode returns **PASS** only after exact HTTP 206 complete-source bytes, SHA-256, audio/PCM durations and full-input local ASR processing are verified. Longer or blocked episodes remain **PARTIAL** and cannot be upgraded by a claimed transcript flag alone. Transcript wording is still machine-generated and may contain mistakes. No background runs or paid API calls. See [podcast media coverage](./docs/PODCAST_MEDIA_PREVIEW.md) and [short full-source proof](./docs/FULL_SHORT_AUDIO_PROOF.md).
+Short mode returns **PASS** only after exact HTTP 206 source bytes, SHA-256, audio/PCM durations and full-input local ASR processing are verified. Episodes exceeding the short-mode limits remain **PARTIAL** in that mode.
+
+**Experimental resumable long audio:** The same development branch now supports a separately opted-in, **single public Xiaoyuzhou episode** up to **64 MiB encoded and 90 minutes**. It uses verified 1-MiB HTTP 206 chunks, strong-ETag source versioning, local 60-second PCM/ASR segments, temporal coverage checks, and private on-disk checkpoints:
+
+```bash
+# This is the experimental development branch, not main / Hosted Web.
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6aab4896051af796b9e966c5' --media-full-long --json
+```
+
+One real 277.9-second episode passed full-source proof and resumed all **5/5 source chunks** plus **5/5 ASR checkpoints** on repeat. Very long or inaccessible audio remains **PARTIAL**, not a false PASS. The cached audio chunks and ASR text persist locally in a private directory; use an isolated `X_READER_LONG_CACHE_DIR` for sensitive workflows. Machine transcripts can still be wrong. No background work or paid API is enabled. See [media coverage](./docs/PODCAST_MEDIA_PREVIEW.md), [short-source proof](./docs/FULL_SHORT_AUDIO_PROOF.md), and the [2026-10-10 long-audio verification](./docs/LONG_AUDIO_RESUME_2026-10-10.md).
 
 ## Video / audio dependencies
 

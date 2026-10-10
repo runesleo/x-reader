@@ -28,7 +28,7 @@ def get_inbox_path() -> str:
 
 
 def cmd_fetch(urls: list[str], json_output: bool = False, media_preview_seconds: int = 0,
-              full_short_audio: bool = False):
+              full_short_audio: bool = False, full_long_audio: bool = False):
     """Fetch one or more URLs.
 
     When json_output is True, stdout is machine-readable JSON containing the
@@ -37,7 +37,7 @@ def cmd_fetch(urls: list[str], json_output: bool = False, media_preview_seconds:
     inbox = UnifiedInbox(get_inbox_path())
     reader = UniversalReader(
         inbox=inbox, media_preview_seconds=media_preview_seconds,
-        full_short_audio=full_short_audio,
+        full_short_audio=full_short_audio, full_long_audio=full_long_audio,
     )
 
     async def run():
@@ -151,6 +151,8 @@ Usage:
                                 Opt-in local ASR of 1-30s; always PARTIAL
     x-reader <podcast-url> --media-full-short --json
                                 Opt-in whole-source ASR only if <=2 MiB / <=120s
+    x-reader <podcast-url> --media-full-long --json
+                                Opt-in resumable whole-source <=64 MiB / <=90m
     x-reader login <platform>   Login to a platform (saves session for browser fallback)
     x-reader list               Show inbox contents
     x-reader clear              Clear inbox
@@ -171,13 +173,14 @@ Examples:
     json_output = "--json" in args
     args = [arg for arg in args if arg != "--json"]
     try:
-        if args.count("--media-full-short") > 1:
-            raise ValueError("Specify --media-full-short at most once")
+        if args.count("--media-full-short") > 1 or args.count("--media-full-long") > 1:
+            raise ValueError("Specify each full-media flag at most once")
         full_short_audio = "--media-full-short" in args
-        args = [arg for arg in args if arg != "--media-full-short"]
+        full_long_audio = "--media-full-long" in args
+        args = [arg for arg in args if arg not in ("--media-full-short", "--media-full-long")]
         args, media_preview_seconds = parse_media_preview_option(args)
-        if full_short_audio and media_preview_seconds:
-            raise ValueError("--media-full-short cannot combine with --media-preview-seconds")
+        if sum((full_short_audio, full_long_audio, bool(media_preview_seconds))) > 1:
+            raise ValueError("Full-long, full-short and preview flags are mutually exclusive")
     except ValueError as exc:
         print(f"❌ {exc}")
         sys.exit(2)
@@ -203,7 +206,12 @@ Examples:
             arg for arg in args
             if arg.startswith(("http", "www.")) or "." in arg
         ]
-        if full_short_audio:
+        if full_long_audio:
+            if len(urls) != 1:
+                print("❌ --media-full-long accepts exactly one podcast URL")
+                sys.exit(2)
+            cmd_fetch(urls, json_output=json_output, full_long_audio=True)
+        elif full_short_audio:
             if len(urls) != 1:
                 print("❌ --media-full-short accepts exactly one podcast URL")
                 sys.exit(2)
