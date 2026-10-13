@@ -63,10 +63,10 @@ Limits, isolation and the host network policy are listed in the [public-beta gat
 
 | Source | PASS needs | Otherwise |
 |---|---|---|
-| X post | post text from oEmbed/FxTwitter (or a rendered post), no attached media, and the quoted post, poll, X Article and thread layers checked and absent or read | `PARTIAL` naming the missing layer; text from a page reader is `UNKNOWN` |
-| YouTube | never: pictures are not analyzed | `PARTIAL`; `spoken_media` is `PASS` only when subtitle cues cover the whole video (no uncaptioned stretch over 30 s, at least half the duration captioned) |
-| Generic page | at least 280 characters of sentence-like prose, no login, paywall, consent, removed or challenge markers, and a verified redirect chain | `FAIL` for walls and missing pages, `PARTIAL` for teasers and media pages, `UNKNOWN` for thin or unverifiable text |
-| RSS | the item carries its body (280+ characters of visible prose, no "read more" ending) | `PARTIAL` (`feed_summary_only`) |
+| X post | post text from oEmbed/FxTwitter (or a rendered post), no attached media, and the quoted post, poll, X Article and thread layers checked and absent or read (a quoted post with its own media, poll, article or thread is incomplete) | `PARTIAL` naming the missing layer; text from a page reader is `UNKNOWN` |
+| YouTube | never: pictures are not analyzed | `PARTIAL`; `spoken_media` is `PASS` only when subtitle cues cover the whole video (no uncaptioned stretch over 30 s, at least half the duration captioned). The hosted beta starts no external tools, so there it covers page metadata only |
+| Generic page | x-reader loaded the page itself over pinned hops (redirects checked, no embedded audio/video player), at least 280 characters of sentence-like prose, and no login, paywall, consent, teaser, removed or challenge markers | `FAIL` for walls and missing pages, `PARTIAL` for teasers and pages with audio/video, `UNKNOWN` for thin text or pages x-reader could not load itself |
+| RSS | the item carries its body (280+ characters of visible prose, no "read more" or paywall text) and it covers at least 80 % of the linked article page's prose | `PARTIAL` (`feed_summary_only`, or `feed_body_unverified` when the article page cannot be read) |
 | Podcast | verified full-audio proof (bytes, hashes, decoded duration within 0.5 s of the declared one, complete local ASR) | `PARTIAL` |
 
 The web layer does not implement a second reader or evidence state machine. It shells out to the existing `x-reader URL --json` path in the isolated environment and projects that payload through `x_reader.evidence`.

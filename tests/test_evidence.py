@@ -58,6 +58,7 @@ class EvidenceContractTest(unittest.TestCase):
         cases = (
             ({"thread_marker": True}, "thread_continuation_unread", "thread"),
             ({"quote_status": "media_unread"}, "quoted_post_incomplete", "quoted_post"),
+            ({"quote_status": "incomplete"}, "quoted_post_incomplete", "quoted_post"),
             ({"article_status": "present"}, "article_body_unread", "article_body"),
         )
         for extra, reason, component in cases:
@@ -130,14 +131,29 @@ class EvidenceContractTest(unittest.TestCase):
     def test_generic_article_with_real_prose_is_pass(self):
         result = classify_payload({"source_type": "manual", "title": "Essay", "content": ARTICLE,
                                    "url": "https://blog.example.com/essay",
-                                   "extra": {"redirects_verified": True}})
+                                   "extra": {"redirects_verified": True, "embedded_media": 0}})
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["reason_code"], "text_body_read")
+
+    def test_generic_pass_needs_the_page_read_by_x_reader_itself(self):
+        for extra in ({}, {"redirects_verified": True}, {"redirects_verified": True, "embedded_media": None},
+                      {"redirects_verified": False, "embedded_media": 0},
+                      {"redirects_verified": True, "embedded_media": True}):
+            result = classify_payload({"source_type": "manual", "title": "A", "content": ARTICLE, "extra": extra})
+            self.assertEqual(result["status"], "UNKNOWN", extra)
+            self.assertEqual(result["reason_code"], "page_unverified", extra)
+
+    def test_generic_page_with_embedded_audio_or_video_is_partial(self):
+        result = classify_payload({"source_type": "manual", "title": "A", "content": ARTICLE,
+                                   "extra": {"redirects_verified": True, "embedded_media": 2}})
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(result["reason_code"], "embedded_media_unread")
 
     def test_generic_length_alone_does_not_pass(self):
         nav = "\n".join(["Home", "About us", "Pricing", "Blog", "Careers", "Contact sales"] * 20)
         links = "\n".join(f"[Item {i}](https://example.com/{'a' * 60}/{i})" for i in range(20))
-        for body in ("Home About Contact", "x" * 400, nav, links):
+        headlines = "\n".join(f"How one team rebuilt its whole data platform in week {i}" for i in range(20))
+        for body in ("Home About Contact", "x" * 400, nav, links, headlines):
             result = classify_payload({"source_type": "manual", "title": "Example", "content": body})
             self.assertEqual(result["status"], "UNKNOWN", body[:30])
             self.assertEqual(result["reason_code"], "thin_generic_body", body[:30])
@@ -147,6 +163,8 @@ class EvidenceContractTest(unittest.TestCase):
             "Subscribe to continue reading this story.\n" + ARTICLE[:300],
             ARTICLE + "\nThis post is for paid subscribers. Upgrade to keep reading.",
             ARTICLE + "\n本文为会员专享内容，开通会员后阅读全文。",
+            ARTICLE + "\n点击继续阅读全文",
+            ARTICLE + "\nContinue reading",
         ):
             result = classify_payload({"source_type": "manual", "title": "Story", "content": body})
             self.assertEqual(result["status"], "PARTIAL", body[-40:])
@@ -155,20 +173,31 @@ class EvidenceContractTest(unittest.TestCase):
     def test_generic_consent_and_removed_pages_fail(self):
         consent = ("We value your privacy. We and our partners use cookies to store and access "
                    "information on your device. Accept all cookies or manage preferences below.")
-        removed = "Page not found\n" + ARTICLE
+        long_consent = consent + "\n" + (
+            "Our vendors and our partners process data on the basis of legitimate interest, which you can "
+            "object to. You can reject all or choose purposes one by one in the list that follows.\n") * 8
+        removed = "Page not found\nThe page you were looking for has moved or never existed."
         for title, body, reason in (("Before you continue", consent, "challenge_or_error"),
+                                    ("News site", long_consent, "challenge_or_error"),
                                     ("Example", removed, "source_unavailable")):
             result = classify_payload({"source_type": "manual", "title": title, "content": body})
             self.assertEqual(result["status"], "FAIL", reason)
             self.assertEqual(result["reason_code"], reason)
 
+    def test_articles_that_mention_walls_are_not_mistaken_for_them(self):
+        article = "How to fix a 404 page not found error.\n" + ARTICLE + ARTICLE
+        result = classify_payload({"source_type": "manual", "title": "Fixing 404 errors", "content": article,
+                                   "extra": {"redirects_verified": True, "embedded_media": 0}})
+        self.assertEqual(result["status"], "PASS")
+
     def test_generic_unverified_redirect_and_media_pages_do_not_pass(self):
         unverified = classify_payload({"source_type": "manual", "title": "A", "content": ARTICLE,
                                        "extra": {"redirects_verified": False}})
         self.assertEqual(unverified["status"], "UNKNOWN")
-        self.assertEqual(unverified["reason_code"], "redirect_target_unverified")
+        self.assertEqual(unverified["reason_code"], "page_unverified")
         media = classify_payload({"source_type": "manual", "title": "A", "content": ARTICLE,
-                                  "url": "https://vimeo.com/123456"})
+                                  "url": "https://vimeo.com/123456",
+                                  "extra": {"redirects_verified": True, "embedded_media": 0}})
         self.assertEqual(media["status"], "PARTIAL")
         self.assertEqual(media["reason_code"], "embedded_media_unread")
 
@@ -184,15 +213,20 @@ class EvidenceContractTest(unittest.TestCase):
     def test_rss_markup_and_read_more_do_not_count_as_body(self):
         image_teaser = f'<img src="https://cdn.example.com/{"a" * 400}.jpg">Teaser'
         read_more = f"<p>{ARTICLE}</p><p>Continue reading on the site…</p>"
-        for body in (image_teaser, read_more):
+        paid = f"<p>{ARTICLE}</p><p>Keep reading with a 7-day free trial. Subscribe to keep reading this post.</p>"
+        for body in (image_teaser, read_more, paid):
             result = classify_payload({"source_type": "rss", "content": body, "extra": {"rss_content": "full"}})
             self.assertEqual(result["status"], "PARTIAL", body[-30:])
+        unverified = classify_payload({"source_type": "rss", "content": f"<p>{ARTICLE}</p>",
+                                       "extra": {"rss_content": "unverified"}})
+        self.assertEqual(unverified["reason_code"], "feed_body_unverified")
 
     def test_wechat_notices_containers_and_image_posts(self):
         def wechat(content, **extra):
             return classify_payload({"source_type": "wechat", "title": "文章", "content": content, "extra": extra})
 
-        self.assertEqual(wechat("此内容因违规无法查看\n" + ARTICLE)["status"], "FAIL")
+        self.assertEqual(wechat("此内容因违规无法查看")["status"], "FAIL")
+        self.assertEqual(wechat("排查接口参数错误的三个步骤。\n" + ARTICLE * 3, extraction="container")["status"], "PASS")
         self.assertEqual(wechat(ARTICLE, extraction="page_body")["reason_code"], "article_container_missing")
         images = wechat("今日分享\n![image](https://mmbiz.qpic.cn/a.jpg)\n![image](https://mmbiz.qpic.cn/b.jpg)")
         self.assertEqual(images["status"], "PARTIAL")
@@ -231,7 +265,7 @@ class EvidenceContractTest(unittest.TestCase):
             "content": ARTICLE,
             "url": "https://example.com",
             "fetched_at": "2026-10-07T00:00:00Z",
-            "extra": {"fetch_method": "direct_html_pinned", "redirects_verified": True},
+            "extra": {"fetch_method": "direct_html_pinned", "redirects_verified": True, "embedded_media": 0},
         })
         self.assertEqual(receipt["status"], "PASS")
         self.assertEqual(receipt["content_chars"], len(ARTICLE))

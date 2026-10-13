@@ -113,6 +113,26 @@ class HostedChildTest(unittest.TestCase):
         self.assertEqual(cpu, proc.HOSTED_CPU_SECONDS)
         self.assertLessEqual(nofile, proc.HOSTED_MAX_OPEN_FILES)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "address-space limits are enforced on Linux")
+    def test_hosted_memory_ceiling_stops_runaway_allocation(self):
+        code = (
+            "from x_reader.utils.proc import apply_hosted_limits as a; a()\n"
+            "try:\n    blob = bytearray(1024 * 1024 * 1024)\nexcept MemoryError:\n    print('capped')\n"
+        )
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=_child_env(), timeout=60)
+        self.assertIn("capped", out.stdout, out.stderr[-500:])
+
+    def test_hosted_reads_start_no_external_tools(self):
+        from x_reader.fetchers import youtube
+
+        page = {"title": "V", "content": "Video page", "url": "u"}
+        with patch.dict(os.environ, {"X_READER_HOSTED": "1", "GROQ_API_KEY": "k"}), \
+                patch.object(youtube, "fetch_via_jina", return_value=page), \
+                patch("x_reader.utils.proc.run_bounded") as run:
+            data = asyncio.run(youtube.fetch_youtube("https://www.youtube.com/watch?v=abcdefghijk"))
+        run.assert_not_called()
+        self.assertFalse(data["has_transcript"])
+
 
 class ProcessTreeTest(unittest.TestCase):
     def test_timeout_kills_grandchildren(self):
@@ -190,6 +210,47 @@ class SafeFetchTest(unittest.TestCase):
         self.assertEqual(items[1]["content_kind"], "summary")
         self.assertEqual(items[2]["content_kind"], "summary")
 
+    def test_full_feed_bodies_are_checked_against_the_article(self):
+        from x_reader.fetchers import rss
+
+        item = {"content_kind": "full", "url": "https://e.com/a", "summary": f"<p>{ARTICLE}</p>"}
+        same = {"title": "A", "content": ARTICLE, "url": "https://e.com/a", "embedded_media": 0}
+        longer = dict(same, content=ARTICLE * 4)
+        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=same):
+            self.assertEqual(asyncio.run(rss.verify_full_body(dict(item))), "full")
+        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=longer):
+            self.assertEqual(asyncio.run(rss.verify_full_body(dict(item))), "summary")
+        with patch("x_reader.fetchers.jina.fetch_html_page", side_effect=ValueError("HTTP status 403")):
+            self.assertEqual(asyncio.run(rss.verify_full_body(dict(item))), "unverified")
+        video = dict(item, url="https://www.youtube.com/watch?v=abcdefghijk")
+        self.assertEqual(asyncio.run(rss.verify_full_body(video)), "unverified")
+
+    def test_pinned_requests_try_ipv4_first_and_move_on_after_a_failed_connect(self):
+        from urllib3.exceptions import NewConnectionError
+        from x_reader.fetchers import jina
+
+        tried = []
+
+        class Pool:
+            def __init__(self, host, **_kw):
+                self.host = host
+
+            def request(self, *_a, **_kw):
+                tried.append(self.host)
+                if self.host in ("198.51.100.7", "2001:db8::1"):
+                    raise NewConnectionError(None, "no route to host")
+                return "response"
+
+            def close(self):
+                pass
+
+        with patch("x_reader.utils.url_validator.resolve_safe_ips",
+                   return_value=["2001:db8::1", "198.51.100.7", "203.0.113.5"]), \
+                patch.object(jina, "HTTPSConnectionPool", Pool):
+            _pool, response, ip = jina._request_pinned("https://e.com/a", 5)
+        self.assertEqual(tried, ["198.51.100.7", "203.0.113.5"])
+        self.assertEqual((response, ip), ("response", "203.0.113.5"))
+
     def test_feeds_with_generic_content_types_are_sniffed(self):
         from x_reader.fetchers.jina import _read_bounded
         from x_reader.fetchers.rss import FEED_TYPES, looks_like_feed
@@ -213,54 +274,102 @@ class SafeFetchTest(unittest.TestCase):
         self.assertTrue(looks_like_feed(b'\xef\xbb\xbf{"version": "https://jsonfeed.org/version/1.1"}'))
 
 
-class GenericRedirectTest(unittest.TestCase):
-    def _read(self, url, **patches):
+class GenericReadTest(unittest.TestCase):
+    PAGE = {"title": "A", "content": ARTICLE, "url": "https://e.com/a", "author": "",
+            "fetch_method": "direct_html_pinned", "embedded_media": 0}
+    JINA = {"title": "A (Jina)", "content": "Jina text. " * 40, "url": "https://e.com/a", "fetch_method": "jina_pinned"}
+
+    def _read(self, url, hosted=False):
         from x_reader.reader import UniversalReader
 
-        with patch("x_reader.reader.validate_url", side_effect=lambda u: u):
+        env = {"X_READER_HOSTED": "1"} if hosted else {}
+        with patch.dict(os.environ, env), patch("x_reader.reader.validate_url", side_effect=lambda u: u):
+            if not hosted:
+                os.environ.pop("X_READER_HOSTED", None)
             return asyncio.run(UniversalReader()._fetch("generic", url))
+
+    def _hop_to(self, url):
+        def direct(_url, hop_guard=None):
+            hop_guard(url)
+            raise AssertionError("hop guard should have stopped the chain")
+        return direct
 
     def test_redirect_into_a_disallowed_platform_is_refused(self):
         with patch.dict(os.environ, {"X_READER_ALLOWED_PLATFORMS": "generic,twitter,youtube"}), \
-                patch("x_reader.fetchers.jina.resolve_final_url", return_value="https://t.me/chan/1"), \
+                patch("x_reader.fetchers.jina.fetch_html_page", side_effect=self._hop_to("https://t.me/chan/1")), \
+                patch("x_reader.reader.fetch_via_jina") as jina, \
                 patch("x_reader.fetchers.telegram.fetch_telegram", AsyncMock()) as telegram:
             with self.assertRaises(ValueError):
                 self._read("https://short.example/abc")
         telegram.assert_not_awaited()
+        jina.assert_not_called()
 
     def test_redirect_into_x_goes_to_the_x_reader(self):
         post = {"text": "hello", "url": "https://x.com/a/status/1", "fetch_method": "fxtwitter",
                 "media_status": "none", "structure_status": "verified"}
-        with patch("x_reader.fetchers.jina.resolve_final_url", return_value="https://x.com/a/status/1"), \
+        with patch("x_reader.fetchers.jina.fetch_html_page", side_effect=self._hop_to("https://x.com/a/status/1")), \
                 patch("x_reader.fetchers.twitter.fetch_twitter", AsyncMock(return_value=post)) as fetch:
             content = self._read("https://short.example/abc")
         fetch.assert_awaited_once_with("https://x.com/a/status/1")
         self.assertEqual(content.source_type.value, "twitter")
 
-    def test_unresolved_redirects_are_recorded(self):
-        page = {"title": "A", "content": ARTICLE, "url": "https://e.com/a", "fetch_method": "jina_pinned"}
-        with patch("x_reader.fetchers.jina.resolve_final_url", side_effect=TimeoutError()), \
-                patch("x_reader.reader.fetch_via_jina", return_value=page):
-            content = self._read("https://e.com/a")
+    def test_blocked_destinations_abort_without_asking_jina(self):
+        from x_reader.fetchers.jina import BlockedDestination
+
+        with patch("x_reader.fetchers.jina.fetch_html_page", side_effect=BlockedDestination("Blocked")), \
+                patch("x_reader.reader.fetch_via_jina") as jina:
+            with self.assertRaises(ValueError):
+                self._read("https://e.com/a")
+        jina.assert_not_called()
+
+    def test_hosted_reads_return_the_text_they_checked(self):
+        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(self.PAGE)), \
+                patch("x_reader.reader.fetch_via_jina") as jina:
+            content = self._read("https://e.com/a", hosted=True)
+        jina.assert_not_called()
+        self.assertEqual(content.extra["fetch_method"], "direct_html_pinned")
+        self.assertIs(content.extra["redirects_verified"], True)
+        self.assertEqual(content.extra["embedded_media"], 0)
+
+    def test_hosted_jina_text_is_never_verified(self):
+        thin = dict(self.PAGE, content="Loading the application, please wait.")
+        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=thin), \
+                patch("x_reader.reader.fetch_via_jina", return_value=dict(self.JINA)):
+            content = self._read("https://e.com/a", hosted=True)
+        self.assertEqual(content.extra["fetch_method"], "jina_pinned")
         self.assertIs(content.extra["redirects_verified"], False)
 
-    def test_direct_fallback_hands_cross_platform_hops_to_their_reader(self):
-        from x_reader.fetchers.jina import CrossPlatformRedirect
-
-        def direct(url, hop_guard=None):
-            hop_guard("https://www.youtube.com/watch?v=abcdefghijk")
-            raise AssertionError("hop guard should have stopped the chain")
-
-        video = {"title": "V", "description": "d", "url": "https://www.youtube.com/watch?v=abcdefghijk",
-                 "has_transcript": False}
-        with patch("x_reader.fetchers.jina.resolve_final_url", return_value="https://e.com/a"), \
-                patch("x_reader.reader.fetch_via_jina", side_effect=ValueError("jina down")), \
-                patch("x_reader.fetchers.jina.fetch_direct_html", side_effect=direct), \
-                patch("x_reader.fetchers.youtube.fetch_youtube", AsyncMock(return_value=video)) as fetch:
+    def test_local_reads_use_jina_text_with_direct_evidence(self):
+        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(self.PAGE, embedded_media=1)), \
+                patch("x_reader.reader.fetch_via_jina", return_value=dict(self.JINA)):
             content = self._read("https://e.com/a")
-        fetch.assert_awaited_once()
-        self.assertEqual(content.source_type.value, "youtube")
-        self.assertTrue(issubclass(CrossPlatformRedirect, ValueError))
+        self.assertEqual(content.extra["fetch_method"], "jina_pinned")
+        self.assertIs(content.extra["redirects_verified"], True)
+        self.assertEqual(content.extra["embedded_media"], 1)
+
+    def test_unreadable_pages_are_recorded_as_unverified(self):
+        with patch("x_reader.fetchers.jina.fetch_html_page", side_effect=TimeoutError()), \
+                patch("x_reader.reader.fetch_via_jina", return_value=dict(self.JINA)):
+            content = self._read("https://e.com/a")
+        self.assertIs(content.extra["redirects_verified"], False)
+        self.assertIsNone(content.extra["embedded_media"])
+
+    def test_page_extraction_drops_boilerplate_and_counts_players(self):
+        from x_reader.fetchers.jina import _extract_html_page
+
+        html = (
+            "<html><head><title>T</title></head><body><nav>Home Pricing Blog Careers Contact</nav>"
+            "<main><article>" + "".join(f"<p>{line}</p>" for line in ARTICLE.splitlines()) +
+            "<video src='/a.mp4'></video><iframe src='https://www.youtube.com/embed/abcdefghijk'></iframe>"
+            "<iframe src='https://ads.example.com/frame'></iframe></article></main>"
+            "<footer>Copyright and legal links for this site, all rights reserved here.</footer></body></html>"
+        )
+        title, content, media = _extract_html_page(html)
+        self.assertEqual(title, "T")
+        self.assertEqual(media, 2)
+        self.assertNotIn("Pricing", content)
+        self.assertNotIn("Copyright", content)
+        self.assertIn("careful argument", content)
 
 
 class TelegramRoutingTest(unittest.TestCase):
@@ -311,6 +420,9 @@ class YoutubeTest(unittest.TestCase):
             text, cues = youtube._parse_srt(str(srt))
             # rolling repeats collapse, a later repeat is real speech and stays
             self.assertEqual(text, "hello world hello")
+            pause = Path(tmp) / "p.srt"
+            pause.write_text("1\n00:00:01,000 --> 00:00:02,000\nhello\n\n2\n00:01:02,000 --> 00:01:03,000\nhello\n")
+            self.assertEqual(youtube._parse_srt(str(pause))[0], "hello hello")
             coverage = youtube.cue_coverage(cues)
             self.assertEqual(coverage["transcript_start_seconds"], 1.0)
             self.assertEqual(coverage["transcript_end_seconds"], 598.25)
@@ -438,6 +550,34 @@ class HostedServerTest(unittest.TestCase):
     def test_server_header_has_no_interpreter_version(self):
         response, _ = self._request("GET", path="/healthz")
         self.assertEqual(response.getheader("Server"), "x-reader-evidence")
+
+    def test_unparseable_request_target_is_a_json_400(self):
+        sock = socket.create_connection(("127.0.0.1", self.server.server_port), timeout=5)
+        try:
+            sock.sendall(b"GET http://[ HTTP/1.1\r\nHost: x\r\n\r\n")
+            data = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+        finally:
+            sock.close()
+        self.assertIn(b" 400 ", data.split(b"\r\n", 1)[0])
+        self.assertIn(b'"bad_request"', data)
+
+    def test_failed_thread_start_gives_the_slot_back(self):
+        server = web_app.BoundedThreadingHTTPServer(("127.0.0.1", 0), web_app.EvidenceRequestHandler, max_threads=1)
+        try:
+            client = socket.create_connection(("127.0.0.1", server.server_port), timeout=5)
+            request, address = server.get_request()
+            with patch("threading.Thread.start", side_effect=RuntimeError("can't start new thread")):
+                with self.assertRaises(RuntimeError):
+                    server.process_request(request, address)
+            client.close()
+            self.assertTrue(server._thread_slots.acquire(blocking=False))
+        finally:
+            server.server_close()
 
     def test_slow_clients_are_cut_off_at_the_read_deadline(self):
         with patch.object(web_app, "REQUEST_READ_DEADLINE_SECONDS", 1):

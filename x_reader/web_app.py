@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
@@ -37,7 +38,8 @@ SOCKET_TIMEOUT_SECONDS = 15
 # Absolute budget for the request line, headers and body together: a client
 # dripping one byte at a time cannot hold a connection thread past it.
 REQUEST_READ_DEADLINE_SECONDS = 20
-MAX_CONNECTION_THREADS = 32
+# 24 connection threads + the watcher + 4 reader processes stay inside the service's 64 tasks.
+MAX_CONNECTION_THREADS = 24
 MAX_CLI_OUTPUT_BYTES = 8 * 1024 * 1024
 
 # Public failure reasons are a fixed set; exception names never reach clients.
@@ -275,6 +277,43 @@ def _error_json(status: int) -> bytes:
     return json.dumps({"ok": False, "error": _ERROR_CODES.get(status, "error")}).encode("utf-8")
 
 
+class _ReadDeadlines:
+    """One watcher thread for every connection's absolute request-read deadline.
+
+    A thread per connection would double the service's task count under load.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending: dict[int, tuple[float, Any]] = {}
+        self._watcher: threading.Thread | None = None
+
+    def add(self, handler: Any, seconds: float) -> None:
+        with self._lock:
+            self._pending[id(handler)] = (time.monotonic() + seconds, handler)
+            if self._watcher is None or not self._watcher.is_alive():
+                self._watcher = threading.Thread(target=self._watch, daemon=True)
+                self._watcher.start()
+
+    def discard(self, handler: Any) -> None:
+        with self._lock:
+            self._pending.pop(id(handler), None)
+
+    def _watch(self) -> None:
+        while True:
+            time.sleep(0.25)
+            now = time.monotonic()
+            with self._lock:
+                expired = [h for deadline, h in self._pending.values() if deadline <= now]
+                for handler in expired:
+                    self._pending.pop(id(handler), None)
+            for handler in expired:
+                handler._abort_slow_read()
+
+
+_READ_DEADLINES = _ReadDeadlines()
+
+
 class EvidenceRequestHandler(BaseHTTPRequestHandler):
     server_version = "x-reader-evidence"
     sys_version = ""
@@ -290,9 +329,7 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
     def setup(self) -> None:
         super().setup()
         self._read_aborted = False
-        self._read_timer = threading.Timer(REQUEST_READ_DEADLINE_SECONDS, self._abort_slow_read)
-        self._read_timer.daemon = True
-        self._read_timer.start()
+        _READ_DEADLINES.add(self, REQUEST_READ_DEADLINE_SECONDS)
 
     def _abort_slow_read(self) -> None:
         self._read_aborted = True
@@ -303,14 +340,22 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
 
     def _request_read(self) -> bool:
         """Mark the request fully read; False if the read deadline already cut it off."""
-        self._read_timer.cancel()
+        _READ_DEADLINES.discard(self)
         if self._read_aborted:
             self.close_connection = True
             return False
         return True
 
+    def _path(self) -> str | None:
+        """Request path, or None after answering 400 for an unparseable request-target."""
+        try:
+            return urlparse(self.path).path
+        except ValueError:
+            self._json(400, {"ok": False, "error": "bad_request"})
+            return None
+
     def finish(self) -> None:
-        self._read_timer.cancel()
+        _READ_DEADLINES.discard(self)
         try:
             super().finish()
         except OSError:
@@ -349,7 +394,9 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if not self._request_read():
             return
-        path = urlparse(self.path).path
+        path = self._path()
+        if path is None:
+            return
         page = {
             "/": "landing-en.html",
             "/en": "landing-en.html",
@@ -370,7 +417,12 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
         self._json(404, {"ok": False, "error": "not_found"})
 
     def do_POST(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
+        try:
+            path = urlparse(self.path).path
+        except ValueError:
+            if self._request_read():
+                self._json(400, {"ok": False, "error": "bad_request"})
+            return
         if path != "/api/read":
             if self._request_read():
                 self._json(404, {"ok": False, "error": "not_found"})
@@ -458,10 +510,16 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
                 pass
             self.shutdown_request(request)
             return
-        thread = threading.Thread(
-            target=self._process_and_release, args=(request, client_address), daemon=True,
-        )
-        thread.start()
+        try:
+            thread = threading.Thread(
+                target=self._process_and_release, args=(request, client_address), daemon=True,
+            )
+            thread.start()
+        except BaseException:
+            # No worker owns the slot or the socket: give both back before failing.
+            self._thread_slots.release()
+            self.shutdown_request(request)
+            raise
 
     def _process_and_release(self, request: Any, client_address: Any) -> None:
         try:

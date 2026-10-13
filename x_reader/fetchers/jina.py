@@ -12,6 +12,7 @@ import requests
 from loguru import logger
 from urllib.parse import urljoin, urlsplit
 from urllib3 import HTTPConnectionPool, HTTPSConnectionPool, Timeout
+from urllib3.exceptions import ConnectTimeoutError, NewConnectionError
 
 
 JINA_BASE = "https://r.jina.ai"
@@ -44,6 +45,125 @@ class CrossPlatformRedirect(ValueError):
         super().__init__(f"Redirects to a {platform} URL")
         self.url = url
         self.platform = platform
+
+
+class BlockedDestination(ValueError):
+    """A hop points at a private/special address, an unresolvable host or a non-http scheme."""
+
+
+# Players whose audio/video is the substance of an embedding page.
+_MEDIA_EMBED_HOSTS = (
+    "youtube.com", "youtube-nocookie.com", "youtu.be", "vimeo.com", "dailymotion.com",
+    "twitch.tv", "soundcloud.com", "spotify.com", "podcasts.apple.com", "bilibili.com",
+    "tiktok.com", "loom.com", "wistia.com", "wistia.net", "streamable.com", "rumble.com",
+    "ted.com", "xiaoyuzhoufm.com", "v.qq.com", "ixigua.com", "youku.com", "anchor.fm",
+)
+_SKIP_TAGS = {"script", "style", "noscript", "svg", "template"}
+_BOILERPLATE_TAGS = {"nav", "footer", "aside"}
+_BLOCK_TAGS = {
+    "p", "div", "article", "section", "main", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6",
+    "blockquote", "pre", "tr",
+}
+
+
+def _is_media_embed(src: str) -> bool:
+    host = (urlsplit(src if "//" in src else "").hostname or "").lower()
+    return any(host == domain or host.endswith("." + domain) for domain in _MEDIA_EMBED_HOSTS)
+
+
+def _join_text(parts: list) -> str:
+    lines = []
+    for chunk in parts:
+        if chunk == "\n":
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        if lines and lines[-1] not in ("", "\n"):
+            lines[-1] = f"{lines[-1]} {chunk}".strip()
+        else:
+            lines.append(chunk)
+    content = "\n".join(line.strip() for line in "\n".join(lines).splitlines())
+    while "\n\n\n" in content:
+        content = content.replace("\n\n\n", "\n\n")
+    return content.strip()
+
+
+def _extract_html_page(html: str) -> tuple[str, str, int]:
+    """Title, article text and the number of embedded audio/video players.
+
+    Navigation, footers and asides are dropped; when the first <main>/<article>
+    region carries substantial prose, only that region is kept.
+    """
+    from html.parser import HTMLParser
+    from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars
+
+    class _PageParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.skip_depth = self.boiler_depth = self.main_depth = 0
+            self.main_seen = self.in_head = self.in_title = False
+            self.title_parts, self.body_parts, self.main_parts = [], [], []
+            self.media = 0
+
+        def _append(self, chunk):
+            self.body_parts.append(chunk)
+            if self.main_depth:
+                self.main_parts.append(chunk)
+
+        def handle_starttag(self, tag, attrs):
+            tag = tag.lower()
+            if tag == "head":
+                self.in_head = True
+            elif tag == "title":
+                self.in_title = True
+            elif tag in _SKIP_TAGS:
+                self.skip_depth += 1
+            else:
+                if tag in ("video", "audio"):
+                    self.media += 1
+                elif tag in ("iframe", "embed", "object"):
+                    values = dict(attrs)
+                    if _is_media_embed(values.get("src") or values.get("data") or ""):
+                        self.media += 1
+                if tag in _BOILERPLATE_TAGS:
+                    self.boiler_depth += 1
+                if tag in ("main", "article") and (self.main_depth or not self.main_seen):
+                    self.main_depth += 1
+                    self.main_seen = True
+                if not self.in_head and tag in _BLOCK_TAGS:
+                    self._append("\n")
+
+        def handle_endtag(self, tag):
+            tag = tag.lower()
+            if tag == "title":
+                self.in_title = False
+            elif tag == "head":
+                self.in_head = False
+            elif tag in _SKIP_TAGS:
+                self.skip_depth = max(0, self.skip_depth - 1)
+            else:
+                if tag in _BOILERPLATE_TAGS and self.boiler_depth:
+                    self.boiler_depth -= 1
+                if tag in ("main", "article") and self.main_depth:
+                    self.main_depth -= 1
+                if not self.in_head and tag in _BLOCK_TAGS:
+                    self._append("\n")
+
+        def handle_data(self, data):
+            text = data.strip()
+            if self.skip_depth or not text:
+                return
+            if self.in_title:
+                self.title_parts.append(text)
+            elif not self.in_head and not self.boiler_depth:
+                self._append(text)
+
+    parser = _PageParser()
+    parser.feed(html)
+    title = " ".join(parser.title_parts).strip()
+    main = _join_text(parser.main_parts)
+    content = main if prose_chars(main) >= MIN_GENERIC_BODY_CHARS else _join_text(parser.body_parts)
+    return title[:200], content, parser.media
 
 
 def _extract_html_text(html: str) -> tuple[str, str]:
@@ -142,39 +262,24 @@ def _request_pinned(
 
     parsed = urlsplit(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError(f"Pinned request requires http(s) URL: {url}")
+        raise BlockedDestination(f"Pinned request requires http(s) URL: {url}")
 
     hostname = parsed.hostname
     ascii_hostname = hostname.encode("idna").decode("ascii")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
 
     remaining = max(0.1, float(timeout_seconds))
-    safe_ips = resolve_safe_ips(
-        hostname,
-        port,
-        timeout=min(remaining, IO_TIMEOUT),
-    )
-    ip = safe_ips[0]
+    try:
+        safe_ips = resolve_safe_ips(
+            hostname,
+            port,
+            timeout=min(remaining, IO_TIMEOUT),
+        )
+    except ValueError as exc:
+        raise BlockedDestination(str(exc)) from exc
 
     io_timeout = max(0.1, min(remaining, IO_TIMEOUT))
     timeout = Timeout(connect=io_timeout, read=io_timeout)
-
-    common = {
-        "host": ip,
-        "port": port,
-        "timeout": timeout,
-        "maxsize": 1,
-        "block": True,
-    }
-    if parsed.scheme == "https":
-        pool = HTTPSConnectionPool(
-            **common,
-            cert_reqs="CERT_REQUIRED",
-            assert_hostname=ascii_hostname,
-            server_hostname=ascii_hostname,
-        )
-    else:
-        pool = HTTPConnectionPool(**common)
 
     target = parsed.path or "/"
     if parsed.query:
@@ -187,20 +292,45 @@ def _request_pinned(
         parsed.scheme,
     )
 
-    try:
-        response = pool.request(
-            "GET",
-            target,
-            headers=request_headers,
-            redirect=False,
-            preload_content=False,
-            retries=False,
-        )
-    except BaseException:
-        pool.close()
-        raise
-
-    return pool, response, ip
+    # Every candidate was validated above. IPv4 goes first and a failed connect
+    # moves on to the next address: many hosts have IPv6 addresses but no IPv6 route.
+    candidates = sorted(safe_ips, key=lambda address: ":" in address)
+    for attempt, ip in enumerate(candidates):
+        common = {
+            "host": ip,
+            "port": port,
+            "timeout": timeout,
+            "maxsize": 1,
+            "block": True,
+        }
+        if parsed.scheme == "https":
+            pool = HTTPSConnectionPool(
+                **common,
+                cert_reqs="CERT_REQUIRED",
+                assert_hostname=ascii_hostname,
+                server_hostname=ascii_hostname,
+            )
+        else:
+            pool = HTTPConnectionPool(**common)
+        try:
+            response = pool.request(
+                "GET",
+                target,
+                headers=request_headers,
+                redirect=False,
+                preload_content=False,
+                retries=False,
+            )
+        except (NewConnectionError, ConnectTimeoutError):
+            pool.close()
+            if attempt == len(candidates) - 1:
+                raise
+            continue
+        except BaseException:
+            pool.close()
+            raise
+        return pool, response, ip
+    raise BlockedDestination(f"No address to connect to for {hostname}")
 
 
 def _read_bounded(
@@ -297,39 +427,44 @@ def fetch_public_bytes(
     raise requests.TooManyRedirects(f"Too many redirects while fetching: {url}")
 
 
-def resolve_final_url(url: str, max_redirects: int = 5, total_timeout: float = 10) -> str:
-    """Follow HTTP redirects with pinned, validated connections; return the final URL.
-
-    Bodies are never read. Any status other than a redirect ends the chain (a 403
-    or 404 still shows there is no further hop). Private or special addresses on
-    any hop raise ValueError, like every other pinned request.
-    """
-    current = url
-    deadline = time.monotonic() + total_timeout
-    for _ in range(max_redirects + 1):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("Redirect check exceeded total time limit")
-        pool = None
-        response = None
-        try:
-            pool, response, _pinned_ip = _request_pinned(current, remaining, headers=DIRECT_HEADERS)
-            if response.status not in _REDIRECT_STATUSES:
-                return current
-            location = response.headers.get("Location")
-            if not location:
-                return current
-            current = urljoin(current, location)
-        finally:
-            if response is not None:
-                response.close()
-            if pool is not None:
-                pool.close()
-    raise requests.TooManyRedirects(f"Too many redirects while fetching: {url}")
-
-
 def fetch_direct_html(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
-    """Direct public HTML fallback with pinned-IP SSRF defense and bounded reads.
+    """Direct public HTML fallback with pinned-IP SSRF defense and bounded reads."""
+    html, final_url = _download_html(url, max_redirects, hop_guard)
+    title, content = _extract_html_text(html)
+    if len(content) < 40:
+        raise ValueError(
+            "Direct fallback returned too little readable body text"
+        )
+    return {
+        "title": title or final_url,
+        "content": content,
+        "url": final_url,
+        "author": "",
+        "fetch_method": "direct_html_pinned",
+    }
+
+
+def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
+    """Article-oriented direct read used as evidence for generic pages.
+
+    Same pinned, per-hop validated download as fetch_direct_html, but without the
+    navigation/footer text, with the count of embedded audio/video players, and
+    returning thin pages too (the receipt decides what thin means).
+    """
+    html, final_url = _download_html(url, max_redirects, hop_guard)
+    title, content, media = _extract_html_page(html)
+    return {
+        "title": title or final_url,
+        "content": content,
+        "url": final_url,
+        "author": "",
+        "fetch_method": "direct_html_pinned",
+        "embedded_media": media,
+    }
+
+
+def _download_html(url: str, max_redirects: int = 5, hop_guard=None) -> tuple[str, str]:
+    """GET a public HTML page over pinned, validated hops; return (html, final_url).
 
     hop_guard(url), when given, runs on every redirect target before it is
     followed; it raises to stop the chain (e.g. CrossPlatformRedirect).
@@ -379,21 +514,7 @@ def fetch_direct_html(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
                 if charset_match
                 else "utf-8"
             )
-            html = body.decode(encoding, errors="replace")
-
-            title, content = _extract_html_text(html)
-            if len(content) < 40:
-                raise ValueError(
-                    "Direct fallback returned too little readable body text"
-                )
-
-            return {
-                "title": title or current,
-                "content": content,
-                "url": current,
-                "author": "",
-                "fetch_method": "direct_html_pinned",
-            }
+            return body.decode(encoding, errors="replace"), current
         finally:
             if response is not None:
                 response.close()

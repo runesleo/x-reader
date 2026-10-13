@@ -121,7 +121,7 @@ npx skills add runesleo/x-reader --skill x-reader
 | 来源 | 基础读取链路 | 媒体 / 登录补全 |
 |---|---|---|
 | X / Twitter | oEmbed → FxTwitter → Article/Jina → Playwright | Skill 可继续读取附件媒体 |
-| 普通网页 / 文章 | 先查跳转 → Jina Reader → 固定 IP 直连 HTML | 跳到 X、YouTube、播客等平台时交给对应读取器 |
+| 普通网页 / 文章 | 固定 IP 直连读取（核对跳转和嵌入音视频）→ Jina Reader 正文 | 跳到 X、YouTube、播客等平台时交给对应读取器；网页版展示直连读到的正文 |
 | YouTube | yt-dlp metadata / 字幕 | 配置后可 Groq Whisper |
 | Bilibili | Bilibili API | 字幕 / 音频转录流程 |
 | 微信公众号 | Jina → Playwright | 公开文章走无头浏览器兜底；暂不使用保存的登录态 |

@@ -219,6 +219,11 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         with_media = twitter._structure_from_fxtwitter({**tweet, "quote": {
             "id": "2", "text": "chart", "media": {"photos": [{"url": "https://pbs.twimg.com/x.jpg"}]}}})
         self.assertEqual(with_media["quote_status"], "media_unread")
+        for layer in ({"article": {"title": "T"}}, {"poll": {"choices": []}}, {"quote": {"id": "9", "text": "q"}},
+                      {"text": "1/ a thread inside the quote"}):
+            nested = twitter._structure_from_fxtwitter({**tweet, "poll": None, "quote": {
+                "id": "2", "text": "Original claim", **layer}})
+            self.assertEqual(nested["quote_status"], "incomplete", layer)
         article = twitter._structure_from_fxtwitter({"id": "3", "text": "x.com/i/article/3", "article": {"title": "T"}})
         self.assertEqual(article["article_status"], "present")
         self.assertEqual(twitter._structure_from_fxtwitter({})["structure_status"], "unknown")

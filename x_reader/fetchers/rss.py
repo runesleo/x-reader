@@ -30,11 +30,54 @@ def looks_like_feed(body: bytes) -> bool:
 
 
 def _is_full_body(html_body: str) -> bool:
-    """A feed item carries the article only if its visible text is substantial and not a teaser."""
-    from x_reader.evidence import MIN_GENERIC_BODY_CHARS, _ends_with_read_more, prose_chars, visible_text
+    """A feed item may carry the article only if its visible text is substantial and not a teaser."""
+    from x_reader.evidence import (
+        MIN_GENERIC_BODY_CHARS, _PAYWALL_PHRASES, _ends_with_read_more, prose_chars, visible_text,
+    )
 
     text = visible_text(html_body)
-    return prose_chars(text) >= MIN_GENERIC_BODY_CHARS and not _ends_with_read_more(text)
+    lowered = text.lower()
+    return (
+        prose_chars(text) >= MIN_GENERIC_BODY_CHARS
+        and not _ends_with_read_more(text)
+        and not any(phrase in lowered for phrase in _PAYWALL_PHRASES)
+    )
+
+
+# The feed body must cover this share of the linked article's prose to count as full.
+FULL_BODY_COVERAGE = 0.8
+
+
+async def verify_full_body(article: Dict[str, Any]) -> str:
+    """Compare a "full" feed body with the article page it links to.
+
+    An unmarked excerpt looks like a full body until it is set against the
+    article. Returns "full" when the feed covers the page's prose, "summary"
+    when the page has clearly more, and "unverified" when the page cannot be read.
+    """
+    if article.get("content_kind") != "full":
+        return article.get("content_kind", "summary")
+    from x_reader.evidence import prose_chars, visible_text
+    from x_reader.fetchers.jina import CrossPlatformRedirect, fetch_html_page
+    from x_reader.routing import detect_platform
+
+    def article_pages_only(hop: str) -> None:
+        if detect_platform(hop) != "generic":
+            raise CrossPlatformRedirect(hop, detect_platform(hop))
+
+    link = str(article.get("url") or "")
+    if not link.startswith(("http://", "https://")) or detect_platform(link) != "generic":
+        return "unverified"  # no article page to compare with (a video, a post, ...)
+    try:
+        page = await asyncio.to_thread(fetch_html_page, link, hop_guard=article_pages_only)
+    except Exception as exc:
+        logger.warning(f"RSS article page not readable ({type(exc).__name__}); body unverified")
+        return "unverified"
+    feed_prose = prose_chars(visible_text(article.get("summary") or ""))
+    page_prose = prose_chars(visible_text(page["content"]))
+    if page_prose and feed_prose < FULL_BODY_COVERAGE * page_prose:
+        return "summary"
+    return "full"
 
 
 async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:

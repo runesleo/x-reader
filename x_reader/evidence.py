@@ -98,14 +98,20 @@ def visible_text(content: str) -> str:
     return "\n".join(" ".join(line.split()) for line in text.splitlines()).strip()
 
 
-def prose_chars(text: str) -> int:
-    """Characters in sentence-like lines: six or more words, or 20+ CJK characters.
+_SENTENCE_END = re.compile(r"[.!?;:](?:[\"')\]]*)(?:\s|$)|[。！？；]")
 
-    Menus, buttons, captions, link lists and character runs do not count.
+
+def prose_chars(text: str) -> int:
+    """Characters in sentence-like lines.
+
+    A line counts when it has six or more words, or 20+ CJK characters, and
+    contains sentence punctuation; menus, headline lists, buttons, captions and
+    character runs do not count.
     """
     total = 0
     for line in text.splitlines():
-        if (len(line) >= 40 and len(line.split()) >= 6) or len(_CJK.findall(line)) >= 20:
+        long_enough = (len(line) >= 40 and len(line.split()) >= 6) or len(_CJK.findall(line)) >= 20
+        if long_enough and _SENTENCE_END.search(line):
             total += len(line)
     return total
 
@@ -120,7 +126,7 @@ _PAYWALL_PHRASES = (
     "register to continue reading", "create a free account to continue",
     "log in to read the full", "sign in to read the full",
     "reached your free article limit", "reached your article limit",
-    "upgrade to paid to read", "keep reading with a 7-day free trial",
+    "upgrade to paid to read", "keep reading with a 7-day free trial", "to keep reading this post",
     "订阅后阅读", "订阅后查看", "付费阅读", "付费后阅读", "会员专享", "开通会员后",
     "登录后查看全文", "登录后阅读全文", "解锁全文", "购买后阅读",
 )
@@ -133,7 +139,13 @@ _UNAVAILABLE_PHRASES = (
 _CONSENT_PHRASES = (
     "we value your privacy", "accept all cookies", "manage cookie preferences",
     "cookie consent", "we use cookies", "this site uses cookies",
-    "your privacy choices", "consent to the use of cookies",
+    "your privacy choices", "consent to the use of cookies", "reject all",
+    "and our partners", "legitimate interest", "manage preferences", "consent preferences",
+)
+_CONSENT_TITLES = ("before you continue", "cookie", "consent", "privacy choices", "your privacy")
+_TEASER_TAIL = (
+    "continue reading", "keep reading", "read the full story", "read the full article",
+    "read the rest of", "继续阅读", "阅读全文", "展开全文", "查看全文", "阅读原文",
 )
 # Pages whose substance is audio/video x-reader does not read on the generic path.
 _MEDIA_PAGE_HOSTS = (
@@ -387,7 +399,7 @@ def _classify_article(source: str, title: str, content: str, extra: dict) -> dic
     """WeChat article: unavailable notices fail; image-carried or container-less reads do not pass."""
     body = visible_text(content)
     head = f"{title}\n{body[:600]}"
-    if any(phrase in head for phrase in _WECHAT_UNAVAILABLE):
+    if prose_chars(body) < 600 and any(phrase in head for phrase in _WECHAT_UNAVAILABLE):
         return {
             "status": FAIL,
             "reason_code": "source_unavailable",
@@ -439,29 +451,46 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "generic reader returned a login/authentication shell",
             "components": {"text_body": FAIL},
         }
-    head = f"{title.lower()}\n{lowered[:600]}"
-    if shell_state == "challenge_or_error" or (
-        prose < 600 and any(phrase in lowered for phrase in _CONSENT_PHRASES)
-    ):
+    head = lowered[:600]
+    consent_hits = sum(phrase in lowered for phrase in _CONSENT_PHRASES)
+    consent_wall = (
+        consent_hits >= 3
+        or (consent_hits and any(marker in title.lower() for marker in _CONSENT_TITLES))
+        or (consent_hits and prose < 600)
+    )
+    if shell_state == "challenge_or_error" or consent_wall:
         return {
             "status": FAIL,
             "reason_code": "challenge_or_error",
             "evidence": "generic reader returned an error, challenge or consent shell",
             "components": {"text_body": FAIL},
         }
-    if any(phrase in head for phrase in _UNAVAILABLE_PHRASES):
+    # A real article can mention "page not found"; a missing page has little else.
+    if prose < 600 and any(phrase in f"{title.lower()}\n{head}" for phrase in _UNAVAILABLE_PHRASES):
         return {
             "status": FAIL,
             "reason_code": "source_unavailable",
             "evidence": "the page reports that the content is missing or removed",
             "components": {"text_body": FAIL},
         }
-    if any(phrase in lowered for phrase in _PAYWALL_PHRASES):
+    if any(phrase in lowered for phrase in _PAYWALL_PHRASES) or any(
+        marker in lowered[-300:] for marker in _TEASER_TAIL
+    ):
         return {
             "status": PARTIAL,
             "reason_code": "paywall_or_teaser",
-            "evidence": "some page text was read, but the page gates the rest behind a subscription or login",
+            "evidence": "some page text was read, but the page gates or cuts off the rest",
             "components": {"text_body": PARTIAL},
+        }
+    media = extra.get("embedded_media")
+    media_count = media if isinstance(media, int) and not isinstance(media, bool) else None
+    page_url = str(payload.get("url") or "")
+    if (media_count or 0) > 0 or _host_in(page_url, _MEDIA_PAGE_HOSTS):
+        return {
+            "status": PARTIAL,
+            "reason_code": "embedded_media_unread",
+            "evidence": "page text was read, but the page carries audio/video that was not",
+            "components": {"text_body": PASS, "media": PARTIAL},
         }
     if prose < MIN_GENERIC_BODY_CHARS:
         return {
@@ -470,27 +499,22 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "generic reader returned text, but it is too thin to prove source coverage",
             "components": {"text_body": UNKNOWN},
         }
-    if extra.get("redirects_verified") is False:
+    if extra.get("redirects_verified") is not True or media_count != 0:
         return {
             "status": UNKNOWN,
-            "reason_code": "redirect_target_unverified",
-            "evidence": "page text was read, but where the URL redirects could not be verified",
+            "reason_code": "page_unverified",
+            "evidence": (
+                "page text was read, but x-reader could not load the page itself to check "
+                "where it leads and whether it embeds audio/video"
+            ),
             "components": {"text_body": UNKNOWN},
-        }
-    page_url = str(payload.get("url") or "")
-    if _host_in(page_url, _MEDIA_PAGE_HOSTS):
-        return {
-            "status": PARTIAL,
-            "reason_code": "embedded_media_unread",
-            "evidence": "page text was read, but this is a media page whose audio/video was not",
-            "components": {"text_body": PASS, "media": PARTIAL},
         }
     return {
         "status": PASS,
         "reason_code": "text_body_read",
         "evidence": (
-            f"{prose} characters of page prose read; no login, paywall, consent or challenge "
-            "markers detected"
+            f"{prose} characters of page prose read; no login, paywall, consent, teaser or "
+            "embedded audio/video detected"
         ),
         "components": {"text_body": PASS},
     }
@@ -536,7 +560,7 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
         quote = extra.get("quote_status")
         if quote == "read":
             components["quoted_post"] = PASS
-        elif quote in ("media_unread", "unknown"):
+        elif quote in ("media_unread", "incomplete", "unknown"):
             components["quoted_post"] = PARTIAL
             gaps.append(("quoted_post_incomplete", "the quoted post or its media was not fully retrieved"))
         if extra.get("poll_status") == "read":
@@ -660,16 +684,25 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     if source == "rss" and content:
         body = visible_text(content)
+        lowered = body.lower()
         if (
             extra.get("rss_content") == "full"
             and prose_chars(body) >= MIN_GENERIC_BODY_CHARS
             and not _ends_with_read_more(body)
+            and not any(phrase in lowered for phrase in _PAYWALL_PHRASES)
         ):
             return {
                 "status": PASS,
                 "reason_code": "text_body_read",
-                "evidence": "full article body carried by the feed",
+                "evidence": "the feed carries the article body (checked against the article page)",
                 "components": {"text_body": PASS},
+            }
+        if extra.get("rss_content") == "unverified":
+            return {
+                "status": PARTIAL,
+                "reason_code": "feed_body_unverified",
+                "evidence": "the feed carries a long body, but the article page could not be read to confirm it is complete",
+                "components": {"text_body": PARTIAL},
             }
         return {
             "status": PARTIAL,

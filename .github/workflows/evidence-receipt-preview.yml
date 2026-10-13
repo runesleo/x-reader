@@ -1,4 +1,7 @@
-name: Evidence Receipt Temporary Preview
+name: Evidence Receipt Live Canary
+
+# Runs the hosted web surface on the runner and reads live sources through its
+# HTTP API. Nothing is exposed publicly: the server listens on 127.0.0.1 only.
 
 on:
   workflow_dispatch:
@@ -7,11 +10,11 @@ permissions:
   contents: read
 
 jobs:
-  preview:
+  canary:
     runs-on: ubuntu-latest
-    timeout-minutes: 65
+    timeout-minutes: 15
     steps:
-      - name: Checkout product branch
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -25,7 +28,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .
 
-      - name: Start Evidence Receipt
+      - name: Start Evidence Receipt on localhost
         run: |
           nohup python -m x_reader.web_app --host 127.0.0.1 --port 8787 >/tmp/x-reader-web.log 2>&1 &
           for i in $(seq 1 30); do
@@ -37,61 +40,13 @@ jobs:
           cat /tmp/x-reader-web.log
           exit 1
 
-      - name: Install pinned cloudflared
-        run: |
-          curl -fsSL https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-linux-amd64 -o /tmp/cloudflared
-          chmod +x /tmp/cloudflared
-          /tmp/cloudflared --version
-
-      - name: Start temporary public tunnel
-        run: |
-          nohup /tmp/cloudflared tunnel --url http://127.0.0.1:8787 --no-autoupdate >/tmp/cloudflared.log 2>&1 &
-          for i in $(seq 1 45); do
-            url=$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/cloudflared.log | head -n1 || true)
-            if [ -n "$url" ]; then
-              echo "PREVIEW_URL=$url" >> "$GITHUB_ENV"
-              echo "### x-reader Evidence Receipt temporary preview" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "$url" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            sleep 1
-          done
-          cat /tmp/cloudflared.log
-          exit 1
-
-      - name: Wait for public preview readiness
+      - name: Live canary
         run: |
           python - <<'PY'
           import json
-          import os
-          import time
           import urllib.request
 
-          base = os.environ["PREVIEW_URL"].rstrip("/")
-          last_error = None
-          for attempt in range(60):
-              try:
-                  with urllib.request.urlopen(base + "/healthz", timeout=10) as response:
-                      health = json.load(response)
-                  if health.get("ok") is True:
-                      print(f"PUBLIC_PREVIEW_READY after {attempt + 1} attempt(s)")
-                      break
-              except Exception as exc:
-                  last_error = exc
-              time.sleep(2)
-          else:
-              raise RuntimeError(f"public preview did not become ready: {last_error}")
-          PY
-
-      - name: Live preview canary
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import urllib.request
-
-          base = os.environ["PREVIEW_URL"].rstrip("/")
+          base = "http://127.0.0.1:8787"
 
           def read(url):
               body = json.dumps({"url": url}).encode()
@@ -104,9 +59,12 @@ jobs:
               with urllib.request.urlopen(request, timeout=90) as response:
                   return json.load(response)
 
-          generic = read("https://example.com")
-          assert generic["ok"] is True
-          assert generic["receipt"]["status"] == "PASS", generic["receipt"]
+          article = read("https://en.wikipedia.org/wiki/Unix")
+          assert article["ok"] is True
+          assert article["receipt"]["status"] == "PASS", article["receipt"]
+
+          thin = read("https://example.com")
+          assert thin["receipt"]["status"] != "PASS", thin["receipt"]
 
           mixed = read("https://x.com/dontbesilent/status/2103875422522077377")
           assert mixed["ok"] is True
@@ -115,24 +73,8 @@ jobs:
           assert mixed["receipt"]["components"]["attached_media"] == "PARTIAL"
 
           print("HEALTH=PASS")
-          print("GENERIC_WEB=PASS")
+          print("GENERIC_ARTICLE=PASS")
+          print("THIN_PAGE=NOT_PASS")
           print("MIXED_MEDIA_X=PARTIAL_EXPECTED")
-          print("LIVE_PREVIEW_CANARY=PASS")
+          print("LIVE_CANARY=PASS")
           PY
-
-      - name: Write preview URL receipt
-        run: |
-          printf '%s\n' "$PREVIEW_URL" > /tmp/x-reader-preview-url.txt
-
-      - name: Upload preview URL receipt
-        uses: actions/upload-artifact@v4
-        with:
-          name: x-reader-preview-url
-          path: /tmp/x-reader-preview-url.txt
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Keep preview available for review
-        run: |
-          echo "Preview remains available for up to 60 minutes: $PREVIEW_URL"
-          sleep 3600

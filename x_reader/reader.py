@@ -122,10 +122,12 @@ class UniversalReader:
             return from_podcast(data)
 
         if platform == "rss":
-            from x_reader.fetchers.rss import fetch_rss
+            from x_reader.fetchers.rss import fetch_rss, verify_full_body
             articles = await fetch_rss(url, limit=1)
             if articles:
-                return from_rss(articles[0])
+                article = articles[0]
+                article["content_kind"] = await verify_full_body(article)
+                return from_rss(article)
             raise ValueError(f"No articles found in RSS feed: {url}")
 
         if platform == "telegram":
@@ -145,51 +147,60 @@ class UniversalReader:
         return await self._fetch_generic(url, redirected)
 
     async def _fetch_generic(self, url: str, redirected: bool) -> UnifiedContent:
-        """Read any other page; a redirect into another platform goes to that reader."""
-        from x_reader.fetchers.jina import CrossPlatformRedirect, fetch_direct_html, resolve_final_url
+        """Read any other page; a redirect into another platform goes to that reader.
 
-        # Jina follows redirects on its side and reports the requested URL, so the
-        # final page is resolved here first (pinned, validated hops, no bodies).
-        final_url, redirects_verified = url, False
-        try:
-            final_url = await asyncio.to_thread(resolve_final_url, url)
-            redirects_verified = True
-        except ValueError:
-            raise  # a hop points at a private/special address or a non-http scheme
-        except Exception as exc:
-            logger.warning(f"Redirect check failed ({type(exc).__name__}); continuing unverified")
-
-        target = detect_platform(final_url)
-        if target != "generic":
-            return await self._redispatch(target, final_url, redirected)
+        x-reader first loads the page itself over pinned, validated hops: that proves
+        where the URL leads and shows embedded audio/video. Jina follows redirects on
+        its own side and may be sent elsewhere, so its text is only "verified" when
+        the direct read succeeded and, on the hosted surface, never: there the
+        receipt must describe the text this process fetched.
+        """
+        from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars, visible_text
+        from x_reader.fetchers.jina import BlockedDestination, CrossPlatformRedirect, fetch_html_page
 
         def generic_only(hop: str) -> None:
             hop_platform = detect_platform(hop)
             if hop_platform != "generic":
                 raise CrossPlatformRedirect(hop, hop_platform)
 
-        logger.info(f"Using Jina fallback for: {final_url}")
+        page = None
         try:
-            data = await asyncio.to_thread(fetch_via_jina, final_url)
+            page = await asyncio.to_thread(fetch_html_page, url, hop_guard=generic_only)
+        except CrossPlatformRedirect as hop:
+            return await self._redispatch(hop.platform, hop.url, redirected)
+        except BlockedDestination:
+            raise
         except Exception as exc:
-            logger.warning(
-                f"Jina generic fallback failed ({type(exc).__name__}); trying direct HTML"
-            )
+            logger.warning(f"Direct page read failed ({type(exc).__name__}); trying Jina unverified")
+
+        hosted = hosted_mode()
+        target_url = page["url"] if page else url
+        page_usable = bool(page) and len(page["content"]) >= 40
+        substantial = bool(page) and prose_chars(visible_text(page["content"])) >= MIN_GENERIC_BODY_CHARS
+
+        if hosted and substantial:
+            data, verified = page, True  # the text shown is the text that was checked
+        else:
             try:
-                data = await asyncio.to_thread(fetch_direct_html, final_url, hop_guard=generic_only)
-            except CrossPlatformRedirect as hop:
-                return await self._redispatch(hop.platform, hop.url, redirected)
-            redirects_verified = True  # the direct fetcher checked every hop itself
+                data = await asyncio.to_thread(fetch_via_jina, target_url)
+                # Locally a successful direct read vouches for where the URL leads.
+                verified = bool(page) and not hosted
+            except Exception as exc:
+                if not page_usable:
+                    raise
+                logger.warning(f"Jina read failed ({type(exc).__name__}); using the direct read")
+                data, verified = page, True
 
         return UnifiedContent(
             source_type=SourceType.MANUAL,
-            source_name=urlparse(final_url).netloc,
+            source_name=urlparse(target_url).netloc,
             title=data["title"],
             content=data["content"],
-            url=data.get("url", final_url),
+            url=target_url,
             extra={
                 "fetch_method": data.get("fetch_method", "jina"),
-                "redirects_verified": redirects_verified,
+                "redirects_verified": verified,
+                "embedded_media": page["embedded_media"] if page else None,
             },
         )
 

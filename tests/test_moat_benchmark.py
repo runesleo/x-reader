@@ -51,7 +51,7 @@ class MoatBenchmarkTest(unittest.TestCase):
         command = run.call_args.args[0]
         env = run.call_args.kwargs["env"]
         self.assertIn("--media-full-long", command)
-        self.assertNotIn("OBSIDIAN_VAULT", env)
+        self.assertEqual(env["OBSIDIAN_VAULT"], "")
         self.assertIn("X_READER_LONG_CACHE_DIR", env)
         self.assertIn("xr-moat-", env["X_READER_LONG_CACHE_DIR"])
         self.assertFalse(result["media_complete"])
@@ -93,7 +93,7 @@ class MoatBenchmarkTest(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertIn("--media-full-short", command)
         self.assertEqual(run.call_args.kwargs["env"]["OUTPUT_DIR"].startswith("/"), True)
-        self.assertNotIn("OBSIDIAN_VAULT", run.call_args.kwargs["env"])
+        self.assertEqual(run.call_args.kwargs["env"]["OBSIDIAN_VAULT"], "")
         self.assertTrue(result["media_complete"])
         self.assertEqual(result["evidence_status"], "PASS")
         self.assertEqual(moat.classify(row, result), "MEDIA_COMPLETE")

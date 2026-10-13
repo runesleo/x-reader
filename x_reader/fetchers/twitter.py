@@ -204,9 +204,13 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
             result["quote_status"] = "unknown"
         else:
             result["quote_text"] = f"[Quoted post by @{quote_author}]\n{quote_text}"
-            result["quote_status"] = (
-                "read" if _media_status_from_fxtwitter(quote) == "none" else "media_unread"
-            )
+            if _media_status_from_fxtwitter(quote) != "none":
+                result["quote_status"] = "media_unread"
+            elif quote.get("quote") or quote.get("poll") or quote.get("article") or _looks_like_thread(quote_text):
+                # The quoted post carries its own layers; only its text was read.
+                result["quote_status"] = "incomplete"
+            else:
+                result["quote_status"] = "read"
     elif quote:
         result["quote_status"] = "unknown"
     poll = tweet.get("poll")

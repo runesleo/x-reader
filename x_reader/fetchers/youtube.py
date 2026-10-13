@@ -151,22 +151,30 @@ def _parse_srt(filepath: str) -> tuple:
 
     text_lines = []
     cues = []
+    cue_start = cue_end = None
+    last_line, last_end = None, None
 
     for line in lines:
         line = line.strip()
         if '-->' in line:
             times = _CUE_TIME.findall(line)
             if len(times) >= 2:
-                cues.append((_cue_seconds(times[0]), _cue_seconds(times[1])))
+                cue_start, cue_end = _cue_seconds(times[0]), _cue_seconds(times[1])
+                cues.append((cue_start, cue_end))
             continue
         if not line or line.isdigit():
             continue
         if line.startswith('[') and line.endswith(']'):
             continue
-        # Auto-captions repeat the previous line as they roll; a line repeated
-        # later (a chorus, a catchphrase) is real speech and is kept.
-        if not text_lines or text_lines[-1] != line:
+        # Auto-captions repeat the previous line while it rolls into the next
+        # cue; the same words after a pause are new speech and are kept.
+        rolling = (
+            line == last_line and cue_start is not None and last_end is not None
+            and cue_start - last_end <= 1.0
+        )
+        if not rolling:
             text_lines.append(line)
+        last_line, last_end = line, cue_end
 
     return " ".join(text_lines), cues
 
@@ -310,18 +318,24 @@ async def fetch_youtube(url: str, sub_lang: str = "en") -> Dict[str, Any]:
     jina_data = fetch_via_jina(video_url or url)
     title = jina_data["title"]
 
-    # Step 2: Try yt-dlp subtitles (with timing, so coverage can be proven)
+    # Step 2: Try yt-dlp subtitles (with timing, so coverage can be proven).
+    # The hosted surface runs no external tools: a hosted read is one process.
+    from x_reader.routing import hosted_mode
+    if hosted_mode():
+        video_url_for_tools = ""
+    else:
+        video_url_for_tools = video_url
     subs = {"text": "", "cues": [], "duration": None}
-    if video_url:
+    if video_url_for_tools:
         logger.info(f"Extracting subtitles ({sub_lang})...")
-        subs = _get_subtitles_via_ytdlp(video_url, lang=sub_lang)
+        subs = _get_subtitles_via_ytdlp(video_url_for_tools, lang=sub_lang)
     transcript = subs["text"]
     transcript_source = "subtitles" if transcript else ""
 
     # Step 3: No subtitles? Try Whisper transcription
-    if not transcript and video_url:
+    if not transcript and video_url_for_tools:
         logger.info("No subtitles available, trying Whisper transcription...")
-        transcript = _transcribe_via_whisper(video_url)
+        transcript = _transcribe_via_whisper(video_url_for_tools)
         transcript_source = "whisper" if transcript else ""
 
     if transcript:

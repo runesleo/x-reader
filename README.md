@@ -119,7 +119,7 @@ x-reader makes these distinctions explicit:
 | Source | Base read path | Media / gated completion |
 |---|---|---|
 | X / Twitter | oEmbed → FxTwitter → Article/Jina → Playwright | Agent Skill can inspect attached media with local media tools |
-| Web / articles | Redirect check → Jina Reader → pinned direct HTML | A redirect into X, YouTube, podcasts, etc. is handed to that reader |
+| Web / articles | Pinned direct read (checks redirects and embedded audio/video) → Jina Reader text | A redirect into X, YouTube, podcasts, etc. is handed to that reader; the hosted beta shows the direct read |
 | YouTube | yt-dlp metadata/subtitles | Groq Whisper fallback when configured |
 | Bilibili | Bilibili API | Subtitle/audio transcription workflow |
 | WeChat | Jina → Playwright | Headless browser fallback for public articles; saved login sessions are not used yet |

@@ -94,7 +94,8 @@ def x_reader_provider(row: dict[str, Any], timeout: int,
         env["INBOX_FILE"] = str(Path(tmp) / "inbox.json")
         # Benchmark reads must not write into a user's Obsidian vault or
         # persistent content hub, even if the invoking shell has those set.
-        env.pop("OBSIDIAN_VAULT", None)
+        # Empty rather than unset: the CLI loads .env, which would refill a missing key.
+        env["OBSIDIAN_VAULT"] = ""
         env["OUTPUT_DIR"] = tmp
         if podcast_full_long:
             # A benchmark's default must not silently persist raw audio or
@@ -384,14 +385,16 @@ def main() -> int:
                 item = {
                     "provider": p, "id": row["id"], "category": row["category"],
                     "url": row["url"], "requires_auth": bool(row.get("requires_auth")),
-                    "media_expected": row.get("media_expected"), "outcome": "FAIL",
+                    "media_expected": row.get("media_expected"),
+                    "expected_block": bool(row.get("expected_block")), "outcome": "FAIL",
                     "ok": False, "error": "timeout",
                 }
             except Exception as exc:
                 item = {
                     "provider": p, "id": row["id"], "category": row["category"],
                     "url": row["url"], "requires_auth": bool(row.get("requires_auth")),
-                    "media_expected": row.get("media_expected"), "outcome": "FAIL",
+                    "media_expected": row.get("media_expected"),
+                    "expected_block": bool(row.get("expected_block")), "outcome": "FAIL",
                     "ok": False, "error": f"{type(exc).__name__}: {exc}",
                 }
             results.append(item)

@@ -24,9 +24,9 @@ The following invariants all have to hold before `PASS / spoken_media_complete_v
 2. The pinned-IP downloader probes total bytes with HTTP 206 `Content-Range`; if source exceeds 2 MiB it stops before media download.
 3. A second HTTP 206 returns **exactly** the complete 0..N-1 range, matching total length and audio MIME. Reject redirects, HTML, wrong ranges, changed length or truncated bodies. A maximum of three bounded retries is allowed, each with a fresh source-byte probe. No fallback accepts unverified data.
 4. SHA-256 is computed from the **entire encoded media**; an audio-source URL digest is recorded without exposing signed CDN query strings.
-5. Local `ffprobe` establishes encoded duration, capped at 120 s; `ffmpeg` decodes **without trimming** and with only the `file` protocol. Decoded PCM duration must match source duration within a small codec tolerance.
+5. Local `ffprobe` establishes encoded duration, capped at 120 s; `ffmpeg` decodes **without trimming** and with only the `file` protocol. Decoded PCM duration must match source duration within 0.5 s (codec priming/padding) and cover at least 95 % of it.
 6. Local Whisper tiny CPU consumes the complete decoded PCM file. ASR segment boundaries must be consistent with audio duration and the transcript nonempty. The canonical content contains this transcript; receipt recomputes its SHA-256 before accepting the proof.
-7. Structured coverage must report interval `[0,decoded_duration]`, `processed_seconds`, `coverage_ratio=1.0`, `verified_complete_bytes=true` and matching byte/duration fields. `has_transcript=true` alone is explicitly insufficient.
+7. Structured coverage must report interval `[0,decoded_duration]`, `processed_seconds`, `coverage_ratio` equal to processed / declared duration, `verified_complete_bytes=true` and matching byte/duration fields. `has_transcript=true` alone is explicitly insufficient.
 
 The receipt returns integrity metadata only: public source URL, audio/transcript SHA256, encoded bytes, encoded/decoded/processed seconds, coverage interval and ratio, ASR segment count. It **never embeds raw CDN URLs, local model-cache paths, account cookies or full spoken text**.
 

@@ -13,8 +13,11 @@ from typing import Mapping, Optional, Sequence
 # After the tool exits or is killed, keep reading its pipes this long at most.
 _DRAIN_GRACE_SECONDS = 1.0
 
-# Ceilings applied by the hosted reader process to itself; children inherit them.
+# Ceilings the hosted reader process applies to itself. A hosted read runs in a
+# single process (no external tools), so these are per-request ceilings. A read
+# peaks around 260 MiB of address space and 40 MiB resident.
 HOSTED_CPU_SECONDS = 120
+HOSTED_MAX_ADDRESS_SPACE_BYTES = 768 * 1024 * 1024
 HOSTED_MAX_FILE_BYTES = 64 * 1024 * 1024
 HOSTED_MAX_OPEN_FILES = 256
 
@@ -185,19 +188,20 @@ def _run_without_selectors(cmd, timeout, env, max_output_bytes, text) -> subproc
 
 
 def apply_hosted_limits() -> None:
-    """Per-request ceilings for the hosted reader process and every tool it starts.
+    """Per-request ceilings for the hosted reader process.
 
-    Called by the CLI itself when X_READER_HOSTED=1. Limits are inherited by
-    children: CPU seconds per process, size of any file written, open files, no
-    core dumps. The process also volunteers as the first OOM-kill candidate, so
-    memory pressure inside the service ends a request, not the server.
-    Best effort: unsupported limits are skipped.
+    Called by the CLI itself when X_READER_HOSTED=1: memory (address space), CPU
+    seconds, size of any file written, open files, no core dumps. The process
+    also volunteers as the first OOM-kill candidate, so memory pressure inside
+    the service ends a request, not the server. Best effort: unsupported limits
+    are skipped.
     """
     try:
         import resource
     except ImportError:  # Windows
         return
     for name, value in (
+        ("RLIMIT_AS", HOSTED_MAX_ADDRESS_SPACE_BYTES),
         ("RLIMIT_CPU", HOSTED_CPU_SECONDS),
         ("RLIMIT_FSIZE", HOSTED_MAX_FILE_BYTES),
         ("RLIMIT_NOFILE", HOSTED_MAX_OPEN_FILES),
