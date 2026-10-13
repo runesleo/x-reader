@@ -139,7 +139,7 @@ class MoatBenchmarkTest(unittest.TestCase):
              "PARTIAL", "PARTIAL_MEDIA"),
             # media_status=unknown used to default to PASS
             ({"source_type": "twitter", "media_type": "text", "title": "X", "content": "post text " * 30,
-              "extra": {"fetch_method": "oembed", "media_status": "unknown"}},
+              "extra": {"fetch_method": "oembed", "post_id_verified": True, "media_status": "unknown"}},
              "PARTIAL", "PARTIAL_MEDIA"),
             ({"source_type": "manual", "media_type": "text", "title": "Nav", "content": "Home\nAbout\n" * 60,
               "extra": {"fetch_method": "jina_pinned", "redirects_verified": True}},

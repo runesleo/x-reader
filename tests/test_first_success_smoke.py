@@ -21,7 +21,7 @@ class FirstSuccessSmokeTest(unittest.TestCase):
                 "content": "post text",
                 "media_type": "text",
                 "extra": {
-                    "fetch_method": "oembed",
+                    "fetch_method": "oembed", "post_id_verified": True,
                     "media_status": "present",
                 },
             }
@@ -40,7 +40,7 @@ class FirstSuccessSmokeTest(unittest.TestCase):
                 "content": "plain public post text",
                 "media_type": "text",
                 "extra": {
-                    "fetch_method": "oembed",
+                    "fetch_method": "oembed", "post_id_verified": True,
                     "media_status": "none",
                     "structure_status": "verified",
                     "quote_status": "none",
@@ -61,7 +61,7 @@ class FirstSuccessSmokeTest(unittest.TestCase):
                 "content": "plain public post text",
                 "media_type": "text",
                 "extra": {
-                    "fetch_method": "oembed",
+                    "fetch_method": "oembed", "post_id_verified": True,
                     "media_status": "unknown",
                 },
             }

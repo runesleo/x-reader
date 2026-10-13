@@ -90,7 +90,13 @@ def normalize_input_url(raw_url: str) -> str:
         raise HostedPolicyError("Only absolute http(s) URLs are supported")
     if parsed.username or parsed.password:
         raise HostedPolicyError("Credential-bearing URLs are not supported")
-    return url
+    from x_reader.utils.url_validator import canonical_url
+
+    try:
+        # Policy, reader and connection all see the hostname as it is connected to.
+        return canonical_url(url)
+    except ValueError as exc:
+        raise HostedPolicyError("URL hostname is not valid") from exc
 
 
 def validate_public_url(url: str) -> str:

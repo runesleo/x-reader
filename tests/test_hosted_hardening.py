@@ -485,8 +485,8 @@ class GenericReadTest(unittest.TestCase):
             page = fetch_html_page("https://e.com/a")
         return page, classify_payload({
             "source_type": "manual", "title": page["title"], "content": page["content"],
-            "extra": {"redirects_verified": True, "body_verified": True, "embedded_media": page["embedded_media"],
-                      "page_signals": page["page_signals"]}})
+            "extra": {"fetch_method": "direct_html_pinned", "redirects_verified": True, "body_verified": True,
+                      "embedded_media": page["embedded_media"], "page_signals": page["page_signals"]}})
 
     def test_walls_beside_the_main_content_still_count(self):
         main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
@@ -543,13 +543,16 @@ class GenericReadTest(unittest.TestCase):
                 f"<html><head><title>T</title></head><body>{long_main}{notice}</body></html>")
             self.assertEqual(receipt["status"], "PARTIAL", notice)
 
-    def test_hidden_templates_do_not_count(self):
+    def test_hidden_markup_never_hides_a_wall(self):
+        # author CSS can always show hidden markup, so a hidden wall still counts;
+        # an inert <template> is never rendered and does not
         long_main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 3).splitlines()) + "</main>"
-        for template in ("<div hidden>Subscribe to continue reading.</div>",
-                         "<div style='display: none'>Please sign in to continue.</div>"):
+        for template, status in (("<div hidden>Subscribe to continue reading.</div>", "PARTIAL"),
+                                 ("<div style='display: none'>Please sign in to continue.</div>", "UNKNOWN"),
+                                 ("<template><div>Subscribe to continue reading.</div></template>", "PASS")):
             _page, receipt = self._page_receipt(
                 f"<html><head><title>T</title></head><body>{long_main}{template}</body></html>")
-            self.assertEqual(receipt["status"], "PASS", template)
+            self.assertEqual(receipt["status"], status, template)
 
     def test_unclosed_elements_end_with_their_parent(self):
         main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
@@ -562,18 +565,19 @@ class GenericReadTest(unittest.TestCase):
         sloppy = f"<html><head><title>T</title></head><body>{main}<p hidden>Template<div>Subscribe to continue reading.</div></body></html>"
         _page, receipt = self._page_receipt(sloppy)
         self.assertEqual(receipt["status"], "PARTIAL")
-        # ...and text it may hide cannot pass
-        for tag in ("p", "li", "td"):
-            body = f"<main><{tag} hidden>" + "".join(f"<span>{line}</span>" for line in (ARTICLE * 2).splitlines()) + "</main>"
+        # ...and text it hides is not page text, wherever the browser ends the element
+        spans = "".join(f"<span>{line}</span>" for line in (ARTICLE * 2).splitlines())
+        for body in (f"<main><p hidden>{spans}</p></main>", f"<main><ul><li hidden>{spans}</ul></main>",
+                     f"<main><table><tr><td hidden>{spans}</td></tr></table></main>"):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{body}</body></html>")
-            self.assertNotEqual(receipt["status"], "PASS", tag)
+            self.assertNotIn("careful argument", page["content"], body[:30])
+            self.assertNotEqual(receipt["status"], "PASS", body[:30])
 
     def test_content_of_unresolved_or_hidden_visibility_never_passes(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
         # an invalid later value is ignored, so the main content really is hidden
         hidden = f"<html><head><title>T</title></head><body><main style='display:none;display:bogus'>{article}</main><p>Short note.</p></body></html>"
         page, receipt = self._page_receipt(hidden)
-        self.assertNotIn("careful argument", page["content"])
         self.assertNotEqual(receipt["status"], "PASS")
         unresolved = f"<html><head><title>T</title></head><body><main style='display:var(--d)'>{article}</main></body></html>"
         page, receipt = self._page_receipt(unresolved)
@@ -595,6 +599,39 @@ class GenericReadTest(unittest.TestCase):
             tidy = f"<html><head><title>T</title></head><body><main>{template}{article}</main></body></html>"
             _page, receipt = self._page_receipt(tidy)
             self.assertEqual(receipt["status"], "PASS", template)
+
+    def test_markup_is_read_the_way_a_browser_builds_it(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        wall = "<div>We value your privacy. Accept all cookies.</div>"
+        cases = (
+            # a template's end tag cannot close the main around it
+            f"<main>{article}<template></main></template>{wall}</main>",
+            # a second button closes the first, so the wall is not inside the hidden one
+            f"<main>{article}</main><button hidden>old<button>Subscribe to continue reading.</button>",
+            # a <head> after the body is ignored, its content stays visible
+            f"<main>{article}</main></body><head><div>Subscribe to continue reading.</div>",
+            # SVG text and foreignObject content are seen as walls
+            f"<main>{article}</main><svg><foreignObject><div>Subscribe to continue reading.</div></foreignObject></svg>",
+            # raw-text noscript cannot close the main either
+            f"<main>{article}<noscript></main></noscript>{wall}</main>",
+        )
+        for body in cases:
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{body}</body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", body[-120:])
+
+    def test_markup_beyond_the_parse_budget_is_refused(self):
+        from x_reader.fetchers import jina
+
+        deep = "<div>" * (jina.MAX_PARSE_DEPTH + 10)
+        self.assertTrue(jina._extract_html_page(deep)["too_complex"])
+        many = "<br>" * (jina.MAX_PARSE_TAGS + 10)
+        self.assertTrue(jina._extract_html_page(many)["too_complex"])
+        # unclosed paragraphs do not nest, and scripts are not markup
+        ok = "<p>x" * 5000 + "<script>" + "<div>" * 5000 + "</script>"
+        self.assertFalse(jina._extract_html_page(ok)["too_complex"])
+        with patch("x_reader.fetchers.jina._download_html", return_value=(deep, "https://e.com/a")):
+            with self.assertRaises(ValueError):
+                jina.fetch_html_page("https://e.com/a")
 
     def test_frames_in_svg_and_shadow_roots_count(self):
         main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
@@ -678,8 +715,10 @@ class YoutubeTest(unittest.TestCase):
         self.assertEqual(state("YouTube Rewind 2018"), "ok")
         # a title discussing the error is still a video title; YouTube's own error titles are not
         self.assertEqual(state("How to fix 'Video unavailable' errors", "Video unavailable explained"), "ok")
-        for title in ("Video unavailable - YouTube", "Sign in to confirm your age - YouTube", "Private video"):
+        for title in ("Video unavailable - YouTube", "Sign in to confirm your age - YouTube", "Private video",
+                      "Video unavailable. - YouTube"):
             self.assertEqual(state(title), "unavailable", title)
+        self.assertEqual(state("Sign in to YouTube - YouTube"), "unidentified")
         for title in ("Before you continue to YouTube", "Sign in - YouTube", "Consent", ""):
             self.assertEqual(state(title, "Before you continue"), "unidentified", title)
         self.assertEqual(state("Bevor Sie zu YouTube weitergehen", "[Accept](https://consent.youtube.com/s)"),

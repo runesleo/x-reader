@@ -52,9 +52,13 @@ class BlockedDestination(ValueError):
     """A hop points at a private/special address, an unresolvable host or a non-http scheme."""
 
 
-# Never rendered as page text. A <template> is inert unless it declares a
-# shadow root; <svg> text is skipped, but frames in its foreignObject count.
-_SKIP_TAGS = {"script", "style", "noscript", "template"}
+# Never rendered as page text: head, scripts and styles, <noscript> (raw text
+# while scripts run), inert templates (one declaring a shadow root renders), the
+# fallback inside players, frames and canvases, and legacy no-frame blocks.
+_SKIP_TAGS = {
+    "head", "title", "script", "style", "noscript", "template", "iframe", "object", "video", "audio",
+    "canvas", "noembed", "noframes",
+}
 _BOILERPLATE_TAGS = {"nav", "footer", "aside"}
 _BLOCK_TAGS = {
     "p", "div", "article", "section", "main", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -68,12 +72,13 @@ _VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
     "source", "track", "wbr",
 }
-_FORMATTING_TAGS = {"a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"}
-_SCOPE_TAGS = {"applet", "button", "caption", "html", "marquee", "object", "select", "table", "td", "template", "th"}
 _OPTIONAL_END_TAGS = {
     "p", "li", "dt", "dd", "option", "optgroup", "tr", "td", "th", "thead", "tbody", "tfoot",
-    "colgroup", "caption", "rb", "rt", "rtc", "rp",
+    "colgroup", "caption", "rb", "rt", "rtc", "rp", "html", "head", "body",
 }
+_RAW_TEXT_TAGS = (
+    "script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "noscript", "plaintext",
+)
 
 
 _IMPORTANT = re.compile(r"!\s*important\s*$", re.IGNORECASE)
@@ -175,23 +180,6 @@ def _valid_display(value: str) -> bool:
     return 1 < len(parts) <= 3 and len(set(parts)) == len(parts) and all(p in _DISPLAY_PARTS for p in parts)
 
 
-def _is_hidden_element(attrs: dict) -> bool | None:
-    """True when provably not rendered: an effective inline display:none, or the
-    hidden attribute with no inline display overriding it. None when the inline
-    style leaves it open (unparseable, or display set through a custom
-    property). False otherwise: visibility (children can undo it), external
-    CSS and aria-hidden (assistive technology only) never hide."""
-    declarations = _inline_declarations(attrs.get("style") or "")
-    if declarations is None:
-        return None
-    display = _effective(declarations, "display", _valid_display)
-    if display == _UNRESOLVED:
-        return None
-    if display is not None:
-        return display == "none"
-    return "hidden" in attrs
-
-
 _CSS_LENGTH = re.compile(
     r"([+]?(?:\d+\.?\d*|\.\d+))(px|em|rem|%|vw|vh|vmin|vmax|vi|vb|pt|pc|cm|mm|in|q|ex|ch|lh|rlh"
     r"|cqw|cqh|cqi|cqb|cqmin|cqmax|svh|lvh|dvh|svw|lvw|dvw)"
@@ -221,6 +209,72 @@ def _tiny_html_size(value: str) -> bool:
     return bool(match) and not match.group(3) and int(match.group(1)) <= 1
 
 
+def _small_number(value: str, limit: float) -> bool:
+    match = re.fullmatch(r"([+-]?(?:\d+\.?\d*|\.\d+))(%?)", value)
+    return bool(match) and float(match.group(1)) / (100 if match.group(2) else 1) < limit
+
+
+_ALWAYS_HIDING = {
+    "all", "clip", "clip-path", "mask", "mask-image", "-webkit-mask", "-webkit-mask-image", "transform",
+    "translate", "scale", "rotate", "filter", "-webkit-line-clamp", "line-clamp",
+}
+_SIZES = {"height", "max-height", "width", "max-width", "block-size", "inline-size", "max-block-size", "max-inline-size"}
+_OVERFLOWS = {"overflow", "overflow-x", "overflow-y", "overflow-block", "overflow-inline"}
+# A custom property in these can switch the text off; in colors, sizes and fonts
+# it is a design token, judged like external CSS.
+_UNRESOLVED_HIDING = {"visibility", "content-visibility", "opacity", "display"}
+
+
+def _hides_text(name: str, value: str) -> bool:
+    """An inline declaration that can hide, clip or shrink an element's text away."""
+    if name in _ALWAYS_HIDING:
+        return value not in ("none", "auto", "initial", "unset", "normal", "revert", "revert-layer")
+    if re.search(r"\b(?:var|env|attr)\(", value):
+        return name in _UNRESOLVED_HIDING
+    if name == "visibility":
+        return value in ("hidden", "collapse")
+    if name == "content-visibility":
+        return value == "hidden"
+    if name == "opacity":
+        return _small_number(value, 0.1)
+    if name in ("font-size", "zoom"):
+        return value == "0" or _tiny_css_size(value) or _small_number(value, 0.1)
+    if name in ("color", "-webkit-text-fill-color"):
+        return value == "transparent" or bool(re.search(r"[,/]\s*0*\.?0*%?\s*\)$", value))
+    if name == "text-indent":
+        return value.startswith("-")
+    if name in _SIZES:
+        return _tiny_css_size(value)
+    if name == "position":
+        return value in ("absolute", "fixed")  # with offsets it may sit off-screen
+    return False
+
+
+def _content_visibility(attrs: dict) -> str:
+    """Whether an element's own markup shows its text: "hidden" (the hidden
+    attribute, or display:none as its only display declaration), "unknown" (a
+    style that cannot be parsed, or any other declaration that can hide, clip
+    or cut off text) or "visible". It decides only what counts as page text:
+    wall notices and frames count wherever they are."""
+    declarations = _inline_declarations(attrs.get("style") or "")
+    if declarations is None:
+        return "unknown"
+    names = {name for name, _value, _important in declarations}
+    if any(_hides_text(name, value) for name, value, _important in declarations):
+        return "unknown"
+    if names & _SIZES and any(
+            name in _OVERFLOWS and value in ("hidden", "clip", "scroll", "auto") for name, value, _i in declarations):
+        return "unknown"  # a box that clips or scrolls its text
+    displays = [value for name, value, _important in declarations if name == "display"]
+    if displays:
+        if not all(_valid_display(value) for value in displays):
+            return "unknown"
+        if "none" in displays:
+            return "hidden" if len(displays) == 1 else "unknown"
+        return "visible"  # an inline display overrides the hidden attribute
+    return "hidden" if "hidden" in attrs else "visible"
+
+
 # Inline properties that cannot make a 0/1-pixel frame show its content.
 _SIZE_NEUTRAL = {
     "display", "visibility", "border", "position", "top", "left", "right", "bottom", "margin",
@@ -229,21 +283,22 @@ _SIZE_NEUTRAL = {
 }
 
 
-def _is_hidden_embed(attrs: dict) -> bool:
-    """Hidden frames, or frames whose effective size is 0/1 pixel each way
-    (tracking pixels). A valid inline width/height overrides the attribute, an
-    invalid one is ignored, and without either the frame keeps its visible
-    default size. Any other inline property that could enlarge the frame
-    (transform, zoom, min-height, ...) or a style that cannot be parsed makes
-    it count as visible."""
-    if _is_hidden_element(attrs) is True:
-        return True
+def _is_tracking_frame(attrs: dict) -> bool:
+    """A frame with nothing to show: the hidden attribute or display:none on the
+    frame itself, or 0/1 pixel each way (a valid inline width/height overrides
+    the attribute, an invalid one is ignored, without either the frame keeps its
+    visible default size). Any other inline property that could show or enlarge
+    it (all, transform, zoom, min-height, ...) or a style that cannot be parsed
+    makes it count. A hidden container does not hide a frame."""
     declarations = _inline_declarations(attrs.get("style") or "")
     if declarations is None:
         return False
     for name, _value, _important in declarations:
         if name not in _SIZE_NEUTRAL and not name.startswith(("border-", "margin-", "padding-")):
             return False
+    displays = [value for name, value, _important in declarations if name == "display"]
+    if displays == ["none"] or (not displays and "hidden" in attrs):
+        return True
 
     def tiny(prop: str) -> bool:
         value = _effective(declarations, prop, _valid_css_size)
@@ -270,151 +325,186 @@ def _join_text(parts: list) -> str:
     return re.sub(r"\n{3,}", "\n\n", content).strip()
 
 
-def _extract_html_page(html: str) -> dict:
-    """{title, content, embeds, page_text, primary_used, visibility_unknown}.
+# Parse budgets: more tags or deeper nesting than this is refused before parsing.
+MAX_PARSE_TAGS = 150_000
+MAX_PARSE_DEPTH = 1_500
+MAX_PARSE_WORK = 20_000_000
+_TAG_TOKEN = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9:-]*)")
 
-    content is the page text, embeds the visible players/frames/plugins,
-    page_text every visible block, primary_used whether content is the page's
-    marked primary content, and visibility_unknown whether content includes
-    text under an inline style that cannot be resolved (so it may be hidden).
 
-    Page text: navigation, footers, asides and explicitly hidden elements are
-    dropped; when the page marks its primary content (every <main>, else every
-    <article>) and that region carries substantial prose, the text is that
-    region, so banners around it stay out. The page-wide text is every visible
-    block, navigation and footers included, so wall notices anywhere are seen.
-    Embeds are counted over the whole page, except hidden ones.
+def _prescan_markup(html: str) -> tuple:
+    """(too_complex, templates_unsure), in one linear pass over the tags.
+
+    too_complex: over the tag, nesting or parse-work budget. Open elements are
+    tracked the way a parser keeps them (an end tag closes its element and
+    whatever is still open inside it; stray end tags change nothing; optional
+    end tags, void elements and raw-text contents such as scripts do not
+    nest), and the work estimate adds the open depth at every tag, which is
+    what a tree builder's scope checks cost. templates_unsure: a <template>
+    whose content closes an element it did not open or leaves one open; the
+    parser does not model template contents, so such markup could reshape the
+    page around it.
     """
-    from html.parser import HTMLParser
+    if html.count("<") > MAX_PARSE_TAGS:
+        return True, False
+    lowered = html.lower()
+    stack: list = []  # open element names
+    open_count: dict = {}
+    templates: list = []  # per open template: {tag: open count inside it}
+    work = foreign = 0
+    unsure = False
+    position = 0
+    while True:
+        match = _TAG_TOKEN.search(html, position)
+        if not match:
+            break
+        closing, tag = bool(match.group(1)), match.group(2).lower()
+        position = match.end()
+        work += len(stack)
+        if work > MAX_PARSE_WORK:
+            return True, unsure
+        tag_end = html.find(">", position)
+        # "/>" closes an element only inside SVG/MathML; in HTML it is ignored.
+        self_closed = foreign > 0 and tag_end != -1 and html[tag_end - 1] == "/"
+        if tag in ("svg", "math") and not closing and not self_closed:
+            foreign += 1
+        elif tag in ("svg", "math") and closing:
+            foreign = max(0, foreign - 1)
+        if self_closed:
+            continue
+        if closing:
+            if templates:
+                if templates[-1].get(tag):
+                    templates[-1][tag] -= 1
+                elif tag == "template":
+                    unsure |= any(count for t, count in templates.pop().items() if t not in _OPTIONAL_END_TAGS)
+                elif tag not in _OPTIONAL_END_TAGS:
+                    unsure = True
+            if open_count.get(tag):
+                while stack:
+                    closed = stack.pop()
+                    open_count[closed] -= 1
+                    if closed == tag:
+                        break
+            continue
+        if tag == "template":
+            templates.append({})
+        elif templates and tag not in _VOID_TAGS:
+            templates[-1][tag] = templates[-1].get(tag, 0) + 1
+        if tag not in _VOID_TAGS and tag not in _OPTIONAL_END_TAGS:
+            stack.append(tag)
+            open_count[tag] = open_count.get(tag, 0) + 1
+            if len(stack) > MAX_PARSE_DEPTH:
+                return True, unsure
+        if tag in _RAW_TEXT_TAGS:
+            end = lowered.find("</" + tag, position)
+            if end == -1:
+                break
+            position = end
+    return False, unsure or bool(templates)
+
+
+def _extract_html_page(html: str) -> dict:
+    """{title, content, embeds, page_text, primary_used, visibility_unknown, too_complex}.
+
+    The page is parsed with a standard HTML5 tree builder (scripting on, so
+    <noscript> is raw text), so misnested or unclosed markup ends where a
+    browser ends it. content is the page text: navigation, footers, asides,
+    hidden elements and foreign (SVG/MathML) text are left out; when the page
+    marks its primary content (every <main>, else every <article>) and that
+    region carries substantial prose, content is that region, so banners around
+    it stay out. page_text is every rendered text block, hidden ones included,
+    so wall notices count wherever they sit. embeds counts players, frames and
+    plugins page-wide, except frames that are themselves hidden or 0/1-pixel.
+    visibility_unknown: content includes text under markup whose visibility
+    x-reader cannot settle, or template markup that could reshape the page.
+    """
+    import html5lib
     from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars
 
-    class _PageParser(HTMLParser):
-        """Tracks open elements on a stack, so closing an element also closes
-        everything left open inside it (as browsers do with sloppy markup)."""
+    too_complex, templates_unsure = _prescan_markup(html)
+    if too_complex:
+        return {"title": "", "content": "", "embeds": 0, "page_text": "", "primary_used": False,
+                "visibility_unknown": True, "too_complex": True}
+    root = html5lib.parse(html, treebuilder="etree", namespaceHTMLElements=False, scripting=True)
+    title_element = next(iter(root.iter("title")), None)
+    title = " ".join("".join(title_element.itertext()).split()) if title_element is not None else ""
 
-        def __init__(self):
-            super().__init__()
-            self.stack = []  # (tag, kinds) of open elements
-            self.depth = {"skip": 0, "svg": 0, "boiler": 0, "main": 0, "article": 0, "hidden": 0, "unknown": 0}
-            self.unknown_in = set()  # regions (body, main, article) holding text of unknown visibility
-            # Set once a hidden element ends out of order (misnested or unclosed markup):
-            # browsers may keep it open, so later text may be hidden.
-            self.hidden_end_unsure = False
-            self.in_head = self.in_title = False
-            self.title_parts, self.body_parts, self.gate_parts = [], [], []
-            self.main_parts, self.article_parts = [], []
-            self.embeds = 0
+    parts: dict = {"gate": [], "body": [], "main": [], "article": []}
+    unknown_in: set = set()
+    embeds = 0
+    base = {"skip": False, "foreign": False, "boiler": False, "main": False, "article": False,
+            "hidden": False, "unknown": False, "block": False}
 
-        def _append(self, chunk):
-            if self.depth["hidden"]:
-                return
-            self.gate_parts.append(chunk)
-            if self.depth["boiler"]:
-                return
-            regions = ["body"] + [region for region in ("main", "article") if self.depth[region]]
-            if (self.depth["unknown"] or self.hidden_end_unsure) and chunk != "\n":
-                self.unknown_in.update(regions)
-            self.body_parts.append(chunk)
-            if self.depth["main"]:
-                self.main_parts.append(chunk)
-            if self.depth["article"]:
-                self.article_parts.append(chunk)
+    def emit(text, state) -> None:
+        if not text or state["skip"]:
+            return
+        chunk = text if text == "\n" else text.strip()
+        if not chunk:
+            return
+        parts["gate"].append(chunk)
+        if state["foreign"] or state["boiler"] or state["hidden"]:
+            return
+        regions = ["body"] + [region for region in ("main", "article") if state[region]]
+        if state["unknown"] and chunk != "\n":
+            unknown_in.update(regions)
+        for region in regions:
+            parts[region].append(chunk)
 
-        def _close(self, tag) -> bool:
-            for index in range(len(self.stack) - 1, -1, -1):
-                if self.stack[index][0] == tag:
-                    closing = self.stack[index:]
-                    inner = [open_tag for open_tag, _kinds in closing[1:]]
-                    # Browsers re-nest around formatting elements and ignore end tags
-                    # that cross a table, cell or similar boundary; popping to the
-                    # target is only certain without either.
-                    if any("hidden" in kinds for _tag, kinds in closing) and (
-                            (tag in _FORMATTING_TAGS and inner) or any(t in _SCOPE_TAGS for t in inner)):
-                        self.hidden_end_unsure = True
-                    for _tag, kinds in closing:
-                        for kind in kinds:
-                            self.depth[kind] -= 1
-                    del self.stack[index:]
-                    return True
-            return False  # a stray end tag closes nothing
+    def child_state(element, parent) -> dict:
+        nonlocal embeds
+        tag = element.tag
+        foreign = parent["foreign"] or tag.startswith("{")
+        name = tag.rsplit("}", 1)[-1].lower()
+        attrs = {str(key).rsplit("}", 1)[-1]: value for key, value in element.attrib.items()}
+        if name in _EMBED_TAGS and not parent["skip"] and not _is_tracking_frame(attrs):
+            embeds += 1
+        shadow_root = name == "template" and ("shadowrootmode" in attrs or "shadowroot" in attrs)
+        visibility = "visible" if foreign else _content_visibility(attrs)
+        return {
+            "skip": parent["skip"] or (not foreign and name in _SKIP_TAGS and not shadow_root),
+            "foreign": foreign,
+            "boiler": parent["boiler"] or (not foreign and name in _BOILERPLATE_TAGS),
+            "main": parent["main"] or name == "main",
+            "article": parent["article"] or name == "article",
+            "hidden": parent["hidden"] or visibility == "hidden",
+            "unknown": parent["unknown"] or visibility == "unknown",
+            "block": not foreign and name in _BLOCK_TAGS,
+        }
 
-        def handle_starttag(self, tag, attrs):
-            tag = tag.lower()
-            values = {}
-            for name, value in attrs:
-                values.setdefault(name, value)  # browsers keep the first of repeated attributes
-            if tag == "head":
-                self.in_head = True
-                return
-            if tag == "title" and not self.depth["svg"]:
-                self.in_title = True
-                return
-            if (tag in _EMBED_TAGS and not self.depth["skip"] and not self.depth["hidden"]
-                    and not _is_hidden_embed(values)):
-                self.embeds += 1
-            if tag in _VOID_TAGS:
-                if not self.in_head and tag in _BLOCK_TAGS:
-                    self._append("\n")
-                return
-            if tag in ("p", "li") and tag in (open_tag for open_tag, _kinds in self.stack[-1:]):
-                self._close(tag)  # a new paragraph or item ends the open one
-            kinds = []
-            if tag in _SKIP_TAGS and not (tag == "template" and ("shadowrootmode" in values or "shadowroot" in values)):
-                kinds.append("skip")
-            if tag == "svg":
-                kinds.append("svg")
-            if tag in _BOILERPLATE_TAGS:
-                kinds.append("boiler")
-            if tag in ("main", "article"):
-                kinds.append(tag)
-            # Elements whose end tag may be left out end where a browser decides, so
-            # what they hide is uncertain: walls and frames in them still count, and
-            # text in them (or after them, until their parent ends) cannot pass.
-            hidden = _is_hidden_element(values)
-            if hidden is None or (hidden and tag in _OPTIONAL_END_TAGS):
-                kinds.append("unknown")
-            elif hidden:
-                kinds.append("hidden")
-            for kind in kinds:
-                self.depth[kind] += 1
-            self.stack.append((tag, kinds))
-            if not self.in_head and tag in _BLOCK_TAGS:
-                self._append("\n")
+    stack: list = []
 
-        def handle_endtag(self, tag):
-            tag = tag.lower()
-            if tag == "title":
-                self.in_title = False
-                return
-            if tag == "head":
-                self.in_head = False
-                return
-            if not self.in_head and tag in _BLOCK_TAGS:
-                self._append("\n")
-            self._close(tag)
+    def enter(element, parent) -> None:
+        state = child_state(element, parent)
+        if state["block"]:
+            emit("\n", state)
+        emit(element.text, state)
+        stack.append((element, state, iter(list(element)), parent))
 
-        def handle_data(self, data):
-            text = data.strip()
-            if self.depth["skip"] or self.depth["svg"] or not text:
-                return
-            if self.in_title:
-                self.title_parts.append(text)
-            elif not self.in_head:
-                self._append(text)
+    enter(root, base)
+    while stack:
+        element, state, children, parent = stack[-1]
+        child = next(children, None)
+        if child is None:
+            stack.pop()
+            if state["block"]:
+                emit("\n", state)
+            emit(element.tail, parent)
+        elif not isinstance(child.tag, str):  # comment or processing instruction
+            emit(child.tail, state)
+        else:
+            enter(child, state)
 
-    parser = _PageParser()
-    parser.feed(html)
-    title = " ".join(parser.title_parts).strip()
-    content, primary_used, chosen = _join_text(parser.body_parts), False, "body"
-    for name, region in (("main", parser.main_parts), ("article", parser.article_parts)):
-        primary = _join_text(region)
+    content, primary_used, chosen = _join_text(parts["body"]), False, "body"
+    for name in ("main", "article"):
+        primary = _join_text(parts[name])
         if primary and prose_chars(primary) >= MIN_GENERIC_BODY_CHARS:
             content, primary_used, chosen = primary, True, name
             break
     return {
-        "title": title[:200], "content": content, "embeds": parser.embeds,
-        "page_text": _join_text(parser.gate_parts), "primary_used": primary_used,
-        "visibility_unknown": chosen in parser.unknown_in,
+        "title": title[:200], "content": content, "embeds": embeds,
+        "page_text": _join_text(parts["gate"]), "primary_used": primary_used,
+        "visibility_unknown": chosen in unknown_in or templates_unsure, "too_complex": False,
     }
 
 
@@ -710,6 +800,8 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
 
     html, final_url = _download_html(url, max_redirects, hop_guard)
     page = _extract_html_page(html)
+    if page["too_complex"]:
+        raise ValueError("The page has more markup than x-reader parses")
     title, content = page["title"], page["content"]
     # Walls announced anywhere on the page count, not only in the extracted text;
     # a standalone "Read more" call counts only inside the text itself. A cookie

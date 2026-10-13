@@ -153,6 +153,7 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         try:
             twitter._fetch_via_oembed = lambda _url: {
                 "text": "这是一个完整的公开推文内容，长度足够，可以直接使用。",
+                "post_id": "123",
                 "author": "Leo",
                 "title": "这是一个完整的公开推文内容",
                 "media_status": "unknown",
@@ -180,6 +181,7 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         try:
             twitter._fetch_via_oembed = lambda _url: {
                 "text": "完整正文 pic.twitter.com/abc123，长度也足够用于读取。",
+                "post_id": "123",
                 "author": "Leo",
                 "title": "完整正文",
                 "media_status": "present",
@@ -202,6 +204,24 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         self.assertEqual(calls, [True])
         self.assertEqual(data["media_status"], "present")
         self.assertEqual(data["structure_status"], "verified")
+
+    def test_answers_for_another_post_are_not_used(self):
+        from unittest.mock import MagicMock, patch
+
+        oembed_other = {"text": "A full public post that is long enough to use directly.", "post_id": "999",
+                        "author": "Leo", "title": "A full public post", "media_status": "unknown"}
+        response = MagicMock()
+        response.json.return_value = {"tweet": {"id": "999", "text": "other post", "author": {}}}
+        with patch.object(twitter, "_fetch_via_oembed", return_value=oembed_other), \
+                patch.object(twitter.requests, "get", return_value=response), \
+                patch.object(twitter, "_fetch_article_via_jina", side_effect=RuntimeError("no")), \
+                patch.object(twitter, "fetch_via_jina", side_effect=RuntimeError("no")), \
+                patch.dict("os.environ", {"X_READER_HOSTED": "1"}):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(twitter.fetch_twitter("https://x.com/runesleo/status/123"))
+        with self.assertRaisesRegex(ValueError, "different post"):
+            with patch.object(twitter.requests, "get", return_value=response):
+                twitter._fetch_via_fxtwitter("https://x.com/runesleo/status/123")
 
     def test_fxtwitter_structure_appends_quote_and_poll_and_flags_articles(self):
         tweet = {

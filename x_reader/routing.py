@@ -34,10 +34,21 @@ def host_matches(host: str, domain: str) -> bool:
     return host == domain or host.endswith("." + domain)
 
 
+def _routing_host(hostname: str) -> str:
+    """The hostname as x-reader will connect to it (IDNA/UTS46), so look-alike
+    spellings such as "x。com" route like x.com."""
+    from x_reader.utils.url_validator import _canonical_hostname
+
+    try:
+        return _canonical_hostname(hostname)
+    except ValueError:
+        return hostname.lower()
+
+
 def detect_platform(url: str) -> str:
     """Return the platform the reader will use for this URL."""
     parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
+    host = _routing_host(parsed.hostname or "") if parsed.hostname else ""
     for platform, domains in _HOSTS:
         if any(host_matches(host, domain) for domain in domains):
             return platform

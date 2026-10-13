@@ -17,7 +17,7 @@ from x_reader.schema import (
 )
 from x_reader.fetchers.jina import fetch_via_jina
 from x_reader.routing import allowed_platforms, detect_platform, hosted_mode
-from x_reader.utils.url_validator import validate_url
+from x_reader.utils.url_validator import canonical_url, validate_url
 
 
 # Jina's text stands in for the page only when it carries it: most of what it
@@ -71,6 +71,8 @@ class UniversalReader:
         """
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
+        # Route, check and fetch the hostname exactly as it will be connected to.
+        url = canonical_url(url)
 
         # DNS validation is blocking; keep it off the event loop.
         await asyncio.to_thread(validate_url, url)
@@ -239,6 +241,7 @@ class UniversalReader:
         """Hand a redirect target to its own reader, under the same policy as a direct URL."""
         if redirected:
             raise ValueError("Redirect chain crosses platforms more than once")
+        url = canonical_url(url)
         await asyncio.to_thread(validate_url, url)
         allowed = allowed_platforms()
         if allowed is not None and platform not in allowed:

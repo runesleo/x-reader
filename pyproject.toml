@@ -15,6 +15,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "loguru>=0.7",
     "idna>=3.6",  # For IDN/homograph attack protection in URL validation
+    "html5lib>=1.1",  # Builds generic pages the way browsers do before judging them
 ]
 
 [project.urls]

@@ -35,7 +35,7 @@ class WebAppPolicyTest(unittest.TestCase):
             "url": "https://x.com/a/status/1",
             "media_type": "text",
             "fetched_at": "2026-10-07T00:00:00Z",
-            "extra": {"fetch_method": "oembed", "media_status": "present"},
+            "extra": {"fetch_method": "oembed", "post_id_verified": True, "media_status": "present"},
         }
 
         def runner(_url):
@@ -79,3 +79,19 @@ class WebAppPolicyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LookAlikeHostTest(unittest.TestCase):
+    def test_hosts_route_as_they_are_connected_to(self):
+        from x_reader.routing import detect_platform
+        from x_reader.utils.url_validator import canonical_url
+
+        for url, platform in (("https://x\u3002com/a/status/1", "twitter"), ("https://\uff58.com/a/status/1", "twitter"),
+                              ("https://youtube\uff0ecom/watch?v=abcdefghijk", "youtube"),
+                              ("https://t\uff61me/chan/1", "telegram")):
+            self.assertEqual(detect_platform(url), platform, url)
+            self.assertEqual(detect_platform(canonical_url(url)), platform, url)
+        self.assertEqual(canonical_url("https://x\u3002com/a/status/1?s=1"), "https://x.com/a/status/1?s=1")
+        self.assertEqual(canonical_url("http://127.0.0.1:8080/p"), "http://127.0.0.1:8080/p")
+        self.assertEqual(normalize_input_url("https://youtube\uff0ecom/watch?v=abcdefghijk"),
+                         "https://youtube.com/watch?v=abcdefghijk")

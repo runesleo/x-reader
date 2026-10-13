@@ -10,7 +10,7 @@ ARTICLE = (
 ) * 4
 
 X_VERIFIED = {
-    "fetch_method": "fxtwitter", "media_status": "none", "structure_status": "verified",
+    "fetch_method": "fxtwitter", "post_id_verified": True, "media_status": "none", "structure_status": "verified",
     "quote_status": "none", "poll_status": "none", "article_status": "none", "thread_marker": False,
 }
 
@@ -38,6 +38,17 @@ class EvidenceContractTest(unittest.TestCase):
         self.assertEqual(result["components"]["post_text"], "PASS")
         self.assertEqual(result["components"]["attached_media"], "PARTIAL")
 
+    def test_x_text_must_be_tied_to_the_requested_post(self):
+        for verified in (None, False):
+            extra = dict(X_VERIFIED)
+            if verified is None:
+                extra.pop("post_id_verified")
+            else:
+                extra["post_id_verified"] = verified
+            result = classify_payload({"source_type": "twitter", "content": "post text", "media_type": "text",
+                                       "extra": extra})
+            self.assertEqual(result["reason_code"], "post_identity_unverified", verified)
+
     def test_x_with_every_layer_checked_is_pass(self):
         result = _x()
         self.assertEqual(result["status"], "PASS")
@@ -47,7 +58,7 @@ class EvidenceContractTest(unittest.TestCase):
         # A legacy payload (or a failed structure probe) cannot rule out a quote, poll or article.
         result = classify_payload({
             "source_type": "twitter", "content": "post text", "media_type": "text",
-            "extra": {"fetch_method": "fxtwitter", "media_status": "none"},
+            "extra": {"fetch_method": "fxtwitter", "post_id_verified": True, "media_status": "none"},
         })
         self.assertEqual(result["status"], "PARTIAL")
         self.assertEqual(result["reason_code"], "post_structure_unverified")
@@ -211,9 +222,22 @@ class EvidenceContractTest(unittest.TestCase):
             result = classify_payload({"source_type": "manual", "title": title, "content": "Use your account.",
                                        "extra": VERIFIED})
             self.assertEqual(result["status"], "FAIL", title)
+        for opening in ("Please sign in before continuing.", "You need to sign in before continuing.",
+                        "Registration required.", "(Authentication required to continue.)", "[One more step.]",
+                        "(Access denied.)", "Please wait while we check your browser."):
+            thin = classify_payload({"source_type": "manual", "title": "Example", "content": opening, "extra": VERIFIED})
+            self.assertEqual(thin["status"], "FAIL", opening)
+            long = classify_payload({"source_type": "manual", "title": "Example",
+                                     "content": ARTICLE * 2 + "\n" + opening, "extra": VERIFIED})
+            self.assertEqual(long["status"], "UNKNOWN", opening)
+        # a citation's access note is not a wall
+        note = classify_payload({"source_type": "manual", "title": "Essay",
+                                 "content": ARTICLE * 2 + "\n(subscription required).", "extra": VERIFIED})
+        self.assertEqual(note["status"], "PASS")
         # prompts to comment or to open one's own account are not walls
         for line in ("Please sign in before commenting.", "Please sign in or register to comment.",
-                     "Please sign in to your account."):
+                     "Please sign in to your account.", "Please sign in to continue commenting.",
+                     "Sign in to access the comments."):
             result = classify_payload({"source_type": "manual", "title": "Blog", "content": ARTICLE * 2 + "\n" + line,
                                        "extra": VERIFIED})
             self.assertEqual(result["status"], "PASS", line)
@@ -234,7 +258,8 @@ class EvidenceContractTest(unittest.TestCase):
 
         huge = "x. " * (evidence.MAX_WALL_SCAN_CHARS // 3 + 10)
         self.assertEqual(evidence.gate_signals("T", huge), ["scan_budget_exceeded"])
-        expanding = "\ufdfa" * (evidence.MAX_WALL_SCAN_CHARS // 10)  # NFKC turns each into 18 characters
+        # NFKC turns each U+FDFA into 18 characters: short lines, but far over the normalized budget
+        expanding = ("\ufdfa" * 50_000 + "\n") * 5
         self.assertEqual(evidence.gate_signals("T", expanding), ["scan_budget_exceeded"])
         result = classify_payload({"source_type": "manual", "title": "T", "content": ARTICLE,
                                    "extra": dict(VERIFIED, page_signals=["scan_budget_exceeded"])})

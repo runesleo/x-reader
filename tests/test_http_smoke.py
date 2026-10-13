@@ -17,7 +17,7 @@ FIXTURE = {
     "media_type": "text",
     "fetched_at": "2026-09-28T00:00:00Z",
     "extra": {
-        "fetch_method": "oembed",
+        "fetch_method": "oembed", "post_id_verified": True,
         "media_status": "present",
         "media_probe_method": "fxtwitter",
     },

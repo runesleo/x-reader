@@ -18,7 +18,7 @@ class FirstSuccessSmokeCompatibilityTest(unittest.TestCase):
             "source_type": "twitter",
             "content": "post text",
             "media_type": "text",
-            "extra": {"fetch_method": "oembed", "media_status": "present"},
+            "extra": {"fetch_method": "oembed", "post_id_verified": True, "media_status": "present"},
         })
         self.assertEqual(coverage, "PARTIAL")
         self.assertIn("attached media", evidence)
@@ -29,7 +29,7 @@ class FirstSuccessSmokeCompatibilityTest(unittest.TestCase):
             "source_type": "twitter",
             "content": "post text",
             "media_type": "text",
-            "extra": {"fetch_method": "oembed", "media_status": "none",
+            "extra": {"fetch_method": "oembed", "post_id_verified": True, "media_status": "none",
                       "structure_status": "verified", "quote_status": "none",
                       "poll_status": "none", "article_status": "none", "thread_marker": False},
         })
@@ -41,7 +41,7 @@ class FirstSuccessSmokeCompatibilityTest(unittest.TestCase):
             "source_type": "twitter",
             "content": "post text",
             "media_type": "text",
-            "extra": {"fetch_method": "oembed", "media_status": "none"},
+            "extra": {"fetch_method": "oembed", "post_id_verified": True, "media_status": "none"},
         })
         self.assertEqual(coverage, "PARTIAL")
         self.assertEqual(components, {"post_text": "READ"})
@@ -51,7 +51,7 @@ class FirstSuccessSmokeCompatibilityTest(unittest.TestCase):
             "source_type": "twitter",
             "content": "post text",
             "media_type": "text",
-            "extra": {"fetch_method": "oembed", "media_status": "unknown"},
+            "extra": {"fetch_method": "oembed", "post_id_verified": True, "media_status": "unknown"},
         })
         self.assertEqual(coverage, "PARTIAL")
         self.assertEqual(components, {"post_text": "READ"})

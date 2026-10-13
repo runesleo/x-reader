@@ -58,7 +58,9 @@ _UNAVAILABLE_VIDEO = (
 
 
 # Titles of pages that are not a video: YouTube's own, consent and sign-in pages.
-_NOT_A_VIDEO_TITLE = re.compile(r"^(?:|youtube|sign in|consent|before you continue\b.*)$", re.IGNORECASE)
+_NOT_A_VIDEO_TITLE = re.compile(
+    r"^(?:|youtube|consent|before you continue\b.*|sign in(?: to (?:youtube|continue)\b.*)?)$", re.IGNORECASE
+)
 _CONSENT_PAGE = ("before you continue to youtube", "consent.youtube.com")
 # Titles YouTube gives pages for videos that cannot be watched.
 _UNAVAILABLE_TITLES = {
@@ -84,6 +86,7 @@ def _page_state(video_id: str, title: str, content: str, source_url: str = "") -
         return "unidentified"  # a consent interstitial, whatever its title or language
     name = re.sub(r"[\s\-–—|]+", " ", title).strip()
     name = re.sub(r"\s+youtube$", "", name, flags=re.IGNORECASE).strip()
+    name = re.sub(r"[\s.!?…:;,]+$", "", name)
     if name.lower() in _UNAVAILABLE_TITLES:
         return "unavailable"
     if not _NOT_A_VIDEO_TITLE.search(name):

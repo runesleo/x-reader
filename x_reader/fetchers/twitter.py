@@ -176,6 +176,8 @@ def _fetch_via_fxtwitter(url: str, timeout: float = 10) -> Dict[str, Any]:
     data = resp.json()
 
     tweet = data.get("tweet", {})
+    if str(tweet.get("id") or "") != status_id:
+        raise ValueError("FxTwitter answered with a different post")
     text = tweet.get("text", "")
     author_name = tweet.get("author", {}).get("name", "")
     author_screen = tweet.get("author", {}).get("screen_name", "")
@@ -186,6 +188,7 @@ def _fetch_via_fxtwitter(url: str, timeout: float = 10) -> Dict[str, Any]:
         "author_name": author_name,
         "title": text[:100] if text else "",
         "media_status": _media_status_from_fxtwitter(tweet),
+        "post_id": status_id,
         **_structure_from_fxtwitter(tweet),
     }
 
@@ -285,6 +288,8 @@ def _fetch_via_oembed(url: str) -> Dict[str, Any]:
         "text": text,
         "author": data.get("author_name", ""),
         "author_url": data.get("author_url", ""),
+        # The embedded post's own permalink: the reply may describe another post.
+        "post_id": _extract_status_id(_normalize_x_url(str(data.get("url") or ""))) or "",
         "title": text[:100] if text else "",
         # oEmbed exposes media links inconsistently. Presence is useful evidence,
         # absence is not proof that the tweet has no media.
@@ -402,6 +407,7 @@ async def _fetch_via_playwright(url: str) -> Dict[str, Any]:
                 "text": (extracted.get("text") or "").strip(),
                 "kind": extracted.get("kind") or "page",
                 "title": (title or "").strip()[:200],
+                "final_url": page.url,
             }
         finally:
             await context.close()
@@ -420,6 +426,7 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
     """
     url = _normalize_x_url(url)
     author = _extract_author(url)
+    requested_id = _extract_status_id(url)
 
     # Tier 1: oEmbed probe. This is fastest and does not require auth.
     if _is_tweet_url(url):
@@ -427,7 +434,9 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
             logger.info(f"[Twitter] Tier 1 — oEmbed probe: {url}")
             data = _fetch_via_oembed(url)
             text = (data.get("text") or "").strip()
-            if text and not _is_thin_oembed_text(text):
+            if data.get("post_id") != requested_id:
+                logger.warning("[Twitter] oEmbed answered for a different post; trying FxTwitter")
+            elif text and not _is_thin_oembed_text(text):
                 media_status = data.get("media_status", "unknown")
                 media_probe_method = "oembed_html"
                 # oEmbed carries no structured media, quote, poll or article data.
@@ -450,10 +459,12 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                     "title": data.get("title", ""),
                     "platform": "twitter",
                     "fetch_method": "oembed",
+                    "post_id_verified": True,
                     "media_status": media_status,
                     "media_probe_method": media_probe_method,
                 }, structure)
-            logger.warning("[Twitter] oEmbed returned thin or truncated content")
+            else:
+                logger.warning("[Twitter] oEmbed returned thin or truncated content")
         except Exception as e:
             logger.warning(f"[Twitter] oEmbed failed ({e})")
 
@@ -471,6 +482,7 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                     "title": data.get("title", ""),
                     "platform": "twitter",
                     "fetch_method": "fxtwitter",
+                    "post_id_verified": True,
                     "media_status": data.get("media_status", "unknown"),
                     "media_probe_method": "fxtwitter",
                 }, data)
@@ -546,6 +558,8 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                 "platform": "twitter",
                 # Only a rendered tweetText element counts as the post itself.
                 "fetch_method": "playwright" if is_post else "playwright_page",
+                "post_id_verified": bool(requested_id) and _extract_status_id(
+                    _normalize_x_url(str(data.get("final_url") or ""))) == requested_id,
                 "media_status": "unknown",
                 "structure_status": "unknown",
                 "thread_marker": _looks_like_thread(content),

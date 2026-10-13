@@ -83,9 +83,10 @@ def _subtitle_coverage_proven(extra: dict) -> bool:
     )
 
 
-_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
-_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
-_HTML_TAG = re.compile(r"</?[A-Za-z][^>]*>")
+# Each pattern stops at the next opening bracket, so scanning stays linear.
+_MD_IMAGE = re.compile(r"!\[[^\[\]]*\]\([^()]*\)")
+_MD_LINK = re.compile(r"\[([^\[\]]*)\]\([^()]*\)")
+_HTML_TAG = re.compile(r"</?[A-Za-z][^<>]*>")
 _BARE_URL = re.compile(r"https?://\S+")
 _CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
@@ -192,15 +193,20 @@ _END = r"(?=\s*(?:$|[.!?…:;,|)\]]))"  # the phrase is a whole statement, not t
 # Login walls: prompts about reaching the content. Prompts to comment, vote or
 # open one's own account ("Sign in to view your account") are not walls.
 _SIGN_IN = r"(?:sign ?in|log ?in)"
+# What the visitor is let into: content (a wall) or their own account and the
+# discussion (not a wall: "Sign in to view your account", "to continue commenting").
+_NOT_CONTENT = (
+    r"(?:your|my|our|comments?|commenting|repl(?:y|ies|ying)|discussions?|conversations?|vot(?:e|es|ing)"
+    r"|likes?|follow(?:ing|ers)?|bookmarks?|saved|notifications?|profile|account|settings|dashboard|inbox"
+    r"|messages?|subscriptions?|watchlist|cart|orders?)"
+)
 _GATE_ACTION = (
-    r"to (?:continue|proceed|read|view|access|see|watch|listen|download|unlock|keep reading"
-    r"|finish reading|get (?:full )?access)\b(?! (?:your|my|our)\b)"
+    r"(?:to (?:continue|proceed|read|view|access|see|watch|listen|download|unlock|keep reading|finish reading"
+    r"|get (?:full )?access)|before (?:continuing|proceeding|reading|viewing|accessing"
+    r"|you (?:can )?(?:continue|proceed|read|view)))\b"
+    rf"(?!(?: (?:the|all|any|more|and|to|with|in|on|this|these|leaving|posting|writing))* {_NOT_CONTENT}\b)"
 )
 _SIGN_IN_OR_JOIN = rf"(?:please )?{_SIGN_IN}(?: or (?:register|sign up|subscribe|create an? (?:free )?account))?"
-_INTERACTION = (
-    r"(?:comment|reply|respond|post|vote|like|follow|save|bookmark|leave|write|add|join|chat|rate"
-    r"|review|report|share|edit|upload|submit|contribute|participate|message)"
-)
 _MUST_SIGN_IN = r"you (?:must|need to|have to|will need to|'ll need to) (?:be )?(?:signed|logged|sign|log) ?in"
 _ZH_SIGN_IN = r"(?:(?:请|您需要|需要)(?:先)?登录(?:后)?|登录后)(?:才能|即可|方可|可)?(?:查看|阅读|继续|浏览|观看|下载)"
 _AUTH_START = re.compile("|".join((
@@ -208,7 +214,7 @@ _AUTH_START = re.compile("|".join((
     rf"(?:please )?{_SIGN_IN} (?:to|into) (?:your|an?) (?:\w+ )?account {_GATE_ACTION}",
     rf"please {_SIGN_IN}(?: (?:first|again|now|below|here))?{_END}",
     rf"{_MUST_SIGN_IN}(?: {_GATE_ACTION}|{_END})",
-    rf"(?:{_SIGN_IN}|authentication|authorization) (?:is )?required(?:{_END}| {_GATE_ACTION})",
+    rf"(?:{_SIGN_IN}|authentication|authorization|registration) (?:is )?required(?:{_END}| {_GATE_ACTION})",
     _ZH_SIGN_IN,
 )))
 # A title part like "Sign in to Example" names a login page (judged like a notice line).
@@ -250,10 +256,12 @@ _CHALLENGE_START = re.compile("|".join((
     r"(?:we(?:'ve| have) )?detected unusual (?:activity|traffic)\b",
     r"our systems have detected unusual traffic\b",
     rf"(?:just a moment|attention required){_END}",
+    r"please wait (?:while|until) .{0,60}?\b(?:check|checking|verif\w*|confirm\w*|secur\w*|browser|human)\b",
+    r"(?:we(?:'re| are) )?(?:checking|verifying) (?:your browser|your connection|that you(?:'re| are) (?:a )?human)\b",
     r"访问被拒绝|请(?:完成|进行)(?:安全|人机)?验证|检测到(?:您的)?(?:网络)?(?:异常|可疑)(?:流量|访问|请求|行为)",
 )))
 _CHALLENGE_ANY = re.compile("|".join((
-    r"checking your browser", r"checking if the site connection is secure",
+    r"\b(?:check|checking|verify|verifying) your browser\b", r"checking if the site connection is secure",
     r"verify (?:that )?you(?:'re| are) (?:a )?human", r"verify you(?:'re| are) not a (?:robot|bot)",
     r"unusual traffic from your (?:computer|network)", r"you(?:'ve| have) been blocked",
     r"enable javascript and cookies to continue", r"complete the security check",
@@ -358,6 +366,11 @@ MAX_WALL_LINE_CHARS = 100_000
 MAX_WALL_SCAN_LINES = 100_000
 _CONSENT_ANY = re.compile("|".join(re.escape(p) for p in (*_CONSENT_PHRASES, *_CONSENT_WEAK_PHRASES)))
 _PAYWALL_ANY = re.compile("|".join(re.escape(p) for p in _PAYWALL_PHRASES))
+# Access notes citation styles append ("(subscription required)."); not walls.
+_ACCESS_NOTE = re.compile(
+    r"[(\[](?:free |paid )?(?:registration|subscription|login|log in|sign in|sign up|payment|account)"
+    r" (?:is )?required[)\]][.,;]?"
+)
 _HAS_SENTENCE_BREAK = re.compile(r"[.!?…:;。！？：；]")
 
 
@@ -419,8 +432,8 @@ def gate_signals(title: str, text: str, cta_text: str | None = None) -> list:
     flags = dict.fromkeys(("auth", "auth_hint", "challenge", "challenge_hint", "missing", "missing_hint"), False)
 
     def check_start(head: str, annotation: bool, strong: bool) -> None:
-        # A bracketed part is an annotation ("(registration required)." after a
-        # citation), not a login or block notice; "(HTTP 404)" still marks a missing page.
+        # A citation's access note ("(registration required).") is not a login
+        # notice; any other bracketed wording is read like a line.
         suffix = "" if strong else "_hint"
         if not annotation and _AUTH_START.match(head):
             flags["auth" + suffix] = True
@@ -432,11 +445,11 @@ def gate_signals(title: str, text: str, cta_text: str | None = None) -> list:
     try:
         for line in _normalized_lines(title, text):
             head = _LEAD.sub("", line, count=1)
-            check_start(head, line.startswith(("(", "[")), strong=True)
+            check_start(head, bool(_ACCESS_NOTE.fullmatch(line)), strong=True)
             if _HAS_SENTENCE_BREAK.search(line):
                 for part in _SENTENCE_BREAK.split(line)[1:]:
                     if part:
-                        check_start(_LEAD.sub("", part, count=1), part.startswith(("(", "[")), strong=False)
+                        check_start(_LEAD.sub("", part, count=1), bool(_ACCESS_NOTE.fullmatch(part)), strong=False)
             flags["auth_hint"] |= bool(_AUTH_ANY.search(line))
             flags["challenge_hint"] |= bool(_CHALLENGE_ANY.search(line))
             flags["missing_hint"] |= bool(_MISSING_ANY.search(line))
@@ -879,6 +892,13 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "status": UNKNOWN,
                 "reason_code": "post_text_unverified",
                 "evidence": f"X page text came from {method}, so it could not be confirmed as the post itself",
+                "components": {"post_text": UNKNOWN},
+            }
+        if extra.get("post_id_verified") is not True:
+            return {
+                "status": UNKNOWN,
+                "reason_code": "post_identity_unverified",
+                "evidence": f"X text came from {method}, but it could not be tied to the requested post ID",
                 "components": {"post_text": UNKNOWN},
             }
         components: dict[str, str] = {"post_text": PASS}

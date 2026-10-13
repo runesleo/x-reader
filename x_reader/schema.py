@@ -188,6 +188,8 @@ def from_twitter(data: dict) -> UnifiedContent:
             extra[key] = data.get(key)
     if "thread_marker" in data:
         extra["thread_marker"] = bool(data.get("thread_marker"))
+    if "post_id_verified" in data:
+        extra["post_id_verified"] = data.get("post_id_verified") is True
 
     return UnifiedContent(
         source_type=SourceType.TWITTER,
