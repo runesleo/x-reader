@@ -181,43 +181,65 @@ _NOTICES = set(_UNAVAILABLE_PHRASES) | {
 }
 
 
+_SEGMENT_SPLIT = re.compile(r"\s[|·—–-]\s|[|·]|:\s")
+_AUTH_TITLES = {"sign in", "log in", "login", "authentication required"}
+_AUTH_PHRASES = (
+    "sign in to continue", "please sign in", "please log in", "login required",
+    "authentication required",
+)
+_ERROR_TITLES = {"access denied", "forbidden", "403", "403 forbidden", "error 403", "just a moment...",
+                 "attention required!", "attention required! | cloudflare"}
+_CHALLENGE_PHRASES = (
+    "checking your browser before accessing", "enable javascript and cookies to continue",
+    "captcha challenge", "request blocked",
+)
+
+
 def _is_notice(text: str) -> bool:
-    """True when a short heading or title segment is itself a missing-page notice."""
-    text = _APOLOGY.sub("", text.strip().lower())
-    text = re.sub(r"[\s|·:—–-]+", " ", text).strip(" !.。！")
-    return text in _NOTICES
+    """True when a short heading, line or title segment is a missing-page notice.
 
-
-def _opens_as_missing_page(title: str, body: str) -> bool:
-    """A title segment or one of the first heading lines is exactly a missing-page notice."""
-    segments = re.split(r"\s[|·—–-]\s|[|·]", title)
-    if any(_is_notice(segment) for segment in segments):
-        return True
-    headings = [line.strip() for line in body.splitlines() if line.strip()][:3]
-    return any(len(line) <= 80 and _is_notice(line) for line in headings)
+    Segments around ": ", " | ", " - " are tried one by one, so "Page not found:
+    /old-slug" and "Error: This page does not exist" match while "How to fix Page
+    Not Found errors" does not.
+    """
+    for segment in _SEGMENT_SPLIT.split(text):
+        segment = _APOLOGY.sub("", segment.strip().lower())
+        segment = re.sub(r"[\s|·:—–-]+", " ", segment).strip(" !.。！")
+        if segment in _NOTICES:
+            return True
+    return False
 
 
 def gate_signals(title: str, text: str, include_tail: bool = True) -> list:
-    """Walls a page's text announces, whatever its length: login, challenge,
-    consent, missing page, paywall or teaser. The fetcher runs this over the whole
-    page, so a notice outside the extracted article still counts."""
+    """Walls a page announces, wherever they appear: login, challenge, consent,
+    missing page, paywall or teaser. Every line is checked (no first-N cut-off);
+    the fetcher runs this over every visible block of the page, nav and footer
+    included, so a notice outside the extracted article still counts."""
     body = visible_text(text)
     lowered = body.lower()
+    title_l = title.strip().lower()
     signals = set()
-    shell = _generic_shell_state(title, text)
-    if shell:
-        signals.add(shell)
+    title_segments = {segment.strip() for segment in _SEGMENT_SPLIT.split(title_l)}
+    if title_l in _AUTH_TITLES or any(phrase in lowered or phrase in title_l for phrase in _AUTH_PHRASES):
+        signals.add("auth_required")
+    if (title_segments & _ERROR_TITLES or title_l in _ERROR_TITLES
+            or any(phrase in lowered for phrase in _CHALLENGE_PHRASES)):
+        signals.add("challenge_or_error")
     strong = sum(phrase in lowered for phrase in _CONSENT_PHRASES)
     weak = sum(phrase in lowered for phrase in _CONSENT_WEAK_PHRASES)
     if strong or strong + weak >= 3:
         signals.add("consent")
-        if any(marker in title.lower() for marker in _CONSENT_TITLES):
+        if any(marker in title_l for marker in _CONSENT_TITLES):
             signals.add("consent_title")
-    if _opens_as_missing_page(title, body):
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if _is_notice(title) or any(len(line) <= 80 and _is_notice(line) for line in lines):
         signals.add("missing_page")
-    if any(phrase in lowered for phrase in _PAYWALL_PHRASES) or (
-        include_tail and any(marker in lowered[-300:] for marker in _TEASER_TAIL)
-    ):
+    if any(phrase in lowered or phrase in title_l for phrase in _PAYWALL_PHRASES):
+        signals.add("paywall")
+    # A short line that is a teaser link or button ("Continue reading →").
+    if any(len(line) <= 60 and line.lower().startswith(_TEASER_TAIL) for line in lines):
+        signals.add("paywall")
+    if include_tail and any(marker in lowered[-300:] for marker in _TEASER_TAIL):
         signals.add("paywall")
     return sorted(signals)
 
@@ -225,36 +247,6 @@ def gate_signals(title: str, text: str, include_tail: bool = True) -> list:
 def _ends_with_read_more(text: str) -> bool:
     tail = text.strip().lower()[-300:]
     return tail.endswith(("…", "...", "[…]", "[...]")) or any(m in tail for m in _READ_MORE_TAIL)
-
-
-def _generic_shell_state(title: str, content: str) -> str | None:
-    title_l = title.strip().lower()
-    prefix = content.strip().lower()[:1200]
-
-    auth_titles = {"sign in", "log in", "login", "authentication required"}
-    auth_phrases = (
-        "sign in to continue",
-        "please sign in",
-        "please log in",
-        "login required",
-        "authentication required",
-    )
-    # Exact title segments: "Forbidden City" or "404 Errors Explained" are articles.
-    error_titles = {"access denied", "forbidden", "403", "403 forbidden", "error 403", "just a moment...",
-                    "attention required!", "attention required! | cloudflare"}
-    error_phrases = (
-        "checking your browser before accessing",
-        "enable javascript and cookies to continue",
-        "captcha challenge",
-        "request blocked",
-    )
-
-    if title_l in auth_titles or any(phrase in prefix for phrase in auth_phrases):
-        return "auth_required"
-    segments = {segment.strip() for segment in re.split(r"\s[|·—–-]\s|[|·]", title_l)}
-    if segments & error_titles or title_l in error_titles or any(phrase in prefix for phrase in error_phrases):
-        return "challenge_or_error"
-    return None
 
 
 def _podcast_full_audio_proof_valid(content: str, extra: dict) -> bool:

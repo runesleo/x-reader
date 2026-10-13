@@ -69,14 +69,10 @@ _VOID_TAGS = {
 
 
 def _is_hidden_element(attrs: dict) -> bool:
-    """Explicitly hidden: the hidden attribute, aria-hidden or an inline display:none."""
+    """Explicitly not rendered: the hidden attribute or an inline display:none /
+    visibility:hidden. aria-hidden only hides from assistive technology."""
     style = (attrs.get("style") or "").replace(" ", "").lower()
-    return (
-        "hidden" in attrs
-        or attrs.get("aria-hidden") == "true"
-        or "display:none" in style
-        or "visibility:hidden" in style
-    )
+    return "hidden" in attrs or "display:none" in style or "visibility:hidden" in style
 
 
 def _is_hidden_embed(attrs: dict) -> bool:
@@ -112,10 +108,9 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
     Page text: navigation, footers, asides and explicitly hidden elements are
     dropped; when the page marks its primary content (every <main>, else every
     <article>) and that region carries substantial prose, the text is that
-    region, so banners around it stay out. The page-wide text keeps everything
-    but navigation and footers, hidden elements included, so wall notices
-    outside the article are still seen. Embeds are counted over the whole page,
-    except hidden ones.
+    region, so banners around it stay out. The page-wide text is every visible
+    block, navigation and footers included, so wall notices anywhere are seen.
+    Embeds are counted over the whole page, except hidden ones.
     """
     from html.parser import HTMLParser
     from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars
@@ -123,7 +118,7 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
     class _PageParser(HTMLParser):
         def __init__(self):
             super().__init__()
-            self.skip_depth = self.boiler_depth = self.chrome_depth = 0
+            self.skip_depth = self.boiler_depth = 0
             self.main_depth = self.article_depth = 0
             self.hidden_tag, self.hidden_nest = None, 0
             self.in_head = self.in_title = False
@@ -132,9 +127,10 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
             self.embeds = 0
 
         def _append(self, chunk):
-            if not self.chrome_depth:
-                self.gate_parts.append(chunk)
-            if self.boiler_depth or self.hidden_tag:
+            if self.hidden_tag:
+                return
+            self.gate_parts.append(chunk)
+            if self.boiler_depth:
                 return
             self.body_parts.append(chunk)
             if self.main_depth:
@@ -161,8 +157,6 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
                 self.hidden_nest += 1
             if tag in _BOILERPLATE_TAGS:
                 self.boiler_depth += 1
-            if tag in ("nav", "footer"):
-                self.chrome_depth += 1
             if tag == "main":
                 self.main_depth += 1
             elif tag == "article":
@@ -188,8 +182,6 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
                 self._append("\n")
             if tag in _BOILERPLATE_TAGS and self.boiler_depth:
                 self.boiler_depth -= 1
-            if tag in ("nav", "footer") and self.chrome_depth:
-                self.chrome_depth -= 1
             if tag == "main" and self.main_depth:
                 self.main_depth -= 1
             elif tag == "article" and self.article_depth:

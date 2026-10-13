@@ -477,6 +477,43 @@ class GenericReadTest(unittest.TestCase):
         self.assertNotIn("careful argument", page["content"])
         self.assertNotEqual(receipt["status"], "PASS")
 
+    def test_visible_walls_count_wherever_they_sit(self):
+        long_main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 3).splitlines()) + "</main>"
+
+        def page(before="", after="", title="T"):
+            return f"<html><head><title>{title}</title></head><body>{before}{long_main}{after}</body></html>"
+
+        cases = (
+            (page(after="<div>Please sign in to continue.</div>"), "FAIL"),
+            (page(after="<div>Checking your browser before accessing the site.</div>"), "FAIL"),
+            (page(after="<h2>Page not found</h2>"), "UNKNOWN"),
+            (page(after="<p><a href='/full'>Continue reading</a></p>"), "PARTIAL"),
+            (page(after="<footer>Subscribe to continue reading.</footer>"), "PARTIAL"),
+            (page(before="<nav>Please sign in to continue</nav>"), "FAIL"),
+            (page(title="Subscribe to continue | Example"), "PARTIAL"),
+            (page(title="Page not found: /old-slug"), "UNKNOWN"),
+            (page(before="<h1>Error: This page does not exist</h1>"), "UNKNOWN"),
+        )
+        for html, status in cases:
+            _page, receipt = self._page_receipt(html)
+            self.assertEqual(receipt["status"], status, html[60:160])
+
+    def test_hidden_templates_do_not_count(self):
+        long_main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 3).splitlines()) + "</main>"
+        for template in ("<div hidden>Subscribe to continue reading.</div>",
+                         "<div style='display: none'>Please sign in to continue.</div>"):
+            _page, receipt = self._page_receipt(
+                f"<html><head><title>T</title></head><body>{long_main}{template}</body></html>")
+            self.assertEqual(receipt["status"], "PASS", template)
+
+    def test_aria_hidden_frames_are_still_visible_embeds(self):
+        main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
+        page, receipt = self._page_receipt(
+            "<html><head><title>T</title></head><body>" + main
+            + "<iframe aria-hidden='true' src='https://player.example.org/v/1'></iframe></body></html>")
+        self.assertEqual(page["embedded_media"], 1)
+        self.assertEqual(receipt["status"], "PARTIAL")
+
     def test_embeds_count_anywhere_on_the_page(self):
         main = "<main>" + "".join(f"<p>{line}</p>" for line in ARTICLE.splitlines()) + "</main>"
         page, receipt = self._page_receipt(
