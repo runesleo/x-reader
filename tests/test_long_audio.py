@@ -318,6 +318,8 @@ class LongAudioEvidenceTests(unittest.TestCase):
           "chunk_offset": lambda x:x["extra"]["chunks_manifest"]["1"].update(start=2),
           "seg_gap":lambda x:x["extra"]["segments_manifest"][1].update(start_seconds=65.0),
           "interval_gap":lambda x:x["extra"]["coverage_intervals"][1].update(start_seconds=61.0),
+          "interval_nan_end":lambda x:x["extra"]["coverage_intervals"][0].update(end_seconds="NaN"),
+          "interval_nan_start":lambda x:x["extra"]["coverage_intervals"][1].update(start_seconds="nan"),
           "segment_hash":lambda x:x["extra"]["segments_manifest"][0].update(transcript_sha256="0"*64),
           "segment_pcm_hash":lambda x:x["extra"]["segments_manifest"][0].update(pcm_sha256="bad"),
           "asr_missing": lambda x:x["extra"].update(asr_segments=0),

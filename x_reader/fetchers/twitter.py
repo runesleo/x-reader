@@ -177,12 +177,15 @@ def _fetch_via_fxtwitter(url: str, timeout: float = 10) -> Dict[str, Any]:
     resp.raise_for_status()
     data = resp.json()
 
-    tweet = data.get("tweet", {})
-    if str(tweet.get("id") or "") != status_id:
+    tweet = data.get("tweet") if isinstance(data, dict) else None
+    if not isinstance(tweet, dict) or str(tweet.get("id") or "") != status_id:
         raise ValueError("FxTwitter answered with a different post")
     text = tweet.get("text", "")
-    author_name = tweet.get("author", {}).get("name", "")
-    author_screen = tweet.get("author", {}).get("screen_name", "")
+    if not isinstance(text, str):
+        raise ValueError("FxTwitter returned post text that is not a string")
+    author = tweet.get("author") if isinstance(tweet.get("author"), dict) else {}
+    author_name = author.get("name") if isinstance(author.get("name"), str) else ""
+    author_screen = author.get("screen_name") if isinstance(author.get("screen_name"), str) else ""
 
     return {
         "text": text,
@@ -206,7 +209,7 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     # counts, whatever its value (null, empty or damaged layers are not "none").
     quote = tweet.get("quote")
     if isinstance(quote, dict):
-        quote_text = str(quote.get("text") or "").strip()
+        quote_text = quote.get("text").strip() if isinstance(quote.get("text"), str) else ""
         quote_author = str((quote.get("author") or {}).get("screen_name") or "")
         quote_media = _media_status_from_fxtwitter(quote) if quote.get("id") else "unknown"
         if not quote_text or quote_media == "unknown":

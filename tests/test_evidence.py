@@ -447,6 +447,18 @@ class EvidenceContractTest(unittest.TestCase):
         self.assertEqual(images["reason_code"], "attached_media_unread")
         self.assertEqual(wechat(ARTICLE, extraction="container")["status"], "PASS")
 
+    def test_wechat_notice_titles_fail_and_notice_lines_beside_text_are_unknown(self):
+        def wechat(title, content):
+            return classify_payload({"source_type": "wechat", "title": title, "content": content,
+                                     "extra": {"extraction": "container"}})
+
+        long_text = "读者会在这篇长文里看到一个仔细的论证。每一段都补充了背景、证据和清楚的结论。" * 30
+        self.assertEqual(wechat("该内容已被发布者删除", "帮助说明。" + long_text)["status"], "FAIL")
+        self.assertEqual(wechat("参数错误", long_text)["status"], "FAIL")
+        self.assertEqual(wechat("参数错误排查指南", long_text)["status"], "PASS")
+        self.assertEqual(wechat("文章", "该内容已被发布者删除\n" + long_text)["status"], "UNKNOWN")
+        self.assertEqual(wechat("文章", "参数错误\n" + long_text)["status"], "UNKNOWN")
+
     def test_xhs_and_telegram_need_media_proof(self):
         for source in ("xhs", "telegram"):
             unknown = classify_payload({"source_type": source, "content": "caption"})

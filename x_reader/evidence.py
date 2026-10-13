@@ -151,12 +151,20 @@ _MEDIA_PAGE_HOSTS = (
     "twitch.tv", "dailymotion.com", "rumble.com", "loom.com", "music.apple.com",
     "douyin.com", "kuaishou.com", "ixigua.com", "v.qq.com", "youku.com",
 )
-_WECHAT_UNAVAILABLE = (
+# WeChat's removal, block and verification notices; the generic ones also occur
+# in ordinary writing, so they count only as a whole line or title.
+_WECHAT_UNAVAILABLE_STRONG = (
     "此内容因违规无法查看", "该内容已被发布者删除", "此内容被投诉且经审核涉嫌侵权",
     "此内容因涉嫌违反相关法律法规", "该公众号已迁移", "此帐号已被屏蔽", "此帐号已自主注销",
-    "内容无法查看", "该内容暂时无法查看", "当前环境异常", "完成验证后即可继续访问",
-    "参数错误", "链接已过期",
+    "该内容暂时无法查看", "完成验证后即可继续访问",
 )
+_WECHAT_UNAVAILABLE = _WECHAT_UNAVAILABLE_STRONG + ("内容无法查看", "当前环境异常", "参数错误", "链接已过期")
+
+
+def _wechat_notice(line: str) -> bool:
+    """A strong notice anywhere in the line, or the line is a generic notice."""
+    bare = re.sub(r"[\s\W_]+", "", line)
+    return any(phrase in line for phrase in _WECHAT_UNAVAILABLE_STRONG) or bare in _WECHAT_UNAVAILABLE
 _READ_MORE_TAIL = (
     "read more", "continue reading", "read the full", "read the rest",
     "阅读全文", "阅读原文", "查看全文", "点击阅读",
@@ -637,8 +645,9 @@ def _podcast_long_audio_proof_valid(content: str, extra: dict) -> bool:
             if (abs(start - expected_frames / 16000) > 0.011
                     or abs(end - (expected_frames + frames) / 16000) > 0.011):
                 return False
-            if (abs(float(interval["start_seconds"]) - start) > 0.01
-                    or abs(float(interval["end_seconds"]) - end) > 0.01):
+            bounds = (float(interval["start_seconds"]), float(interval["end_seconds"]))
+            if not all(math.isfinite(bound) for bound in bounds) or (
+                    abs(bounds[0] - start) > 0.01 or abs(bounds[1] - end) > 0.01):
                 return False
             boundary_adjustments = segment.get("asr_boundary_adjustments", 0)
             boundary_overrun = float(segment.get("max_boundary_overrun_seconds", 0.0))
@@ -690,13 +699,22 @@ _VERIFIED_X_METHODS = {"oembed", "fxtwitter", "playwright"}
 def _classify_article(source: str, title: str, content: str, extra: dict) -> dict[str, Any]:
     """WeChat article: unavailable notices fail; image-carried or container-less reads do not pass."""
     body = visible_text(content)
-    head = f"{title}\n{body[:600]}"
-    if prose_chars(body) < 600 and any(phrase in head for phrase in _WECHAT_UNAVAILABLE):
+    noticed_title = _wechat_notice(title)
+    noticed_head = any(_wechat_notice(line) for line in body[:600].splitlines())
+    thin_notice = prose_chars(body) < 600 and any(phrase in f"{title}\n{body[:600]}" for phrase in _WECHAT_UNAVAILABLE)
+    if noticed_title or thin_notice:
         return {
             "status": FAIL,
             "reason_code": "source_unavailable",
             "evidence": f"{source} returned a removed, blocked or verification notice instead of the article",
             "components": {"text_body": FAIL},
+        }
+    if noticed_head:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "possible_unavailable_notice",
+            "evidence": f"{source} text opens with a removed, blocked or verification notice beside longer text",
+            "components": {"text_body": UNKNOWN},
         }
     if extra.get("extraction") == "page_body":
         return {

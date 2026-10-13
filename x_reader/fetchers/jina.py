@@ -63,7 +63,7 @@ _SKIP_TAGS = {
 _UNRENDERED = {"head", "title", "script", "style", "noscript", "template", "noembed", "noframes", "datalist",
                "meta", "link", "base", "rp", "area", "param", "source", "track"}
 # Form controls show their text, but in a box or a menu: walls count, page text does not.
-_CONTROL_TAGS = {"select", "textarea"}
+_CONTROL_TAGS = {"select", "textarea", "button"}
 _BUTTON_INPUTS = {"submit", "button", "reset"}
 _BOILERPLATE_TAGS = {"nav", "footer", "aside"}
 _BLOCK_TAGS = {
@@ -204,6 +204,7 @@ _VIEWPORT_UNITS = {
 }
 _MIN_TEXT_PX = 6  # smaller than this does not read as text
 _MIN_CONTRAST = 1.3  # text this close to the color behind it does not read
+_MIN_ALPHA = 0.1  # text more transparent than this does not read
 _MIN_LINE = 0.75  # lines closer than this (times the font size) overlap
 _MAX_LINE = 10.0
 _FAR_PX = 5000  # geometry reaching past this pushes or paints text out of reach
@@ -438,12 +439,14 @@ def _box_px(token: str, font_px: float):
     return None if amount is None else (amount, False)
 
 
-def _font_px(value: str, parent_px: float):
+def _font_px(value: str, parent_px: float, depth: int = 0):
     """The computed font size for a font-size value, or None when not understood."""
     if value.startswith("var(") and value.endswith(")"):
         _token, comma, fallback = value[4:-1].partition(",")
+        if depth >= 8:
+            return None  # fallbacks nested this deep are not followed
         # A design token is judged like external CSS; a fallback must itself be readable.
-        return parent_px if not comma else _font_px(fallback.strip(), parent_px)
+        return parent_px if not comma else _font_px(fallback.strip(), parent_px, depth + 1)
     if value in _FONT_KEYWORDS:
         return float(_FONT_KEYWORDS[value])
     if value in ("smaller", "larger"):
@@ -533,6 +536,8 @@ def _contrast(first, second) -> float:
 def _readable(color, background) -> bool:
     """Text in color over background reads: a design token on either side is
     judged like external CSS; an image or unknown background is not readable."""
+    if isinstance(color, tuple) and color[3] < _MIN_ALPHA:
+        return False  # (nearly) transparent text, whatever is behind it
     if color == "token" or background == "token":
         return True
     if background is None:
@@ -619,6 +624,8 @@ def _presentational(name: str, attrs: dict, parent: dict) -> list:
     declarations = []
     if name == "a" and "href" in attrs:
         declarations.append(("color", "link", False))
+    if name == "mark":
+        declarations += [("background-color", "#ffff00", False), ("color", "black", False)]
     if name == "font":
         if (attrs.get("color") or "").strip():
             declarations.append(("color", _legacy_color(attrs["color"]), False))
@@ -711,6 +718,21 @@ def _vertical_box(prop: str, value: str, font_px: float) -> float:
     return max(widths, default=0.0)
 
 
+def _clips_both(declarations: list) -> bool:
+    """The overflow that wins on each axis is hidden, clip, auto or scroll."""
+    axes, important_axes = {"x": None, "y": None}, {"x": False, "y": False}
+    for prop, value, important in declarations:
+        parts = value.split()
+        if not parts or prop not in ("overflow", "overflow-x", "overflow-y"):
+            continue
+        pairs = {"overflow": (("x", parts[0]), ("y", parts[1] if len(parts) > 1 else parts[0])),
+                 "overflow-x": (("x", parts[0]),), "overflow-y": (("y", parts[0]),)}[prop]
+        for axis, part in pairs:
+            if important or not important_axes[axis]:
+                axes[axis], important_axes[axis] = part, important
+    return all(axes[axis] in ("hidden", "clip", "auto", "scroll") for axis in ("x", "y"))
+
+
 def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: bool) -> bool:
     """Whether an element could paint over other text or carry it out of reach:
     positioning (absolute, fixed, sticky; relative moved over half a line, or
@@ -726,7 +748,6 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
         return True
     relative = paints = moved = limited = False
     vertical = 0.0
-    clipped = {"x": False, "y": False}
     display, display_important = None, False
     for prop, value, important in declarations:
         if prop.startswith("--") or (prop.startswith("-") and not prop.startswith(_VENDOR_PREFIXES)):
@@ -778,13 +799,6 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
         elif prop == "visibility" and name in ("col", "colgroup"):
             if value != "visible":
                 return True
-        elif prop in ("overflow", "overflow-x", "overflow-y"):
-            parts = value.split()
-            axes = {"overflow": parts[:1] * 2 if len(parts) == 1 else parts[:2],
-                    "overflow-x": parts[:1] + [None], "overflow-y": [None] + parts[:1]}[prop]
-            for axis, part in zip(("x", "y"), axes):
-                if part is not None:
-                    clipped[axis] = part in ("hidden", "clip")
         elif prop == "display" and (important or not display_important):
             display, display_important = value, important
         if prop in _HEIGHT_LIMITS and value not in {"auto", "none", "normal"} | _WIDE_KEYWORDS:
@@ -795,7 +809,7 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
             vertical = max(vertical, _vertical_box(prop, value, font_px))
     inline = display == "inline" or (display is None and name in _INLINE_TAGS)
     if relative and (moved or (name not in ("html", "body") and not inline and limited
-                               and not (clipped["x"] and clipped["y"]))):
+                               and not _clips_both(declarations))):
         # A positioned box paints after the text around it: moved, or holding
         # more than its height allows without clipping it, it can cover that text.
         return True
@@ -857,8 +871,6 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
         context["font_px"] = parent["font_px"] * (0.67 if parent["sectioned"] else 2.0)
     elif name in _TAG_FONT_SCALE:
         context["font_px"] = parent["font_px"] * _TAG_FONT_SCALE[name]
-    elif name == "mark":
-        context["color"], context["bg"] = _BLACK, (255, 255, 0)
     inline = _inline_declarations(attrs.get("style") or "")
     if inline is None:
         return dict(context, visibility="unknown", cover=True, text_ok=False)
@@ -870,22 +882,23 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
     if displays == ["none"] and "all" not in names:
         return dict(context, visibility="hidden")  # not rendered, whatever else the style says
     until_found = (attrs.get("hidden") or "").strip().lower() == "until-found"
-    context["cover"] = _covers(name, attrs, declarations, context["font_px"], context["custom"])
-    # A relative box that passed _covers clips its overflow and stays put:
-    # whatever is positioned inside it cannot paint outside it.
-    context["clip_box"] = not context["cover"] and any(
-        prop == "position" and value == "relative" for prop, value, _important in declarations)
-    context["box_shown"] = until_found  # content-visibility:hidden still paints the element's own box
-
-    # Font size, text color, background and line height for this element's text.
     custom = context["custom"]
     sizes = [_font_px(value, parent["font_px"]) for prop, value, _important in declarations if prop == "font-size"]
     size = _winner(declarations, "font-size", lambda value: _font_px(value, parent["font_px"]))
+    own_px = size if isinstance(size, float) else context["font_px"]  # em and % below are of this size
+    context["cover"] = _covers(name, attrs, declarations, own_px, custom)
+    # A relative box that clips both axes and passed _covers (so it stays put):
+    # whatever is positioned inside it cannot paint outside it.
+    position = _winner(declarations, "position", lambda value: value)
+    context["clip_box"] = not context["cover"] and position == "relative" and _clips_both(declarations)
+    context["box_shown"] = until_found  # content-visibility:hidden still paints the element's own box
+
+    # Font size, text color, background and line height for this element's text.
     link = name == "a" and "href" in attrs
     color = _winner(declarations, "color", lambda value: context["links"][0] if value == "link" else _text_color(value, custom))
     paint = _winner(declarations, "background-color", lambda value: _background_color(value, False, custom))
     shorthand = _winner(declarations, "background", lambda value: _background_color(value, True, custom))
-    line = _winner(declarations, "line-height", lambda value: _line(value, parent["font_px"], custom))
+    line = _winner(declarations, "line-height", lambda value: _line(value, own_px, custom))
     images = [value for prop, value, _important in declarations if prop == "background-image"]
 
     def unknown() -> dict:
@@ -1065,8 +1078,8 @@ def _foreign_cover(tag: str, name: str, attrs: dict, parent: dict) -> bool:
     drawing spill over the page); shapes inside it are clipped to it; MathML
     elements and HTML inside <foreignObject> are positioned like HTML, and
     MathML size attributes count as geometry."""
-    if tag.startswith(_SVG) and parent["foreign"]:
-        return False
+    if parent["in_svg"] and tag.startswith(_SVG):
+        return False  # drawn inside an <svg> box, which clips it unless its overflow is visible (checked there)
     declarations = _inline_declarations(attrs.get("style") or "")
     if declarations is None:
         return True
@@ -1113,6 +1126,7 @@ MAX_PARSE_DEPTH = 1_500
 MAX_PARSE_WORK = 6_000_000  # the largest real pages checked need about a quarter of this
 MAX_TEXT_COPY = 64_000_000
 MAX_CONTENT_CHARS = 1_000_000
+MAX_PARSE_ERRORS = 20_000  # real pages checked: under 200
 MAX_STYLE_TOTAL = 1_000_000  # inline style characters on a page (real pages checked: under 100k)
 MAX_STYLE_DECLARATIONS = 50_000
 # Raw-text elements whose text x-reader never reads.
@@ -1304,6 +1318,14 @@ def _budgeted_parser():
 
     class Parser(html5lib.HTMLParser):
         saw_template = False
+        parse_errors = 0
+
+        def parseError(self, errorcode="XXX-undefined-error", datavars=None):
+            # html5lib keeps a tuple per error (and works out its line and
+            # column); x-reader only counts them.
+            self.parse_errors += 1
+            if self.parse_errors > MAX_PARSE_ERRORS:
+                raise ParseBudgetExceeded("too many parse errors")
 
         def mainLoop(self):
             self.tokenizer = TokenGate(self.tokenizer, self)
@@ -1362,7 +1384,7 @@ def _extract_html_page(html: str) -> dict:
     parser = _budgeted_parser()
     try:
         root = parser.parse(html, scripting=True)
-    except ParseBudgetExceeded:
+    except (ParseBudgetExceeded, RecursionError):
         return refused
     style_chars = style_declarations = 0
     for element in root.iter():
@@ -1398,7 +1420,7 @@ def _extract_html_page(html: str) -> dict:
     base = {"skip": False, "foreign": False, "boiler": False, "main": False, "article": False,
             "hidden": False, "unknown": False, "block": False, "control": False, "collapsed": None,
             "font_px": 16.0, "custom": False, "color": _BLACK, "bg": _WHITE, "line": ("mult", 1.2),
-            "text_ok": True, "sectioned": False, "links": _LINKS, "box": None}
+            "text_ok": True, "sectioned": False, "links": _LINKS, "box": None, "in_svg": False}
 
     def emit(text, state) -> None:
         if not text or state["skip"]:
@@ -1470,6 +1492,7 @@ def _extract_html_page(html: str) -> dict:
             "font_px": style["font_px"], "custom": style["custom"], "color": style["color"], "bg": style["bg"],
             "line": style["line"], "text_ok": style["text_ok"], "sectioned": style["sectioned"],
             "links": style["links"], "box": id(element) if style["clip_box"] else parent["box"],
+            "in_svg": parent["in_svg"] or tag.startswith(_SVG),
             "button_text": name == "input" and (attrs.get("type") or "").strip().lower() in _BUTTON_INPUTS
             and (attrs.get("value") or ""),
             "placeholder": attrs.get("placeholder") or "" if name in ("input", "textarea") else "",

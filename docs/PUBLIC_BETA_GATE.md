@@ -9,7 +9,7 @@ Status (v0.5.0): the hosted surface runs as a **public beta** for public X, YouT
 - The canonical PASS / PARTIAL / FAIL / UNKNOWN projection is shared with x-reader (`x_reader/evidence.py`); the web layer shells out to the CLI instead of implementing a second reader.
 - The hosted policy and the CLI reader share one URL router (`x_reader/routing.py`); the child process refuses platforms outside the hosted allowlist, including when a generic URL redirects into one (`tests/test_hosted_hardening.py`).
 - Connections to the submitted site and every redirect hop are re-resolved, checked against private/special addresses and pinned to a checked IP. Fixed third-party APIs (X oEmbed, FxTwitter, Jina Reader) are called over standard HTTPS.
-- Hosted generic reads return only the text the service fetched over those pinned hops, so the receipt describes what was checked; the hosted surface never uses Jina Reader, which follows redirects on its own side.
+- Hosted generic reads return only the text the service fetched over those pinned hops, so the receipt describes what was checked; hosted generic reads never use Jina Reader, which follows redirects on its own side.
 - A hosted read is a single process: no yt-dlp, ffmpeg or browser is started, so YouTube receipts there cover page metadata only.
 
 ### Isolation

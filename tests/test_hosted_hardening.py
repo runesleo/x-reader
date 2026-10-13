@@ -714,6 +714,15 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main style='color:#fff;background:#000'><mark style='color:inherit'>{article}</mark></main>"),
             ("<body>", f"<main><pre style='tab-size:99999'>x\t{article}</pre></main>"),
             ("<body>", f"<main><p style='position:relative;left:-9999px'>{article}</p></main>"),
+            # known-transparent text over an unknown backdrop; <mark> defaults lose to author CSS
+            ("<body style='background-image:url(x);color:transparent'>", f"<main>{article}</main>"),
+            ("<body style='background:black'>",
+             f"<main><mark style='color:black;background-color:transparent'>{article}</mark></main>"),
+            # em and % line heights are of the element's own font size
+            ("<body>", f"<div style='font-size:80px'><main style='font-size:8px;line-height:10%'>{article}</main></div>"),
+            ("<body>", f"<div style='font-size:80px'><main style='font-size:8px;line-height:.1em'>{article}</main></div>"),
+            # var() fallbacks nested past any use
+            ("<body>", "<main style='font-size:" + "var(--x," * 1100 + "16px" + ")" * 1100 + f"'>{article}</main>"),
             # hidden whatever the display; fallback content browsers do not show
             ("<body>", f"<main hidden='until-found' style='display:block'>{article}</main><p>Short.</p>"),
             ("<body>", f"<main><meter>{article}</meter><progress>{article}</progress></main><p>Short.</p>"),
@@ -752,6 +761,14 @@ class GenericReadTest(unittest.TestCase):
             "<iframe style='position:fixed;inset:0;width:100%;height:100%' src='about:blank'></iframe>",
             "<div style='position:\\61 bsolute;inset:0;width:100%;height:100%;background:#fff'></div>",
             "<div style='position:relative;overflow:hidden'><div style='position:fixed;inset:0;background:#fff'></div></div>",
+            # a relative box that does not clip is no container for what is positioned in it
+            "<div style='position:relative'><div style='position:absolute;inset:0;width:100vw;height:100vh;"
+            "background:white;z-index:999'></div></div>",
+            "<div style='position:relative;overflow:hidden;overflow-y:visible'><div style='position:absolute;inset:0;"
+            "width:100vw;height:100vh;background:white'></div></div>",
+            # an <svg> inside MathML is not clipped by any <svg> around it
+            "<math><mi><svg style='position:fixed;width:100vw;height:100vh' viewBox='0 0 1 1'>"
+            "<rect width='1' height='1' fill='#fff'/></svg></mi></math>",
         )
         for cover in covers:
             for html in (f"<html><head><title>T</title></head><body>{cover}<main>{article}</main></body></html>",
@@ -786,10 +803,20 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main><ruby>x<rp>(</rp><rt>y</rt><rp>)</rp></ruby>{article}</main>"),
             ("<body>", f"<main>{article}<p>Note <sup style='position:relative;top:-0.3em'>1</sup></p></main>"),
             ("<body style='position:relative'>", f"<main style='position:relative;max-width:800px'>{article}</main>"),
+            ("<body>", f"<main>{article}<p>A <mark>highlighted</mark> phrase.</p></main>"),
+            ("<body>", f"<main><div style='position:relative;overflow:hidden;height:200px'><img src='x.jpg' "
+                       f"style='position:absolute;inset:0;width:100%;height:100%'></div>{article}</main>"),
             ("<body>", f"<main style='font-family:\\5FAE\\8F6F\\96C5\\9ED1'>{article}</main>"),
         ):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head>{head}{body}</body></html>")
             self.assertEqual(receipt["status"], "PASS", (head, body[:80]))
+
+    def test_button_labels_count_for_walls_not_as_page_text(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        page, receipt = self._page_receipt(
+            f"<html><head><title>T</title></head><body><main><button>{article}</button></main></body></html>")
+        self.assertNotIn("careful argument", page["content"])
+        self.assertNotEqual(receipt["status"], "PASS")
 
     def test_style_escapes_are_read_as_browsers_read_them(self):
         from x_reader.fetchers.jina import _inline_declarations
@@ -824,6 +851,7 @@ class GenericReadTest(unittest.TestCase):
             "<table>" + "<b>x</b>" * 30_000,  # foster parenting copies the child list
             "".join(f'<p style="color:red;{"margin:0 1px;" * 1500}">x</p>' for _ in range(250)),  # style volume
             "<main>" + '<span style="color:#123456;padding:1px 2px;font-family:a,b">w </span>' * 30_000 + "</main>",
+            "<main><p>" + ARTICLE + "</p></main>" + "</b>" * 399_000,  # parse errors are counted, not kept
             "<div a=x\" " + " ".join(f"a{i}=1" for i in range(jina.MAX_TAG_ATTRIBUTES + 10)) + " \">x</div>",
             "<table>" + "x<b></b>" * 12000,  # foster-parented text copies
             "<html><head><title>" + "word " * 200_000 + "</title></head><body><main>"

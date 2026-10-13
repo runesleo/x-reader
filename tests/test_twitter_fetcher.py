@@ -215,6 +215,18 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         self.assertEqual(read["poll_status"], "read")
         self.assertEqual(twitter._structure_from_fxtwitter(dict(base))["poll_status"], "none")
 
+    def test_text_that_is_not_a_string_is_not_read(self):
+        from unittest.mock import MagicMock, patch
+
+        quoted = twitter._structure_from_fxtwitter({"id": "1", "text": "main", "quote": {"id": "2", "text": [None]}})
+        self.assertEqual(quoted["quote_status"], "unknown")
+        self.assertNotIn("quote_text", quoted)
+        response = MagicMock()
+        response.json.return_value = {"tweet": {"id": "123", "text": [None], "author": {"screen_name": "a"}}}
+        with patch.object(twitter.requests, "get", return_value=response):
+            with self.assertRaises(ValueError):
+                twitter._fetch_via_fxtwitter("https://x.com/runesleo/status/123")
+
     def test_layers_count_when_present_whatever_their_value(self):
         from x_reader.evidence import classify_payload
         from x_reader.schema import from_twitter
