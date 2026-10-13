@@ -786,6 +786,13 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "the page is too large for x-reader to check for walls, so it cannot pass",
             "components": {"text_body": UNKNOWN},
         }
+    if "client_redirect" in signals:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "client_redirect",
+            "evidence": "the page sends visitors on to another URL (meta refresh), so its text may not be what they see",
+            "components": {"text_body": UNKNOWN},
+        }
     if "visibility_unknown" in signals:
         return {
             "status": UNKNOWN,

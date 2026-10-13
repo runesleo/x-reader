@@ -619,6 +619,29 @@ class GenericReadTest(unittest.TestCase):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{body}</body></html>")
             self.assertNotEqual(receipt["status"], "PASS", body[-120:])
 
+    def test_collapsed_controls_and_redirects(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+
+        def read(body, head=""):
+            return self._page_receipt(f"<html><head><title>T</title>{head}</head><body>{body}</body></html>")
+
+        # a closed <details> shows only its summary; a closed <dialog> nothing
+        page, receipt = read(f"<main>{article}<details><summary>FAQ</summary><p>Folded answer.</p></details></main>")
+        self.assertNotIn("Folded answer", page["content"])
+        self.assertEqual(receipt["status"], "PASS")
+        page, _receipt = read(f"<main>{article}<details open><summary>FAQ</summary><p>Open answer.</p></details></main>")
+        self.assertIn("Open answer", page["content"])
+        _page, receipt = read(f"<main>{article}<dialog><p>Subscribe to continue reading.</p></dialog></main>")
+        self.assertEqual(receipt["status"], "PARTIAL")
+        # button labels and placeholders are wall wording; menus are not page text
+        _page, receipt = read(f"<main>{article}<input type=submit value='Sign in to continue reading'></main>")
+        self.assertNotEqual(receipt["status"], "PASS")
+        page, _receipt = read(f"<main>{article}<select><option>Menu choice text</option></select></main>")
+        self.assertNotIn("Menu choice", page["content"])
+        # a meta refresh sends visitors elsewhere
+        _page, receipt = read(f"<main>{article}</main>", head="<meta http-equiv='refresh' content='0; url=https://elsewhere.example/'>")
+        self.assertEqual(receipt["reason_code"], "client_redirect")
+
     def test_markup_beyond_the_parse_budget_is_refused(self):
         from x_reader.fetchers import jina
 

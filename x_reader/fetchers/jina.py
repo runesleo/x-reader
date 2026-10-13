@@ -57,8 +57,11 @@ class BlockedDestination(ValueError):
 # fallback inside players, frames and canvases, and legacy no-frame blocks.
 _SKIP_TAGS = {
     "head", "title", "script", "style", "noscript", "template", "iframe", "object", "video", "audio",
-    "canvas", "noembed", "noframes",
+    "canvas", "noembed", "noframes", "datalist",
 }
+# Form controls show their text, but in a box or a menu: walls count, page text does not.
+_CONTROL_TAGS = {"select", "textarea"}
+_BUTTON_INPUTS = {"submit", "button", "reset"}
 _BOILERPLATE_TAGS = {"nav", "footer", "aside"}
 _BLOCK_TAGS = {
     "p", "div", "article", "section", "main", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -418,6 +421,9 @@ def _extract_html_page(html: str) -> dict:
     plugins page-wide, except frames that are themselves hidden or 0/1-pixel.
     visibility_unknown: content includes text under markup whose visibility
     x-reader cannot settle, or template markup that could reshape the page.
+    client_redirect: a <meta http-equiv="refresh"> sends visitors to another URL.
+    Closed <details> (beyond the summary) and <dialog> hide their text; menus
+    and text boxes, button labels and placeholders count only as wall wording.
     """
     import html5lib
     from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars
@@ -425,7 +431,7 @@ def _extract_html_page(html: str) -> dict:
     too_complex, templates_unsure = _prescan_markup(html)
     if too_complex:
         return {"title": "", "content": "", "embeds": 0, "page_text": "", "primary_used": False,
-                "visibility_unknown": True, "too_complex": True}
+                "visibility_unknown": True, "too_complex": True, "client_redirect": False}
     root = html5lib.parse(html, treebuilder="etree", namespaceHTMLElements=False, scripting=True)
     title_element = next(iter(root.iter("title")), None)
     title = " ".join("".join(title_element.itertext()).split()) if title_element is not None else ""
@@ -433,8 +439,12 @@ def _extract_html_page(html: str) -> dict:
     parts: dict = {"gate": [], "body": [], "main": [], "article": []}
     unknown_in: set = set()
     embeds = 0
+    client_redirect = any(
+        (meta.get("http-equiv") or "").strip().lower() == "refresh" and "url" in (meta.get("content") or "").lower()
+        for meta in root.iter("meta")
+    )
     base = {"skip": False, "foreign": False, "boiler": False, "main": False, "article": False,
-            "hidden": False, "unknown": False, "block": False}
+            "hidden": False, "unknown": False, "block": False, "collapsed": False, "summary_hidden": False}
 
     def emit(text, state) -> None:
         if not text or state["skip"]:
@@ -443,7 +453,7 @@ def _extract_html_page(html: str) -> dict:
         if not chunk:
             return
         parts["gate"].append(chunk)
-        if state["foreign"] or state["boiler"] or state["hidden"]:
+        if state["foreign"] or state["boiler"] or state["hidden"] or state.get("control"):
             return
         regions = ["body"] + [region for region in ("main", "article") if state[region]]
         if state["unknown"] and chunk != "\n":
@@ -461,15 +471,26 @@ def _extract_html_page(html: str) -> dict:
             embeds += 1
         shadow_root = name == "template" and ("shadowrootmode" in attrs or "shadowroot" in attrs)
         visibility = "visible" if foreign else _content_visibility(attrs)
+        hidden = parent["hidden"]
+        if parent["collapsed"]:
+            # A closed <details> shows only its summary.
+            hidden = parent["summary_hidden"] if name == "summary" else True
+        closed = not foreign and "open" not in attrs and name in ("details", "dialog")
         return {
             "skip": parent["skip"] or (not foreign and name in _SKIP_TAGS and not shadow_root),
             "foreign": foreign,
             "boiler": parent["boiler"] or (not foreign and name in _BOILERPLATE_TAGS),
             "main": parent["main"] or name == "main",
             "article": parent["article"] or name == "article",
-            "hidden": parent["hidden"] or visibility == "hidden",
+            "hidden": hidden or visibility == "hidden" or (closed and name == "dialog") or (closed and name == "details"),
             "unknown": parent["unknown"] or visibility == "unknown",
             "block": not foreign and name in _BLOCK_TAGS,
+            "control": parent.get("control") or (not foreign and name in _CONTROL_TAGS),
+            "collapsed": closed and name == "details",
+            "summary_hidden": hidden or visibility == "hidden",
+            "button_text": name == "input" and (attrs.get("type") or "").strip().lower() in _BUTTON_INPUTS
+            and (attrs.get("value") or ""),
+            "placeholder": attrs.get("placeholder") or "" if name in ("input", "textarea") else "",
         }
 
     stack: list = []
@@ -478,6 +499,9 @@ def _extract_html_page(html: str) -> dict:
         state = child_state(element, parent)
         if state["block"]:
             emit("\n", state)
+        for label in (state["button_text"], state["placeholder"]):
+            if label:  # visible wording that is not a text node: a wall's button or prompt
+                emit(label, dict(state, control=True))
         emit(element.text, state)
         stack.append((element, state, iter(list(element)), parent))
 
@@ -505,6 +529,7 @@ def _extract_html_page(html: str) -> dict:
         "title": title[:200], "content": content, "embeds": embeds,
         "page_text": _join_text(parts["gate"]), "primary_used": primary_used,
         "visibility_unknown": chosen in unknown_in or templates_unsure, "too_complex": False,
+        "client_redirect": client_redirect,
     }
 
 
@@ -815,6 +840,8 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
         signals |= set(consent_signals(title, content))
     if page["visibility_unknown"]:
         signals.add("visibility_unknown")
+    if page["client_redirect"]:
+        signals.add("client_redirect")
     return {
         "title": title or final_url,
         "content": content,
