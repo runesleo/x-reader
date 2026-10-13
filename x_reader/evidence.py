@@ -475,7 +475,7 @@ def gate_signals(title: str, text: str, cta_text: str | None = None, markup: boo
             consent_found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
             if _PAYWALL_ANY.search(line) or _TEASER_START.match(head) or _TEASER_END.search(line):
                 signals.add("paywall")
-        for line in _normalized_lines("", text if cta_text is None else cta_text):
+        for line in _normalized_lines("", text if cta_text is None else cta_text, markup):
             if _TEASER_LINE.match(_LEAD.sub("", line, count=1)):
                 signals.add("paywall")
     except ValueError:

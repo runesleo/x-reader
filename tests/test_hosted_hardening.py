@@ -732,6 +732,13 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main style='color:white;color:rgb\\(0\\,0\\,0\\);background:white'>{article}</main>"),
             ("<body>", f"<main style='color:white;color:black\\ ;background:white'>{article}</main>"),
             ("<body>", f"<main style='color:white;color:black\\9;background:white'>{article}</main>"),
+            # escaped digits are names, not numbers; values browsers drop are not colors
+            ("<body>", f"<main style='color:white;color:rgb(\\30,\\30,\\30)'>{article}</main>"),
+            ("<body>", f"<main style='color:white;color:link'>{article}</main>"),
+            ("<body>", f"<main style='color:white;color:rgb(0,0,0%)'>{article}</main>"),
+            ("<body>", f"<main style='color:white;color:rgb(0,0,0 / 1)'>{article}</main>"),
+            ("<body>", f"<main style='color:white;background:white;background:black red'>{article}</main>"),
+            ("<body>", f"<main style='display:grid;grid-auto-rows:minmax(0,0fr)'>{article}</main>"),
             # text a set height cannot hold spills over what follows
             ("<body>", f"<main><div style='height:0'><div>{article}</div></div><div>{article}</div></main>"),
             ("<body>", f"<main style='display:grid;height:0;grid-auto-rows:minmax(0,1fr)'>{article}</main>"),
@@ -833,7 +840,12 @@ class GenericReadTest(unittest.TestCase):
                        f"{article}</main>"),
             ("<body>", f"<main><xmp>shown as written</xmp>{article}</main>"),
             ("<body>", f"<main style='height:100%'>{article}</main>"),
+            ("<body>", f"<main style='font-size:1px;font-size:16px;height:0;height:auto'>{article}</main>"),
+            ("<body>", f"<main style='color:rgb(0 0 0 / 1)'>{article}</main>"),
             ("<body>", f"<main style='display:flex;grid-auto-rows:0'>{article}</main>"),  # grid tracks need a grid
+            ("<body>", f"<main><p>漢<ruby>字<rt>かんじ</rt></ruby>の読み方。</p><img src='a.jpg' style='float:left' "
+                       f"alt='A chart'>{article}</main>"),
+            ("<body>", f"<main><ul style='list-style-type:disc'><li>{article}</li></ul></main>"),
             ("<body>", f"<main><div style='position:relative;overflow:hidden;height:200px'><img src='x.jpg' "
                        f"style='position:absolute;inset:0;width:100%;height:100%'></div>{article}</main>"),
             ("<body>", f"<main style='font-family:\\5FAE\\8F6F\\96C5\\9ED1'>{article}</main>"),
@@ -849,13 +861,35 @@ class GenericReadTest(unittest.TestCase):
                        "<div style='float:left'>Sub</div><div style='float:left'>scribe to continue.</div>",
                        "<div style='display:inline'>Sub</div><div style='display:inline'>scribe to continue.</div>",
                        "<div>&lt;Subscribe to continue&gt;</div>",
-                       "<xmp><notice value='Subscribe to continue.'></xmp>"):
+                       "<xmp><notice value='Subscribe to continue.'></xmp>",
+                       # annotations sit above the base text; order and CSS-made text are not the source
+                       "<div><ruby>Sub<rt>ab</rt></ruby>scribe to continue.</div>",
+                       "<div style='display:flex'><span style='order:2'>continue.</span>"
+                       "<span style='order:1'>Subscribe to </span></div>",
+                       "<div style='display:flex;flex-direction:row-reverse'><span>continue.</span>"
+                       "<span>Subscribe to </span></div>",
+                       "<div dir='rtl' style='display:flex'><span>continue.</span><span>Subscribe to </span></div>",
+                       "<div style='float:right'>continue.</div><div style='float:right'>Subscribe to </div>",
+                       "<ul><li style=\"list-style-type:'Subscribe '\">to continue.</li></ul>",
+                       "<p><q style='quotes:\"Subscribe \" \"\"'>to continue.</q></p>",
+                       "<img src='missing.png' alt='Please sign in to continue.'>"):
             page, receipt = self._page_receipt(
                 f"<html><head><title>T</title></head><body>{notice}<main>{article}</main></body></html>")
             self.assertNotEqual(receipt["status"], "PASS", notice)
         page, receipt = self._page_receipt("<html><head><title>T</title></head><body><main><p>Hello <b>world</b>!</p>"
                                            f"{article}</main></body></html>")
         self.assertTrue(page["content"].startswith("Hello world!"))  # nothing added between inline runs
+        page, receipt = self._page_receipt(
+            "<html><head><title>T</title></head><body><div style='display:flex;gap:20px'><div>Subscribe</div>"
+            f"<div>to continue.</div></div><main>{article}</main></body></html>")
+        self.assertNotEqual(receipt["status"], "PASS")  # a gap between the boxes parts the words
+        page, receipt = self._page_receipt(
+            f"<html><head><title>{'A' * 1000} | Sign in</title></head><body><main>{article}</main></body></html>")
+        self.assertEqual(receipt["reason_code"], "page_too_large_to_check")  # past what x-reader checks
+        page, receipt = self._page_receipt(
+            "<html style='height:100%'><head><title>T</title></head><body style='height:100%'>"
+            f"<div style='height:0%'>{article}</div><div>{article}</div></body></html>")
+        self.assertNotEqual(receipt["status"], "PASS")  # a percentage of a set height is a set height
         long_title = "Brand " * 60 + "| Sign in"
         page, receipt = self._page_receipt(
             f"<html><head><title>{long_title}</title></head><body><main>{article}</main></body></html>")
@@ -890,6 +924,8 @@ class GenericReadTest(unittest.TestCase):
         body = "<script>shown too</script><main>" + ARTICLE * 2 + "</main>"
         page, receipt = read(body, "text/plain")
         self.assertIn("<script>shown too</script>", page["content"])  # browsers show text/plain as written
+        page, receipt = read("<Read more>\n" + ARTICLE * 2, "text/plain")
+        self.assertEqual(receipt["status"], "PARTIAL")  # the teaser line is a line of words, not a tag
         page, receipt = read("<html><body><main>" + ARTICLE * 2 + "</main><p>unclosed", "application/xhtml+xml")
         self.assertEqual(receipt["reason_code"], "page_structure_unverified")
 
@@ -904,14 +940,18 @@ class GenericReadTest(unittest.TestCase):
         from x_reader.fetchers.jina import _inline_declarations
 
         self.assertEqual(_inline_declarations("dis\\play:none"), [("display", "none", False)])
-        self.assertEqual(_inline_declarations("position:\\61 bsolute"), [("position", "absolute", False)])
+        # a value spelled with escapes outside a string is opaque (U+FFFD first): escapes
+        # only spell names, so an escaped digit is no number and an escaped keyword is
+        # judged as unknown; font names and keywords still read for the checks that look
+        self.assertEqual(_inline_declarations("position:\\61 bsolute"), [("position", "\ufffdabsolute", False)])
+        self.assertEqual(_inline_declarations("color:rgb(\\30,\\30,\\30)"), [("color", "\ufffdrgb(0,0,0)", False)])
         # an escape outside a string spells only identifier characters: one that yields
         # a delimiter, space, bracket or comma leaves a value no parser here accepts
         self.assertEqual(_inline_declarations("c\\;d:e"), [("c\ufffdd", "e", False)])
         self.assertEqual(_inline_declarations("color\\:black"), [])  # no unescaped ":", no declaration
-        self.assertEqual(_inline_declarations("color:black\\!important"), [("color", "black\ufffdimportant", False)])
+        self.assertEqual(_inline_declarations("color:black\\!important"), [("color", "\ufffdblack\ufffdimportant", False)])
         self.assertEqual(_inline_declarations("color:red !\\69mportant"), [("color", "red", True)])
-        self.assertEqual(_inline_declarations("color:rgb\\(0\\,0\\,0\\)"), [("color", "rgb\ufffd0\ufffd0\ufffd0\ufffd", False)])
+        self.assertEqual(_inline_declarations("color:rgb\\(0\\,0\\,0\\)"), [("color", "\ufffdrgb\ufffd0\ufffd0\ufffd0\ufffd", False)])
         self.assertEqual(_inline_declarations("font-family:'\\5FAE'"), [("font-family", "'\u5fae'", False)])
         for broken in ("a:b\\", "a:\\\nb", "a:b/*", "a:(b", "a:b)", "a:'b"):
             self.assertIsNone(_inline_declarations(broken), broken)

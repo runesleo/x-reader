@@ -229,6 +229,16 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
             reply = twitter._structure_from_fxtwitter(
                 {"id": "1", "text": "main", "author": author, "replying_to": "alice", "replying_to_status": "0"})
             self.assertEqual(reply["structure_status"], "unknown", author)
+        for quote_author in ({"screen_name": ["alice"]}, {}, {"screen_name": " "}):
+            damaged = twitter._structure_from_fxtwitter(
+                {"id": "1", "text": "main", "quote": {"id": "2", "text": "q", "author": quote_author}})
+            self.assertEqual(damaged["quote_status"], "unknown", quote_author)
+        base = {"id": "1", "text": "main", "author": {"screen_name": "a"}}
+        for replied, status in ((" ", "5"), ("a", []), ("a", False), ("a", ""), ("a", None)):
+            reply = twitter._structure_from_fxtwitter(dict(base, replying_to=replied, replying_to_status=status))
+            self.assertEqual(reply["structure_status"], "unknown", (replied, status))
+        plain = twitter._structure_from_fxtwitter(dict(base, replying_to=None, replying_to_status=None))
+        self.assertEqual(plain["structure_status"], "verified")  # FxTwitter's shape for a post that is not a reply
         response = MagicMock()
         response.json.return_value = {"tweet": {"id": "123", "text": [None], "author": {"screen_name": "a"}}}
         with patch.object(twitter.requests, "get", return_value=response):

@@ -211,9 +211,10 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     if isinstance(quote, dict):
         quote_text = quote.get("text").strip() if isinstance(quote.get("text"), str) else ""
         quote_author = quote.get("author")
-        if ("author" in quote and not isinstance(quote_author, dict)) or _reply_state(quote) == "unknown":
-            quote_text = ""  # an author that is not an object, or an unreadable reply relation: a damaged layer
-        quote_author = str(quote_author.get("screen_name") or "") if isinstance(quote_author, dict) else ""
+        screen = quote_author.get("screen_name") if isinstance(quote_author, dict) else None
+        if ("author" in quote and not (isinstance(screen, str) and screen.strip())) or _reply_state(quote) == "unknown":
+            quote_text = ""  # an author without a readable handle, or an unreadable reply relation: a damaged layer
+        quote_author = screen.strip() if isinstance(screen, str) else ""
         quote_media = _media_status_from_fxtwitter(quote) if quote.get("id") else "unknown"
         if not quote_text or quote_media == "unknown":
             result["quote_status"] = "unknown"
@@ -252,14 +253,16 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
 def _reply_state(tweet: dict) -> str:
     """"none", "self" (a reply to the author's own post: a thread) or "other";
     "unknown" for a reply whose author or replied-to account cannot be read."""
-    if not tweet.get("replying_to_status"):
-        return "none"
+    status, replied = tweet.get("replying_to_status"), tweet.get("replying_to")
+    if status is None:  # FxTwitter sends null (or nothing) for a post that is not a reply
+        return "none" if replied is None else "unknown"
+    if isinstance(status, bool) or not isinstance(status, (str, int)) or not str(status).strip():
+        return "unknown"
     author = tweet.get("author")
     screen = author.get("screen_name") if isinstance(author, dict) else None
-    replied = tweet.get("replying_to")
-    if not (isinstance(screen, str) and screen and isinstance(replied, str) and replied):
+    if not (isinstance(screen, str) and screen.strip() and isinstance(replied, str) and replied.strip()):
         return "unknown"
-    return "self" if screen.lower() == replied.lower() else "other"
+    return "self" if screen.strip().lower() == replied.strip().lower() else "other"
 
 
 def _is_self_reply(tweet: dict) -> bool:

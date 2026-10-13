@@ -87,6 +87,10 @@ _BLOCK_DISPLAYS = {
 _FLOWING_DISPLAYS = {"flex", "inline-flex", "grid", "inline-grid", "-webkit-box", "-webkit-inline-box",
                      "-ms-flexbox", "-ms-inline-flexbox"}
 _LINE_BREAK = "\x0b"  # a line break inside a block (<br>, preformatted newlines)
+# An element boundary inside a line: nothing in the text as laid out, but a
+# margin, padding or gap there can part the words on either side, so walls are
+# also looked for with a space at each one.
+_BOUNDARY = "\x1f"
 # Anything a page embeds is content x-reader does not read: players, frames, plugins.
 _EMBED_TAGS = {"video", "audio", "iframe", "embed", "object"}
 
@@ -139,9 +143,11 @@ def _inline_declarations(style: str) -> list | None:
 _PLAIN_STYLE = re.compile(r"[^\\\"'/\[\]{}()]*(?:\([^\\\"'/\[\]{}();]*\)[^\\\"'/\[\]{}()]*)*")
 
 
-def _declaration(parts: list, colon, bang):
+def _declaration(parts: list, colon, bang, escaped: bool = False):
     """(name, value, important) from a declaration's pieces and the positions of
-    its unescaped ":" and last unescaped "!"; None without a ":"."""
+    its unescaped ":" and last unescaped "!"; None without a ":". A value with
+    an escape outside a string starts with U+FFFD: escapes only spell names
+    (an escaped digit is not a number), so no value parser here may take it."""
     if colon is None:
         return None
     name = "".join(parts[:colon]).strip().lower()
@@ -149,12 +155,13 @@ def _declaration(parts: list, colon, bang):
         value, important = "".join(parts[colon + 1:bang]), True
     else:
         value, important = "".join(parts[colon + 1:]), False
-    return name, " ".join(value.split()).lower(), important
+    value = " ".join(value.split()).lower()
+    return name, ("\ufffd" + value if escaped else value), important
 
 
 def _style_tokens(style: str) -> list | None:
     """_inline_declarations for styles that need the full tokenizer."""
-    declarations, parts, colon, bang = [], [], None, None
+    declarations, parts, colon, bang, escaped = [], [], None, None, False
     quote, open_blocks, position, size = "", [], 0, len(style)
     while position < size:
         match = _STYLE_TOKEN.match(style, position)
@@ -174,6 +181,7 @@ def _style_tokens(style: str) -> list | None:
             # that yields a space, bracket, comma or other non-name character leaves
             # a value browsers drop, so it reads as one no CSS parser here accepts.
             parts.append(char if quote or char.isalnum() or char in "-_" or ord(char) >= 0x80 else "\ufffd")
+            escaped = escaped or (not quote and colon is not None and bang is None)  # (an escaped !important is fine)
         elif quote:
             if token == "\n":
                 return None
@@ -197,10 +205,10 @@ def _style_tokens(style: str) -> list | None:
                 return None
             parts.append(token)
         elif token == ";" and not open_blocks:
-            declaration = _declaration(parts, colon, bang)
+            declaration = _declaration(parts, colon, bang, escaped)
             if declaration:
                 declarations.append(declaration)
-            parts, colon, bang = [], None, None
+            parts, colon, bang, escaped = [], None, None, False
         else:
             if not open_blocks:
                 if token == ":" and colon is None:
@@ -210,7 +218,7 @@ def _style_tokens(style: str) -> list | None:
             parts.append(token)
     if quote or open_blocks:
         return None
-    declaration = _declaration(parts, colon, bang)
+    declaration = _declaration(parts, colon, bang, escaped)
     if declaration:
         declarations.append(declaration)
     return declarations
@@ -273,20 +281,20 @@ _CHANNEL = re.compile(rf"\+?({_NUMBER})(%?)")
 _HUE = re.compile(rf"([+-]?{_NUMBER})(deg)?")
 # Properties whose value cannot hide, clip, shrink, move or recolor an element's own text.
 _INERT_PREFIXES = (
-    "--", "background", "border", "outline", "list-style", "grid", "flex", "align-", "justify-",
+    "--", "background", "border", "outline", "grid", "flex", "align-", "justify-",
     "place-", "column-", "row-", "gap", "font-variant", "font-feature", "font-kerning", "font-optical",
     "font-stretch", "font-synthesis", "text-decoration", "text-emphasis", "text-underline", "scroll-", "break-",
     "page-break", "counter-", "caret", "accent-color", "transition", "box-decoration",
 )
 _INERT_PROPERTIES = {
     "font-weight", "font-style", "text-align", "text-align-last", "text-transform",
-    "text-rendering", "text-shadow", "text-justify", "float", "clear", "cursor", "box-sizing",
+    "text-rendering", "text-shadow", "text-justify", "clear", "cursor", "box-sizing",
     "box-shadow", "direction", "writing-mode", "text-orientation", "word-break",
-    "overflow-wrap", "word-wrap", "hyphens", "quotes", "table-layout", "border-collapse",
+    "overflow-wrap", "word-wrap", "hyphens", "table-layout", "border-collapse",
     "border-spacing", "caption-side", "empty-cells", "orphans", "widows", "pointer-events", "user-select",
     "-webkit-user-select", "-moz-user-select", "-ms-user-select", "will-change", "object-fit",
     "object-position", "aspect-ratio", "resize", "min-height", "min-block-size",
-    "isolation", "z-index", "order", "white-space", "text-overflow",
+    "isolation", "z-index", "white-space", "text-overflow",
     "-webkit-font-smoothing", "-moz-osx-font-smoothing", "-webkit-tap-highlight-color",
     "-webkit-text-size-adjust", "text-size-adjust", "touch-action", "speak", "image-rendering",
     "-webkit-appearance", "appearance", "-moz-appearance", "forced-color-adjust",
@@ -388,6 +396,7 @@ _NAMED_RGB = {
 _BLACK = (0, 0, 0, 1.0)
 _WHITE = (255, 255, 255)
 _LINKS = ((0, 0, 238, 1.0), (85, 26, 139, 1.0))  # the browser's default link and visited-link colors
+_LINK_COLOR = "\x00link"  # stands for those in declarations; no style attribute can hold a NUL
 _VENDOR_PREFIXES = ("-webkit-", "-moz-", "-ms-", "-o-", "-apple-", "-khtml-", "-epub-")
 # Properties allowed only with these exact values; every declaration of them is
 # checked, not just the one that wins, so an invalid later value cannot hide an
@@ -528,26 +537,28 @@ def _rgba(value: str):
         if not func:
             continue
         body = func.group(1).strip()
-        if "/" in body:
-            channels_text, _slash, alpha_text = body.partition("/")
-            parts, alpha = channels_text.replace(",", " ").split(), _alpha(alpha_text)
-        else:
-            parts = [part.strip() for part in body.split(",")] if "," in body else body.split()
+        legacy = "," in body  # comma syntax: no "/", and rgb channels all numbers or all percentages
+        if legacy:
+            if "/" in body:
+                return None
+            parts = [part.strip() for part in body.split(",")]
             alpha = _alpha(parts.pop()) if len(parts) == 4 else 1.0
-        if len(parts) != 3 or alpha is None:
+        elif "/" in body:
+            channels_text, _slash, alpha_text = body.partition("/")
+            parts, alpha = channels_text.split(), _alpha(alpha_text)
+        else:
+            parts, alpha = body.split(), 1.0
+        if len(parts) != 3 or alpha is None or any(not part for part in parts):
             return None
         if pattern is _RGB_FUNC:
-            channels = []
-            for part in parts:
-                match = _CHANNEL.fullmatch(part)
-                if not match:
-                    return None
-                amount = float(match.group(1)) * (2.55 if match.group(2) else 1)
-                channels.append(round(min(amount, 255)))
+            matches = [_CHANNEL.fullmatch(part) for part in parts]
+            if not all(matches) or (legacy and len({bool(match.group(2)) for match in matches}) > 1):
+                return None
+            channels = [round(min(float(match.group(1)) * (2.55 if match.group(2) else 1), 255)) for match in matches]
             return (channels[0], channels[1], channels[2], alpha)
         hue = _HUE.fullmatch(parts[0])
         levels = [_CHANNEL.fullmatch(part) for part in parts[1:]]
-        if not hue or not all(levels):
+        if not hue or not all(levels) or (legacy and not all(level.group(2) for level in levels)):
             return None
         import colorsys
 
@@ -633,18 +644,15 @@ def _background_color(value: str, shorthand: bool, custom: bool):
         return "currentcolor"
     if not shorthand:
         return _rgba(value)
-    color = "keep"
+    color, colors = "keep", 0
     for token in _split_layers(value):
         if token in _BG_WORDS or token == "0" or _PLAIN_LENGTH.fullmatch(token):
             continue
-        if token == "currentcolor":
-            color = "currentcolor"
-            continue
-        parsed = _rgba(token)
+        parsed = "currentcolor" if token == "currentcolor" else _rgba(token)
         if parsed is None:
             return None
-        color = parsed
-    return color
+        color, colors = parsed, colors + 1
+    return color if colors <= 1 else None  # a background has one color: two make the declaration invalid
 
 
 def _legacy_color(value: str) -> str:
@@ -663,7 +671,7 @@ def _presentational(name: str, attrs: dict, parent: dict) -> list:
     come before, and lose to, the inline style), plus the default link color."""
     declarations = []
     if name == "a" and "href" in attrs:
-        declarations.append(("color", "link", False))
+        declarations.append(("color", _LINK_COLOR, False))
     if name == "mark":
         declarations += [("background-color", "#ffff00", False), ("color", "black", False)]
     if name == "font":
@@ -803,12 +811,16 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
     shadows over 1em), explicit grid placement, negative margins past 1em,
     geometry reaching past _FAR_PX (or set through an inline custom property),
     an inline box whose background or border reaches past its line, a collapsed
-    table column, or an open <dialog>, which browsers position over the page."""
+    table column, or an open <dialog>, which browsers position over the page;
+    also anything that shows text in another order than written (flex/grid
+    order, reversed or dense flow, right floats, right-to-left flex and grid)
+    or makes text from CSS (string list markers, quotes)."""
     if name == "dialog" and "open" in attrs:
         return True
     relative = paints = moved = limited = False
     vertical = 0.0
     display, display_important = None, False
+    direction, direction_important = None, False
     for prop, value, important in declarations:
         if prop.startswith("--") or (prop.startswith("-") and not prop.startswith(_VENDOR_PREFIXES)):
             continue
@@ -861,12 +873,31 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
                 return True
         elif prop == "display" and (important or not display_important):
             display, display_important = value, important
+        # Text shown in another order than written, or made by CSS, can spell a
+        # notice nowhere in the page's text (or hide one that is).
+        elif prop == "order":
+            if value not in {"0"} | _WIDE_KEYWORDS:
+                return True
+        elif prop in ("flex-direction", "flex-flow", "grid-auto-flow"):
+            if "reverse" in value or "dense" in value:
+                return True
+        elif prop == "float":
+            if value in ("right", "inline-end"):
+                return True  # right floats line up from the right: later ones show first
+        elif prop.startswith("list-style") or prop == "quotes":
+            if (prop == "quotes" and value not in {"auto", "none"} | _WIDE_KEYWORDS) or (
+                    prop != "quotes" and re.search(r"[\"']|\b(?:symbols|counters?|url|image-set|attr)\(", value)):
+                return True
+        elif prop == "direction" and (important or not direction_important):
+            direction, direction_important = value, important
         if prop in _HEIGHT_LIMITS and value not in {"auto", "none", "normal"} | _WIDE_KEYWORDS:
             limited = True
         if prop.startswith(("background", "border")) and value not in _NO_PAINT:
             paints = True
         if prop.startswith(("padding", "border")):
             vertical = max(vertical, _vertical_box(prop, value, font_px))
+    if display in _FLOWING_DISPLAYS and "rtl" in (direction, (attrs.get("dir") or "").strip().lower()):
+        return True  # flex and grid items line up from the right: shown in another order than written
     inline = display == "inline" or (display is None and name in _INLINE_TAGS)
     if relative and (moved or (name not in ("html", "body") and not inline and limited
                                and not _clips_both(declarations))):
@@ -916,14 +947,14 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
             "color": parent["color"], "bg": parent["bg"], "line": parent["line"], "text_ok": parent["text_ok"],
             "sectioned": parent["sectioned"] or name in _SECTIONING, "cover": False, "box_shown": False,
             "links": parent["links"], "clip_box": False, "display": None, "floated": False,
-            "pre": parent["pre"] or name in _PRE_TAGS,
+            "pre": parent["pre"] or name in _PRE_TAGS, "definite_h": False,
         }
     context = {
         "visibility": "visible", "font_px": parent["font_px"], "custom": parent["custom"],
         "color": parent["color"], "bg": parent["bg"], "line": parent["line"], "text_ok": parent["text_ok"],
         "sectioned": parent["sectioned"] or name in _SECTIONING, "cover": False, "box_shown": False,
         "links": parent["links"], "clip_box": False, "display": None, "floated": False,
-        "pre": parent["pre"] or name in _PRE_TAGS,
+        "pre": parent["pre"] or name in _PRE_TAGS, "definite_h": False,
     }
     if name == "body":
         # <body link/vlink> color every link; a link may show either.
@@ -937,6 +968,7 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
     if inline is None:
         return dict(context, visibility="unknown", cover=True, text_ok=False)
     declarations = _presentational(name, attrs, parent) + inline
+    context["definite_h"] = _definite_height(name, declarations, parent["definite_h"])
     names = {prop for prop, _value, _important in declarations}
     if any(prop.startswith("--") for prop in names):
         context["custom"] = True
@@ -945,7 +977,6 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
         return dict(context, visibility="hidden")  # not rendered, whatever else the style says
     until_found = (attrs.get("hidden") or "").strip().lower() == "until-found"
     custom = context["custom"]
-    sizes = [_font_px(value, parent["font_px"]) for prop, value, _important in declarations if prop == "font-size"]
     size = _winner(declarations, "font-size", lambda value: _font_px(value, parent["font_px"]))
     own_px = size if isinstance(size, float) else context["font_px"]  # em and % below are of this size
     context["cover"] = _covers(name, attrs, declarations, own_px, custom)
@@ -968,7 +999,8 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
 
     # Font size, text color, background and line height for this element's text.
     link = name == "a" and "href" in attrs
-    color = _winner(declarations, "color", lambda value: context["links"][0] if value == "link" else _text_color(value, custom))
+    color = _winner(declarations, "color",
+                    lambda value: context["links"][0] if value == _LINK_COLOR else _text_color(value, custom))
     paint = _winner(declarations, "background-color", lambda value: _background_color(value, False, custom))
     shorthand = _winner(declarations, "background", lambda value: _background_color(value, True, custom))
     line = _winner(declarations, "line-height", lambda value: _line(value, own_px, custom))
@@ -982,8 +1014,6 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
         return unknown()
     if size is not None:
         context["font_px"] = size
-        if min(sizes) < _MIN_TEXT_PX:
-            return unknown()
     if color == "inherit":
         context["color"] = parent["color"]
     elif color is not None:
@@ -1053,10 +1083,24 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
         elif prop in ("grid", "grid-template"):
             if display in ("grid", "inline-grid") and value not in {"none"} | _WIDE_KEYWORDS:
                 return unknown()  # shorthands mixing areas and tracks are not judged
+        elif prop.startswith("list-style"):
+            if re.search(r"[\"']|\b(?:symbols|counters?|url|image-set|attr)\(", value):
+                return unknown()  # a marker made of author text or an image is text x-reader does not see
+        elif prop == "quotes":
+            if value not in {"auto", "none"} | _WIDE_KEYWORDS:
+                return unknown()  # quotation marks are author text around <q>
+        elif prop in ("order", "-webkit-order", "-ms-flex-order"):
+            if value not in {"0"} | _WIDE_KEYWORDS:
+                return unknown()  # shown in a different order than written
+        elif prop in ("flex-direction", "flex-flow", "-webkit-flex-direction", "-webkit-flex-flow",
+                      "-ms-flex-direction", "grid-auto-flow"):
+            if "reverse" in value or "dense" in value:
+                return unknown()
+        elif prop == "float":
+            if value not in {"none", "left", "inline-start"} | _WIDE_KEYWORDS:
+                return unknown()  # right floats line up from the right: later ones show first
         elif prop in _BOX_HEIGHTS:
-            boxed = display not in ("inline", "contents") and (display is not None or name not in _INLINE_TAGS)
-            if boxed and not _height_open(value, custom):
-                return unknown()  # a set height its text can overrun, spilling over what follows
+            continue  # judged below, by the declarations that win
         elif prop.startswith(_INERT_PREFIXES) or prop in _INERT_PROPERTIES:
             continue
         elif prop in _NONE_ONLY or prop in ("all", "font"):
@@ -1113,6 +1157,15 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
             _box_px(token, font) is None or abs(_box_px(token, font)[0]) * (10 if _box_px(token, font)[1] else 1) > font / 2
             for prop in set(won) & _OFFSETS for token in won[prop][0].split() if token not in {"auto"} | _WIDE_KEYWORDS):
         return unknown()  # offsets beyond half a line can move it off-screen
+    boxed = display not in ("inline", "contents") and (display is not None or name not in _INLINE_TAGS)
+    if boxed and name not in ("html", "body") and any(
+            winner is not None and not _height_open(winner, custom, parent["definite_h"])
+            for winner in (_winner(declarations, prop, lambda value: value) for prop in _BOX_HEIGHTS)):
+        return unknown()  # a set height its text can overrun, spilling over what follows
+    rtl = (attrs.get("dir") or "").strip().lower() == "rtl" or _winner(
+        declarations, "direction", lambda value: value) == "rtl"
+    if rtl and display in _FLOWING_DISPLAYS:
+        return unknown()  # flex and grid items line up from the right: shown in a different order than written
     if until_found:
         return dict(context, visibility="hidden")  # content-visibility:hidden, whatever the display says
     if displays:
@@ -1223,8 +1276,11 @@ def _split_tracks(value: str) -> list:
 def _track_ok(token: str, font_px: float, rows: bool = False) -> bool:
     """A grid track that holds its text: flexible or content-sized; a column of
     at least 1em (5%) also does, while a fixed row height can be overrun."""
-    if token in ("auto", "min-content", "max-content") or re.fullmatch(rf"{_NUMBER}fr", token):
+    if token in ("auto", "min-content", "max-content"):
         return True
+    flexible = re.fullmatch(rf"({_NUMBER})fr", token)
+    if flexible:
+        return float(flexible.group(1)) > 0  # 0fr takes no share: the track stays at its minimum
     for function in ("repeat(", "minmax(", "fit-content("):
         if token.startswith(function) and token.endswith(")"):
             inner = token[len(function):-1]
@@ -1253,23 +1309,37 @@ def _tracks_ok(value: str, font_px: float, rows: bool = False) -> bool:
     return bool(tokens) and all(_track_ok(token, font_px, rows) for token in tokens)
 
 
-def _height_open(value: str, custom: bool) -> bool:
+def _height_open(value: str, custom: bool, parent_definite: bool = False) -> bool:
     """A height that leaves a box as tall as its content needs: auto, content
-    sizing, or a percentage (of a parent's height, judged on that parent); a
-    design token from the stylesheet is judged like external CSS."""
+    sizing, or a percentage of a parent whose own height is not set (which
+    computes to auto); a design token from the stylesheet is judged like
+    external CSS."""
     if value in {"auto", "none", "max-content", "min-content", "fit-content", "stretch", "-webkit-fill-available"} \
             | _WIDE_KEYWORDS:
         return True
     if re.fullmatch(r"var\(\s*--[\w-]+\s*\)", value):
         return not custom
-    return bool(re.fullmatch(rf"{_NUMBER}%", value))
+    return bool(re.fullmatch(rf"{_NUMBER}%", value)) and not parent_definite
 
 
-def _join_text(parts: list) -> str:
+def _definite_height(name: str, declarations: list, parent_definite: bool) -> bool:
+    """Whether the element's height is set (so percentages inside it resolve):
+    a length, or a percentage of a set height (the root's is the viewport's)."""
+    height = _winner(declarations, "height", lambda value: value)
+    if height is None or height in {"auto", "max-content", "min-content", "fit-content"} | _WIDE_KEYWORDS:
+        return False
+    if re.fullmatch(rf"{_NUMBER}%", height):
+        return parent_definite or name == "html"
+    return not re.fullmatch(r"var\(\s*--[\w-]+\s*\)", height)
+
+
+def _join_text(parts: list, spaced: bool = False) -> str:
     """Text as browsers lay it out: inline chunks run on with nothing added and
     whitespace runs collapse to one space; a line break (_LINE_BREAK) ends a
-    line and a block ("\n") ends a paragraph, which a blank line separates."""
+    line and a block ("\n") ends a paragraph, which a blank line separates.
+    spaced=True puts a space at every element boundary (_BOUNDARY) instead."""
     blocks, lines, current = [], [], []
+    gap = " " if spaced else ""
 
     def end_line() -> None:
         line = " ".join("".join(current).split())
@@ -1285,6 +1355,8 @@ def _join_text(parts: list) -> str:
                 lines.clear()
         elif chunk == _LINE_BREAK:
             end_line()
+        elif chunk == _BOUNDARY:
+            current.append(gap)
         else:
             current.append(chunk)
     end_line()
@@ -1577,7 +1649,7 @@ def _extract_html_page(html: str) -> dict:
         return refused  # more inline styling than x-reader judges within its time limits
     templates = parser.saw_template or any(True for _ in root.iter("template"))
     title_element = next(iter(root.iter("title")), None)
-    title = ""
+    title, title_truncated = "", False
     if title_element is not None:
         pieces, kept = [], 0
         for piece in title_element.itertext():
@@ -1586,6 +1658,12 @@ def _extract_html_page(html: str) -> dict:
             if kept >= 1000:
                 break
         title = " ".join("".join(pieces).split())
+        length = 0
+        for piece in title_element.itertext():
+            length += len(piece)
+            if length > 1000:
+                title_truncated = True  # walls past the first 1000 characters would go unseen
+                break
 
     parts: dict = {"gate": [], "body": [], "main": [], "article": []}
     unknown_in: set = set()
@@ -1593,6 +1671,7 @@ def _extract_html_page(html: str) -> dict:
     embeds = 0
     layout_risk = False
     box_regions: dict = {}  # clip box -> regions holding text inside it
+    annotations: list = []  # ruby annotations
     covered_boxes: set = set()
     client_redirect = any(
         (meta.get("http-equiv") or "").strip().lower() == "refresh" and _parse_refresh(meta.get("content") or "")
@@ -1602,7 +1681,7 @@ def _extract_html_page(html: str) -> dict:
             "hidden": False, "unknown": False, "block": False, "control": False, "collapsed": None,
             "font_px": 16.0, "custom": False, "color": _BLACK, "bg": _WHITE, "line": ("mult", 1.2),
             "text_ok": True, "sectioned": False, "links": _LINKS, "box": None, "in_svg": False,
-            "flowing": False, "pre": False}
+            "flowing": False, "pre": False, "annotation": False, "definite_h": False}
 
     def emit(text, state) -> None:
         if not text or state["skip"]:
@@ -1614,6 +1693,13 @@ def _extract_html_page(html: str) -> dict:
                 emit(line, state)
             return
         chunk = text
+        if chunk == _BOUNDARY:
+            parts["gate"].append(chunk)
+            return
+        if state["annotation"]:
+            if not chunk.isspace():
+                annotations.append(chunk)  # shown above the base text: walls count, the base text runs on
+            return
         parts["gate"].append(chunk)
         if state["foreign"] or state["boiler"] or state["hidden"] or state["control"]:
             return
@@ -1640,7 +1726,7 @@ def _extract_html_page(html: str) -> dict:
             style = {key: parent[key] for key in ("font_px", "custom", "color", "bg", "line", "text_ok", "sectioned",
                                                   "links")}
             style.update(visibility="visible", cover=_foreign_cover(tag, name, attrs, parent), box_shown=False,
-                         clip_box=False, display=None, floated=False, pre=parent["pre"])
+                         clip_box=False, display=None, floated=False, pre=parent["pre"], definite_h=False)
         else:
             style = _style_context(name, attrs, parent)
         if style["cover"] and not (parent["skip"] or parent["hidden"] or parent["control"]) and (
@@ -1679,8 +1765,9 @@ def _extract_html_page(html: str) -> dict:
                 style["display"] in _BLOCK_DISPLAYS or (style["display"] is None and name in _BLOCK_TAGS)),
             "cell": not foreign and (style["display"] == "table-cell" or (style["display"] is None and name in _CELL_TAGS)),
             "line_break": not foreign and name == "br",
+            "annotation": parent["annotation"] or (not foreign and name in ("rt", "rtc")),
             "flowing": not foreign and style["display"] in _FLOWING_DISPLAYS,
-            "pre": style["pre"],
+            "pre": style["pre"], "definite_h": style["definite_h"],
             "control": parent["control"] or (not foreign and name in _CONTROL_TAGS),
             "collapsed": {"summary_seen": False, "outer_hidden": own_hidden} if closed and name == "details" else None,
             "font_px": style["font_px"], "custom": style["custom"], "color": style["color"], "bg": style["bg"],
@@ -1693,6 +1780,8 @@ def _extract_html_page(html: str) -> dict:
             "field_value": attrs.get("value") or "" if name == "input"
             and (attrs.get("type") or "").strip().lower() not in _NON_TEXT_INPUTS else "",
             "option_label": attrs.get("label") or "" if name in ("option", "optgroup") else "",
+            "alt_text": attrs.get("alt") or "" if name == "img" or (
+                name == "input" and (attrs.get("type") or "").strip().lower() == "image") else "",
         }
 
     stack: list = []
@@ -1705,7 +1794,10 @@ def _extract_html_page(html: str) -> dict:
             emit(_LINE_BREAK, state)
         elif state["cell"]:
             emit(" ", state)
-        for label in (state["button_text"], state["placeholder"], state["field_value"], state["option_label"]):
+        else:
+            emit(_BOUNDARY, state)
+        for label in (state["button_text"], state["placeholder"], state["field_value"], state["option_label"],
+                      state["alt_text"]):
             if label:  # visible wording that is not a text node, in its own box: a wall's button or prompt
                 emit(f" {label} ", dict(state, control=True))
         emit(element.text, state)
@@ -1721,6 +1813,8 @@ def _extract_html_page(html: str) -> dict:
                 emit("\n", state)
             elif state["cell"]:
                 emit(" ", state)
+            else:
+                emit(_BOUNDARY, state)
             emit(element.tail, parent)
         elif not isinstance(child.tag, str):  # comment or processing instruction
             emit(child.tail, state)
@@ -1738,8 +1832,10 @@ def _extract_html_page(html: str) -> dict:
     if len(content) > MAX_CONTENT_CHARS:
         return refused  # too much text to judge, or to hand on, within the service's limits
     return {
-        "title": title[:200], "title_scanned": title, "content": content, "embeds": embeds,
-        "page_text": _join_text(parts["gate"]), "primary_used": primary_used,
+        "title": title[:200], "title_scanned": title, "title_truncated": title_truncated, "content": content,
+        "embeds": embeds,
+        "page_text": "\n\n".join(filter(None, [_join_text(parts["gate"]), _join_text(parts["gate"], spaced=True), "\n".join(
+            " ".join(note.split()) for note in annotations)])), "primary_used": primary_used,
         "visibility_unknown": chosen in unknown_in or layout_risk, "layout_risk": layout_risk,
         "templates": templates, "too_complex": False, "client_redirect": client_redirect,
     }
@@ -2074,6 +2170,8 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
         signals.add("visibility_unknown")
     if page["client_redirect"]:
         signals.add("client_redirect")
+    if page.get("title_truncated"):
+        signals.add("scan_budget_exceeded")  # the title runs past what x-reader checks for walls
     if page["templates"]:
         signals.add("template_markup")
     if media_type == "application/xhtml+xml":
