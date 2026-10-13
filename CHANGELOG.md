@@ -8,6 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 
 ## [Unreleased]
 
+### Added
+
+- `x-reader doctor [--json]`: read-only self-check that lists core and optional capabilities as `OK` / `MISSING` / `BLOCKED` / `INFO`, says who fixes each item (agent or user) and the next command, never prints secret values, and exits non-zero only when a core item is not ready. Also runnable as `python3 -m x_reader.doctor`.
+- `install.md`: step-by-step setup written for AI agents, so a user can paste one sentence into Claude Code, Codex or Cursor and have the agent install, self-check and complete a first read.
+- README (EN / 简体中文): one-step "paste this into your agent" setup, plus links to the product site and the hosted web reader.
+
 ## [0.3.1] - 2026-09-29
 
 ### Added

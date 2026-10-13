@@ -6,6 +6,7 @@ Usage:
     x-reader <url>                     # Fetch a single URL
     x-reader <url1> <url2> ...         # Fetch multiple URLs
     x-reader <url> --json              # Full machine-readable payload
+    x-reader doctor [--json]           # Read-only self-check: what is ready, what is missing
     x-reader list                      # Show inbox contents
     x-reader clear                     # Clear inbox
 """
@@ -126,6 +127,7 @@ Usage:
     x-reader <url1> <url2>      Fetch multiple URLs
     x-reader <url> --json       Print complete UnifiedContent as JSON
     x-reader login <platform>   Login to a platform (saves session for browser fallback)
+    x-reader doctor [--json]    Check what is ready and what is missing (read-only)
     x-reader list               Show inbox contents
     x-reader clear              Clear inbox
 
@@ -157,6 +159,9 @@ Examples:
             sys.exit(1)
         headless = "--headless" in args
         cmd_login(args[1], headless=headless)
+    elif cmd == "doctor":
+        from x_reader.doctor import run_doctor
+        sys.exit(run_doctor(json_output=json_output))
     elif cmd == "list":
         cmd_list()
     elif cmd == "clear":

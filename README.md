@@ -9,7 +9,15 @@ x-reader is a source-first Agent Skill + CLI for X/Twitter, articles, video, pod
 
 It does one thing differently: **a search snippet is not the source, a tweet caption is not the attached video, and a video description is not a transcript.** If a material source layer was not actually retrieved, x-reader says so.
 
-**简体中文：** [README.zh-CN.md](./README.zh-CN.md)
+**简体中文：** [README.zh-CN.md](./README.zh-CN.md) · **Website:** [xreader.leolabs.me](https://xreader.leolabs.me/en) · [Try it in the browser](https://xreader.leolabs.me/app)
+
+## Set up in one step
+
+Paste this into your AI agent (Claude Code, Codex, Cursor, …):
+
+> Set up x-reader on this computer by following the official instructions at https://github.com/runesleo/x-reader/blob/main/install.md.
+
+Your agent installs the skill and the CLI, runs the read-only `x-reader doctor` self-check, and reads a first link with you. The steps it follows are in [install.md](./install.md); to do it by hand, see below.
 
 ## Install the Agent Skill
 
@@ -119,6 +127,12 @@ Read a URL:
 
 ```bash
 x-reader https://x.com/elonmusk/status/123456
+```
+
+Check what is ready and what is missing (read-only; add `--json` for agents):
+
+```bash
+x-reader doctor
 ```
 
 Get the complete machine-readable payload:

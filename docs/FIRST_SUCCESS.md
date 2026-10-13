@@ -122,3 +122,40 @@ It proves the first-success path was real at the stated date:
 5. a broken source fails closed instead of being silently replaced.
 
 It does **not** claim every platform or every future URL will always be accessible. The product contract is to make incomplete coverage explicit.
+
+## Clean-environment install via install.md (2026-10-13)
+
+Goal: a user pastes one sentence into their agent and reaches a first real read within 15 minutes, on a machine without the author's paths, cookies, memory or saved sessions.
+
+The skill came from public `main`; the CLI was installed from the release candidate that adds `x-reader doctor` (on public `main` the skill bootstrap is still pinned to an earlier verified commit).
+
+| Environment | Starting point | Total time |
+|---|---|---|
+| macOS, empty temporary `HOME` | Python 3.14 and Node.js already installed | 244 s |
+| Debian bookworm container (`node:24-bookworm-slim`) | no Python; user installs `python3`, `python3-venv`, `git` | 103 s |
+
+Steps, exactly as written in [install.md](../install.md):
+
+```text
+1 basics   python3 --version · git --version · npx --version
+2 skill    npx skills add runesleo/x-reader --skill x-reader -g -y   (container: -a codex)
+           → installed to ~/.agents/skills/x-reader
+3 CLI      cache venv at ~/.cache/x-reader/venv
+4 doctor   core OK; optional items MISSING with fix_by and next command; exit 0
+5 read     x-reader <url> --json
+```
+
+First-success reads (both environments):
+
+```text
+https://x.com/dontbesilent/status/2103875422522077377
+  source_type=twitter  fetch_method=oembed  media_status=present
+  → post text READ; attached video PARTIAL until it is actually consumed
+
+https://example.com
+  fetch_method=direct_html_pinned  (Jina returned HTTP 401, safe fallback)
+```
+
+Found and fixed during the run: skill locations under a symlinked home (`/tmp` → `/private/tmp`) were listed twice; install hints now target the interpreter x-reader runs from.
+
+Still to verify after release: the same run against the public release commit once the skill bootstrap pin includes `doctor`.
