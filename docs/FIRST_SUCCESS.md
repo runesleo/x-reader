@@ -166,3 +166,7 @@ The skill bootstrap now pins `8e94baa835d0f3d4f771924953b18873b862af96`. Running
 |---|---|---|---|---|
 | macOS, empty temporary `HOME` | 173 s | ready, exit 0 | `oembed`, `media_status=present` | `direct_html_pinned` |
 | Debian bookworm container, after installing `python3`, `python3-venv`, `git` | 119 s | ready, exit 0 | `oembed`, `media_status=present` | `direct_html_pinned` |
+
+### v0.4.0 pin (2026-10-13)
+
+The skill bootstrap pins `20d4c2eded74d0c15844611e31265767f63d55af` (v0.4.0). Its bootstrap block, run unchanged on macOS with an empty `HOME`, installed `x-reader 0.4.0` from that public commit in 127 s; `doctor` ready (exit 0); X post `oembed` + `media_status=present`; example.com `direct_html_pinned`.
