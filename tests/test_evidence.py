@@ -178,11 +178,16 @@ class EvidenceContractTest(unittest.TestCase):
             "object to. You can reject all or choose purposes one by one in the list that follows.\n") * 8
         removed = "Page not found\nThe page you were looking for has moved or never existed."
         for title, body, reason in (("Before you continue", consent, "challenge_or_error"),
-                                    ("News site", long_consent, "challenge_or_error"),
                                     ("Example", removed, "source_unavailable")):
             result = classify_payload({"source_type": "manual", "title": title, "content": body})
             self.assertEqual(result["status"], "FAIL", reason)
             self.assertEqual(result["reason_code"], reason)
+        verified = {"redirects_verified": True, "embedded_media": 0}
+        for body in (long_consent, "We use cookies to give you the best experience.\n" + ARTICLE * 3):
+            # one cookie phrase in long text: a consent wall and a bannered article look alike
+            result = classify_payload({"source_type": "manual", "title": "News site", "content": body, "extra": verified})
+            self.assertEqual(result["status"], "UNKNOWN", body[:40])
+            self.assertEqual(result["reason_code"], "consent_text_present")
 
     def test_missing_page_openings_never_pass(self):
         verified = {"redirects_verified": True, "embedded_media": 0}
@@ -193,6 +198,19 @@ class EvidenceContractTest(unittest.TestCase):
         thin = classify_payload({"source_type": "manual", "title": "404 Not Found | Example",
                                  "content": "Sorry, we could not find that page.", "extra": verified})
         self.assertEqual(thin["status"], "FAIL")
+
+    def test_missing_page_detection_is_anchored(self):
+        verified = {"redirects_verified": True, "embedded_media": 0}
+        guide = "How to fix Page Not Found errors\n" + ARTICLE * 2
+        result = classify_payload({"source_type": "manual", "title": "How to fix Page Not Found errors",
+                                   "content": guide, "extra": verified})
+        self.assertEqual(result["status"], "PASS")
+        oops = classify_payload({"source_type": "manual", "title": "Example", "content": "Oops! Page not found\n" + ARTICLE * 3,
+                                 "extra": verified})
+        self.assertEqual(oops["reason_code"], "possibly_missing_page")
+        error = classify_payload({"source_type": "manual", "title": "Error 404 | Example",
+                                  "content": "We looked everywhere for this page.", "extra": verified})
+        self.assertEqual(error["status"], "FAIL")
 
     def test_walls_mentioned_later_in_an_article_do_not_count(self):
         article = ARTICLE + "Readers who hit a page not found error should check the address first.\n" + ARTICLE

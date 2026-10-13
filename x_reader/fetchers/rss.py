@@ -8,6 +8,7 @@ or follows redirects itself.
 
 import asyncio
 import re
+from collections import Counter
 from typing import Any, Dict, List
 
 import feedparser
@@ -46,19 +47,20 @@ def _is_full_body(html_body: str) -> bool:
 
 
 # A feed body counts as full when it covers this share of the article page's
-# text, measured as overlapping word runs, not just length.
-FULL_BODY_COVERAGE = 0.6
+# text, counted in overlapping word runs (with repeats), not just length...
+FULL_BODY_COVERAGE = 0.8
 # ...and when this share of the feed body actually appears on the page.
 FEED_ON_PAGE_SHARE = 0.7
 _SHINGLE = 6
 _MAX_TOKENS = 50_000
-_TOKEN = re.compile(r"[a-z0-9]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+# CJK, kana and hangul count per character; every other script per word.
+_TOKEN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]|[^\W_]+")
 
 
-def _shingles(text: str) -> set:
-    """Runs of six words (or CJK characters), the unit used to compare two texts."""
-    tokens = _TOKEN.findall(text.lower())[:_MAX_TOKENS]
-    return {tuple(tokens[i:i + _SHINGLE]) for i in range(max(0, len(tokens) - _SHINGLE + 1))}
+def _shingles(text: str) -> Counter:
+    """Runs of six words (or CJK characters), with how often each occurs."""
+    tokens = _TOKEN.findall(text.casefold())[:_MAX_TOKENS]
+    return Counter(tuple(tokens[i:i + _SHINGLE]) for i in range(max(0, len(tokens) - _SHINGLE + 1)))
 
 
 async def verify_full_body(article: Dict[str, Any]) -> str:
@@ -97,10 +99,10 @@ async def verify_full_body(article: Dict[str, Any]) -> str:
     on_page = _shingles(visible_text(page["content"]))
     if not feed or not on_page:
         return "unverified"
-    shared = len(feed & on_page)
-    if shared < FEED_ON_PAGE_SHARE * len(feed):
+    shared = sum((feed & on_page).values())
+    if shared < FEED_ON_PAGE_SHARE * sum(feed.values()):
         return "unverified"  # the feed body is not this page's text
-    return "full" if shared >= FULL_BODY_COVERAGE * len(on_page) else "summary"
+    return "full" if shared >= FULL_BODY_COVERAGE * sum(on_page.values()) else "summary"
 
 
 async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:

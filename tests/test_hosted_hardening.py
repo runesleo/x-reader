@@ -231,6 +231,18 @@ class SafeFetchTest(unittest.TestCase):
         unrelated = "\n".join(f"An unrelated page talks about gardening tips number {i} in detail." for i in range(60))
         self.assertEqual(verdict(content=unrelated), "unverified")
         self.assertEqual(verdict(content="Sign in to continue reading."), "unverified")
+        paragraphs = [f"Section {i} of the long report walks through finding number {i} with care." for i in range(100)]
+        with patch("x_reader.fetchers.jina.fetch_html_page",
+                   return_value=dict(page, content="\n".join(paragraphs))):
+            partial = dict(item, summary="<p>" + " ".join(paragraphs[:62]) + "</p>")
+            self.assertEqual(asyncio.run(rss.verify_full_body(partial)), "summary")  # 62 % is not full
+        repeated = "\n".join(["The same refrain returns again and again in this very long page."] * 100)
+        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(page, content=repeated)):
+            five = dict(item, summary="<p>" + " ".join([repeated.splitlines()[0]] * 5) + "</p>")
+            self.assertEqual(asyncio.run(rss.verify_full_body(five)), "summary")  # repeats are counted
+        russian = "\n".join(f"Раздел {i} длинной статьи подробно объясняет следующий шаг рассуждения." for i in range(40))
+        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(page, content=russian)):
+            self.assertEqual(asyncio.run(rss.verify_full_body(dict(item, summary=f"<p>{russian}</p>"))), "full")
         self.assertEqual(verdict(embedded_media=1), "unverified")
         with patch("x_reader.fetchers.jina.fetch_html_page", side_effect=ValueError("HTTP status 403")):
             self.assertEqual(asyncio.run(rss.verify_full_body(dict(item))), "unverified")
@@ -415,6 +427,20 @@ class GenericReadTest(unittest.TestCase):
         self.assertNotIn("Copyright", content)
         self.assertIn("careful argument", content)
         self.assertIn("second article on the page", content)
+
+    def test_banners_outside_the_marked_content_stay_out(self):
+        from x_reader.evidence import classify_payload
+        from x_reader.fetchers.jina import _extract_html_page
+
+        banner = ("<div class='cmp'>We value your privacy. We and our partners use cookies. "
+                  "Accept all cookies or manage preferences. Reject all.</div>")
+        html = ("<html><head><title>Essay</title></head><body>" + banner + "<main>" +
+                "".join(f"<p>{line}</p>" for line in ARTICLE.splitlines()) + "</main></body></html>")
+        title, content, embeds = _extract_html_page(html)
+        self.assertNotIn("cookies", content)
+        receipt = classify_payload({"source_type": "manual", "title": title, "content": content,
+                                    "extra": {"redirects_verified": True, "embedded_media": embeds}})
+        self.assertEqual(receipt["status"], "PASS")
 
 
 class TelegramRoutingTest(unittest.TestCase):

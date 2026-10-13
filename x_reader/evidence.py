@@ -138,9 +138,13 @@ _UNAVAILABLE_PHRASES = (
 )
 _CONSENT_PHRASES = (
     "we value your privacy", "accept all cookies", "manage cookie preferences",
-    "cookie consent", "we use cookies", "this site uses cookies",
-    "your privacy choices", "consent to the use of cookies", "reject all",
-    "and our partners", "legitimate interest", "manage preferences", "consent preferences",
+    "cookie consent", "we use cookies", "this site uses cookies", "uses cookies to",
+    "your privacy choices", "consent to the use of cookies", "consent preferences",
+)
+# Common in consent dialogs, but also in prose and footer links: they only add weight.
+_CONSENT_WEAK_PHRASES = (
+    "reject all", "and our partners", "legitimate interest", "manage preferences",
+    "cookie settings", "cookie policy",
 )
 _CONSENT_TITLES = ("before you continue", "cookie", "consent", "privacy choices", "your privacy")
 _TEASER_TAIL = (
@@ -168,6 +172,20 @@ _READ_MORE_TAIL = (
 def _host_in(url: str, domains: tuple) -> bool:
     host = (urlparse(url).hostname or "").lower().rstrip(".")
     return any(host == domain or host.endswith("." + domain) for domain in domains)
+
+
+_APOLOGY = re.compile(r"^(?:oops|sorry|uh[- ]oh|error|抱歉|对不起|哎呀)[\s!,.:;—–-]*")
+
+
+def _opens_as_missing_page(title: str, body: str) -> bool:
+    """The title or the first line announces a missing page (anchored, not anywhere)."""
+    first = next((line.strip() for line in body.splitlines() if line.strip()), "")
+
+    def announces(text: str) -> bool:
+        text = _APOLOGY.sub("", text.strip().lower())
+        return bool(re.match(r"(?:error\s*)?404\b", text)) or text.startswith(_UNAVAILABLE_PHRASES)
+
+    return announces(title) or (len(first) <= 80 and announces(first))
 
 
 def _ends_with_read_more(text: str) -> bool:
@@ -453,22 +471,29 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
         }
     head = lowered[:600]
     consent_hits = sum(phrase in lowered for phrase in _CONSENT_PHRASES)
-    consent_wall = (
-        consent_hits >= 3
-        or (consent_hits and any(marker in title.lower() for marker in _CONSENT_TITLES))
-        or (consent_hits and prose < 600)
-    )
-    if shell_state == "challenge_or_error" or consent_wall:
+    consent_weight = consent_hits + sum(phrase in lowered for phrase in _CONSENT_WEAK_PHRASES)
+    consent_title = any(marker in title.lower() for marker in _CONSENT_TITLES)
+    if shell_state == "challenge_or_error" or (
+        consent_hits and (prose < 600 or consent_title)
+    ):
         return {
             "status": FAIL,
             "reason_code": "challenge_or_error",
             "evidence": "generic reader returned an error, challenge or consent shell",
             "components": {"text_body": FAIL},
         }
+    # Cookie wording inside long text: a consent wall and an article carrying a
+    # banner look alike from here, so the page cannot pass.
+    if consent_hits or consent_weight >= 3:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "consent_text_present",
+            "evidence": "the page text includes cookie/consent wording, so it may be a consent wall rather than the content",
+            "components": {"text_body": UNKNOWN},
+        }
     # A page that opens by saying it is missing never passes, however much help
     # text follows (soft 404s answer HTTP 200); thin ones fail outright.
-    opening = f"{title.lower()}\n{lowered[:200]}"
-    if any(phrase in opening for phrase in _UNAVAILABLE_PHRASES) or (
+    if _opens_as_missing_page(title, body) or (
         prose < 600 and any(phrase in head for phrase in _UNAVAILABLE_PHRASES)
     ):
         if prose < 600:

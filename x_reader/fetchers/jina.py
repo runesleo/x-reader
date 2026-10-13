@@ -95,18 +95,29 @@ def _join_text(parts: list) -> str:
 def _extract_html_page(html: str) -> tuple[str, str, int]:
     """Title, page text and the number of embedded players, frames and plugins.
 
-    Navigation, footers and asides are dropped; everything else in the body is
-    kept, so no part of the page's own text is silently left out.
+    Navigation, footers and asides are dropped. When the page marks its primary
+    content (every <main>, or else every <article>) and that region carries
+    substantial prose, the text is that region, so banners and widgets around it
+    stay out; otherwise the whole remaining body is kept. Embeds are counted
+    over the whole page.
     """
     from html.parser import HTMLParser
+    from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars
 
     class _PageParser(HTMLParser):
         def __init__(self):
             super().__init__()
-            self.skip_depth = self.boiler_depth = 0
+            self.skip_depth = self.boiler_depth = self.main_depth = self.article_depth = 0
             self.in_head = self.in_title = False
-            self.title_parts, self.body_parts = [], []
+            self.title_parts, self.body_parts, self.main_parts, self.article_parts = [], [], [], []
             self.embeds = 0
+
+        def _append(self, chunk):
+            self.body_parts.append(chunk)
+            if self.main_depth:
+                self.main_parts.append(chunk)
+            if self.article_depth:
+                self.article_parts.append(chunk)
 
         def handle_starttag(self, tag, attrs):
             tag = tag.lower()
@@ -119,11 +130,15 @@ def _extract_html_page(html: str) -> tuple[str, str, int]:
             else:
                 if tag in _BOILERPLATE_TAGS:
                     self.boiler_depth += 1
+                if tag == "main":
+                    self.main_depth += 1
+                elif tag == "article":
+                    self.article_depth += 1
                 if (tag in _EMBED_TAGS and not self.skip_depth and not self.boiler_depth
                         and not _is_hidden_embed(dict(attrs))):
                     self.embeds += 1
                 if not self.in_head and tag in _BLOCK_TAGS:
-                    self.body_parts.append("\n")
+                    self._append("\n")
 
         def handle_endtag(self, tag):
             tag = tag.lower()
@@ -136,8 +151,12 @@ def _extract_html_page(html: str) -> tuple[str, str, int]:
             else:
                 if tag in _BOILERPLATE_TAGS and self.boiler_depth:
                     self.boiler_depth -= 1
+                if tag == "main" and self.main_depth:
+                    self.main_depth -= 1
+                elif tag == "article" and self.article_depth:
+                    self.article_depth -= 1
                 if not self.in_head and tag in _BLOCK_TAGS:
-                    self.body_parts.append("\n")
+                    self._append("\n")
 
         def handle_data(self, data):
             text = data.strip()
@@ -146,12 +165,19 @@ def _extract_html_page(html: str) -> tuple[str, str, int]:
             if self.in_title:
                 self.title_parts.append(text)
             elif not self.in_head and not self.boiler_depth:
-                self.body_parts.append(text)
+                self._append(text)
 
     parser = _PageParser()
     parser.feed(html)
     title = " ".join(parser.title_parts).strip()
-    return title[:200], _join_text(parser.body_parts), parser.embeds
+    content = _join_text(parser.body_parts)
+    for region in (parser.main_parts, parser.article_parts):
+        primary = _join_text(region)
+        if primary:
+            if prose_chars(primary) >= MIN_GENERIC_BODY_CHARS:
+                content = primary
+            break
+    return title[:200], content, parser.embeds
 
 
 def _extract_html_text(html: str) -> tuple[str, str]:
