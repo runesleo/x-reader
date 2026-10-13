@@ -99,7 +99,7 @@ class FirstSuccessSmokeTest(unittest.TestCase):
                 "title": "Example Domain",
                 "content": "This is a real public document body with enough content to read. " * 6,
                 "extra": {"fetch_method": "direct_html_pinned", "redirects_verified": True,
-                          "embedded_media": 0, "page_signals": []},
+                          "embedded_media": 0, "page_signals": [], "body_verified": True},
             }
         )
         self.assertEqual(coverage, "READ")

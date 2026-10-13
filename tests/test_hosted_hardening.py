@@ -240,7 +240,8 @@ class SafeFetchTest(unittest.TestCase):
         with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(page, content=repeated)):
             five = dict(item, summary="<p>" + " ".join([repeated.splitlines()[0]] * 5) + "</p>")
             self.assertEqual(asyncio.run(rss.verify_full_body(five)), "summary")  # repeats are counted
-        huge = " ".join(f"word{i}" for i in range(rss._MAX_TOKENS + 10))
+        from x_reader.utils import textmatch
+        huge = " ".join(f"word{i}" for i in range(textmatch.MAX_TOKENS + 10))
         with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(page, content=huge + ".")):
             self.assertEqual(asyncio.run(rss.verify_full_body(dict(item, summary=huge[:200]))), "unverified")
         import unicodedata
@@ -385,6 +386,7 @@ class GenericReadTest(unittest.TestCase):
         jina.assert_not_called()
         self.assertEqual(content.extra["fetch_method"], "direct_html_pinned")
         self.assertIs(content.extra["redirects_verified"], True)
+        self.assertIs(content.extra["body_verified"], True)
         self.assertEqual(content.extra["embedded_media"], 0)
 
     def test_hosted_reads_never_use_jina(self):
@@ -402,11 +404,19 @@ class GenericReadTest(unittest.TestCase):
 
     def test_local_reads_use_jina_text_with_direct_evidence(self):
         with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(self.PAGE, embedded_media=1)), \
-                patch("x_reader.reader.fetch_via_jina", return_value=dict(self.JINA)):
+                patch("x_reader.reader.fetch_via_jina", return_value=dict(self.JINA, content=ARTICLE)):
             content = self._read("https://e.com/a")
         self.assertEqual(content.extra["fetch_method"], "jina_pinned")
         self.assertIs(content.extra["redirects_verified"], True)
+        self.assertIs(content.extra["body_verified"], True)
         self.assertEqual(content.extra["embedded_media"], 1)
+
+    def test_local_jina_text_needs_a_matching_direct_read(self):
+        for direct in (dict(self.PAGE, content=""), dict(self.PAGE, content="Loading, please wait.")):
+            with patch("x_reader.fetchers.jina.fetch_html_page", return_value=direct), \
+                    patch("x_reader.reader.fetch_via_jina", return_value=dict(self.JINA)):
+                content = self._read("https://e.com/a")
+            self.assertIs(content.extra["body_verified"], False)
 
     def test_unreadable_pages_are_recorded_as_unverified(self):
         with patch("x_reader.fetchers.jina.fetch_html_page", side_effect=TimeoutError()), \
@@ -449,7 +459,8 @@ class GenericReadTest(unittest.TestCase):
             page = fetch_html_page("https://e.com/essay")
         self.assertNotIn("cookies", page["content"])
         receipt = classify_payload({"source_type": "manual", "title": page["title"], "content": page["content"],
-                                    "extra": {"redirects_verified": True, "embedded_media": page["embedded_media"],
+                                    "extra": {"redirects_verified": True, "body_verified": True,
+                                              "embedded_media": page["embedded_media"],
                                               "page_signals": page["page_signals"]}})
         self.assertEqual(receipt["status"], "PASS")
 
@@ -461,7 +472,7 @@ class GenericReadTest(unittest.TestCase):
             page = fetch_html_page("https://e.com/a")
         return page, classify_payload({
             "source_type": "manual", "title": page["title"], "content": page["content"],
-            "extra": {"redirects_verified": True, "embedded_media": page["embedded_media"],
+            "extra": {"redirects_verified": True, "body_verified": True, "embedded_media": page["embedded_media"],
                       "page_signals": page["page_signals"]}})
 
     def test_walls_beside_the_main_content_still_count(self):
@@ -497,6 +508,16 @@ class GenericReadTest(unittest.TestCase):
         for html, status in cases:
             _page, receipt = self._page_receipt(html)
             self.assertEqual(receipt["status"], status, html[60:160])
+
+    def test_visibility_is_only_trusted_when_inline_css_proves_it(self):
+        long_main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 3).splitlines()) + "</main>"
+        for notice in ("<div style='display:none; display:block'>Subscribe to continue reading.</div>",
+                       "<div hidden style='display: flex'>Subscribe to continue reading.</div>",
+                       "<div style='visibility:hidden'><p style='visibility:visible'>Subscribe to continue reading.</p></div>",
+                       "<div style='display:block !important; display:none'>Subscribe to continue reading.</div>"):
+            _page, receipt = self._page_receipt(
+                f"<html><head><title>T</title></head><body>{long_main}{notice}</body></html>")
+            self.assertEqual(receipt["status"], "PARTIAL", notice)
 
     def test_hidden_templates_do_not_count(self):
         long_main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 3).splitlines()) + "</main>"
@@ -549,6 +570,13 @@ class YoutubeTest(unittest.TestCase):
                     "https://www.youtube.com/@channel", "https://youtube.com.evil.example/watch?v=abcdefghijk",
                     "https://www.youtube.com/redirect?q=http://127.0.0.1/", "https://youtu.be/short"):
             self.assertEqual(canonical_video_url(url), "", url)
+
+    def test_youtube_error_pages_are_recognised(self):
+        from x_reader.fetchers import youtube
+
+        self.assertEqual(youtube._page_state("YouTube", "Video unavailable. This video is private."), "unavailable")
+        self.assertEqual(youtube._page_state("- YouTube", "Something"), "unidentified")
+        self.assertEqual(youtube._page_state("Rick Astley - Never Gonna Give You Up", "Official video"), "ok")
 
     def test_non_video_urls_never_reach_yt_dlp(self):
         from x_reader.fetchers import youtube

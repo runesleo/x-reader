@@ -20,6 +20,15 @@ from x_reader.routing import allowed_platforms, detect_platform, hosted_mode
 from x_reader.utils.url_validator import validate_url
 
 
+def _same_text(shown: str, read_directly: str) -> bool:
+    """Most of the shown text's word runs appear in the directly read page."""
+    from x_reader.evidence import visible_text
+    from x_reader.utils.textmatch import overlap
+
+    shares = overlap(visible_text(shown), visible_text(read_directly))
+    return shares is not None and shares[0] >= 0.5
+
+
 class UniversalReader:
     """
     Routes URLs to platform-specific fetchers.
@@ -182,16 +191,18 @@ class UniversalReader:
         if hosted:
             if not page_usable:
                 raise ValueError("The page returned too little readable text")
-            data, verified = page, True  # the text shown is the text that was checked
+            data, body_verified = page, True  # the text shown is the text that was checked
         else:
             try:
                 data = await asyncio.to_thread(fetch_via_jina, target_url)
-                verified = bool(page)  # the direct read vouches for where the URL leads
+                # Jina's text counts as checked only when it matches what x-reader
+                # itself read on the page.
+                body_verified = bool(page) and _same_text(data["content"], page["content"])
             except Exception as exc:
                 if not page_usable:
                     raise
                 logger.warning(f"Jina read failed ({type(exc).__name__}); using the direct read")
-                data, verified = page, True
+                data, body_verified = page, True
 
         return UnifiedContent(
             source_type=SourceType.MANUAL,
@@ -201,7 +212,8 @@ class UniversalReader:
             url=target_url,
             extra={
                 "fetch_method": data.get("fetch_method", "jina"),
-                "redirects_verified": verified,
+                "redirects_verified": bool(page),
+                "body_verified": body_verified,
                 "embedded_media": page["embedded_media"] if page else None,
                 "page_signals": page.get("page_signals") if page else None,
             },

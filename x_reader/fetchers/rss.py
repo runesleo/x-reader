@@ -8,8 +8,6 @@ or follows redirects itself.
 
 import asyncio
 import re
-import unicodedata
-from collections import Counter
 from typing import Any, Dict, List
 
 import feedparser
@@ -52,20 +50,6 @@ def _is_full_body(html_body: str) -> bool:
 FULL_BODY_COVERAGE = 0.8
 # ...and when this share of the feed body actually appears on the page.
 FEED_ON_PAGE_SHARE = 0.7
-_SHINGLE = 6
-_MAX_TOKENS = 50_000
-# CJK, kana and hangul count per character; every other script per word.
-_TOKEN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]|[^\W_]+")
-
-
-def _shingles(text: str) -> Counter | None:
-    """Runs of six words (or CJK characters) with their counts; None when too long to compare."""
-    tokens = _TOKEN.findall(unicodedata.normalize("NFC", text).casefold())
-    if len(tokens) > _MAX_TOKENS:
-        return None  # a cut-off count would overstate coverage
-    return Counter(tuple(tokens[i:i + _SHINGLE]) for i in range(max(0, len(tokens) - _SHINGLE + 1)))
-
-
 async def verify_full_body(article: Dict[str, Any]) -> str:
     """Check a "full" feed body against the article page it links to.
 
@@ -77,6 +61,7 @@ async def verify_full_body(article: Dict[str, Any]) -> str:
     if article.get("content_kind") != "full":
         return article.get("content_kind", "summary")
     from x_reader.evidence import PASS, classify_payload, visible_text
+    from x_reader.utils.textmatch import overlap
     from x_reader.fetchers.jina import CrossPlatformRedirect, fetch_html_page
     from x_reader.routing import detect_platform
 
@@ -94,19 +79,18 @@ async def verify_full_body(article: Dict[str, Any]) -> str:
         return "unverified"
     page_receipt = classify_payload({
         "source_type": "manual", "title": page["title"], "content": page["content"], "url": page["url"],
-        "extra": {"redirects_verified": True, "embedded_media": page["embedded_media"],
+        "extra": {"redirects_verified": True, "body_verified": True, "embedded_media": page["embedded_media"],
                   "page_signals": page.get("page_signals", [])},
     })
     if page_receipt["status"] != PASS:
         return "unverified"  # gated, thin or media-carrying article: nothing solid to compare
-    feed = _shingles(visible_text(article.get("summary") or ""))
-    on_page = _shingles(visible_text(page["content"]))
-    if not feed or not on_page:
+    shares = overlap(visible_text(article.get("summary") or ""), visible_text(page["content"]))
+    if shares is None:
         return "unverified"
-    shared = sum((feed & on_page).values())
-    if shared < FEED_ON_PAGE_SHARE * sum(feed.values()):
+    feed_on_page, page_in_feed = shares
+    if feed_on_page < FEED_ON_PAGE_SHARE:
         return "unverified"  # the feed body is not this page's text
-    return "full" if shared >= FULL_BODY_COVERAGE * sum(on_page.values()) else "summary"
+    return "full" if page_in_feed >= FULL_BODY_COVERAGE else "summary"
 
 
 async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:

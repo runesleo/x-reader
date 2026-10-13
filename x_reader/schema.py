@@ -245,6 +245,7 @@ def from_youtube(video: dict) -> UnifiedContent:
             "transcript_end_seconds": video.get('transcript_end_seconds'),
             "transcript_covered_seconds": video.get('transcript_covered_seconds'),
             "transcript_max_gap_seconds": video.get('transcript_max_gap_seconds'),
+            "page_state": video.get('page_state', ''),
             "video_id": video.get('video_id', ''),
         },
     )

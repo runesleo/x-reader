@@ -151,6 +151,10 @@ _TEASER_TAIL = (
     "continue reading", "keep reading", "read the full story", "read the full article",
     "read the rest of", "继续阅读", "阅读全文", "展开全文", "查看全文", "阅读原文",
 )
+_TEASER_LINE = re.compile(
+    r"^(?:点击)?(?:continue reading|keep reading|read the full (?:story|article|post)|read the rest"
+    r"|继续阅读(?:全文)?|阅读全文|展开全文|查看全文|阅读原文)[\s→»›>…\.:!！。-]*$"
+)
 # Pages whose substance is audio/video x-reader does not read on the generic path.
 _MEDIA_PAGE_HOSTS = (
     "vimeo.com", "tiktok.com", "instagram.com", "soundcloud.com", "open.spotify.com",
@@ -181,7 +185,8 @@ _NOTICES = set(_UNAVAILABLE_PHRASES) | {
 }
 
 
-_SEGMENT_SPLIT = re.compile(r"\s[|·—–-]\s|[|·]|:\s")
+_SEGMENT_SPLIT = re.compile(r"\s[|·—–-]\s|[|·]|:\s|[.!?。！？]\s")
+_STATUS_CODE = re.compile(r"[\(\[]\s*(?:error\s*)?\d{3}\s*[\)\]]")
 _AUTH_TITLES = {"sign in", "log in", "login", "authentication required"}
 _AUTH_PHRASES = (
     "sign in to continue", "please sign in", "please log in", "login required",
@@ -202,15 +207,15 @@ def _is_notice(text: str) -> bool:
     /old-slug" and "Error: This page does not exist" match while "How to fix Page
     Not Found errors" does not.
     """
-    for segment in _SEGMENT_SPLIT.split(text):
+    for segment in _SEGMENT_SPLIT.split(_STATUS_CODE.sub(" ", text)):
         segment = _APOLOGY.sub("", segment.strip().lower())
-        segment = re.sub(r"[\s|·:—–-]+", " ", segment).strip(" !.。！")
+        segment = re.sub(r"[\s|·:—–-]+", " ", segment).strip(" !.。！?？")
         if segment in _NOTICES:
             return True
     return False
 
 
-def gate_signals(title: str, text: str, include_tail: bool = True) -> list:
+def gate_signals(title: str, text: str) -> list:
     """Walls a page announces, wherever they appear: login, challenge, consent,
     missing page, paywall or teaser. Every line is checked (no first-N cut-off);
     the fetcher runs this over every visible block of the page, nav and footer
@@ -220,10 +225,16 @@ def gate_signals(title: str, text: str, include_tail: bool = True) -> list:
     title_l = title.strip().lower()
     signals = set()
     title_segments = {segment.strip() for segment in _SEGMENT_SPLIT.split(title_l)}
-    if title_l in _AUTH_TITLES or any(phrase in lowered or phrase in title_l for phrase in _AUTH_PHRASES):
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    # Notices are short lines that open with the phrase ("Please sign in to
+    # continue."), not articles about them ("Troubleshooting authentication ...").
+    notices = [_APOLOGY.sub("", line.lower()) for line in lines if len(line) <= 120]
+    if title_l in _AUTH_TITLES or any(
+        line.startswith(_AUTH_PHRASES) for line in (*notices, title_l)
+    ):
         signals.add("auth_required")
     if (title_segments & _ERROR_TITLES or title_l in _ERROR_TITLES
-            or any(phrase in lowered for phrase in _CHALLENGE_PHRASES)):
+            or any(line.startswith(_CHALLENGE_PHRASES) for line in notices)):
         signals.add("challenge_or_error")
     strong = sum(phrase in lowered for phrase in _CONSENT_PHRASES)
     weak = sum(phrase in lowered for phrase in _CONSENT_WEAK_PHRASES)
@@ -231,15 +242,13 @@ def gate_signals(title: str, text: str, include_tail: bool = True) -> list:
         signals.add("consent")
         if any(marker in title_l for marker in _CONSENT_TITLES):
             signals.add("consent_title")
-    lines = [line.strip() for line in body.splitlines() if line.strip()]
     if _is_notice(title) or any(len(line) <= 80 and _is_notice(line) for line in lines):
         signals.add("missing_page")
     if any(phrase in lowered or phrase in title_l for phrase in _PAYWALL_PHRASES):
         signals.add("paywall")
-    # A short line that is a teaser link or button ("Continue reading →").
-    if any(len(line) <= 60 and line.lower().startswith(_TEASER_TAIL) for line in lines):
-        signals.add("paywall")
-    if include_tail and any(marker in lowered[-300:] for marker in _TEASER_TAIL):
+    # A line that is only a teaser link or button ("Continue reading →"), not a
+    # link that happens to start with the words ("Continue reading our research").
+    if any(_TEASER_LINE.match(line.lower()) for line in lines):
         signals.add("paywall")
     return sorted(signals)
 
@@ -559,7 +568,8 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "generic reader returned text, but it is too thin to prove source coverage",
             "components": {"text_body": UNKNOWN},
         }
-    if extra.get("redirects_verified") is not True or media_count != 0 or not isinstance(page_signals, list):
+    if (extra.get("redirects_verified") is not True or extra.get("body_verified") is not True
+            or media_count != 0 or not isinstance(page_signals, list)):
         return {
             "status": UNKNOWN,
             "reason_code": "page_unverified",
@@ -658,6 +668,21 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     if source == "youtube" and media_type == "video":
+        page_state = extra.get("page_state")
+        if page_state == "unavailable" and not extra.get("has_transcript"):
+            return {
+                "status": FAIL,
+                "reason_code": "source_unavailable",
+                "evidence": "YouTube returned an unavailable, private, removed or restricted-video page",
+                "components": {"page_metadata": FAIL, "spoken_media": UNKNOWN, "visual_media": UNKNOWN},
+            }
+        if page_state != "ok" and not extra.get("has_transcript"):
+            return {
+                "status": UNKNOWN,
+                "reason_code": "video_unidentified",
+                "evidence": "the YouTube page text could not be tied to the requested video",
+                "components": {"page_metadata": UNKNOWN, "spoken_media": UNKNOWN, "visual_media": UNKNOWN},
+            }
         # x-reader reads speech, never pictures: a video is at most PARTIAL.
         if extra.get("has_transcript") and _subtitle_coverage_proven(extra):
             return {

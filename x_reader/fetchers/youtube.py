@@ -50,6 +50,25 @@ def canonical_video_url(url: str) -> str:
     return f"https://www.youtube.com/watch?v={candidate}"
 
 
+_UNAVAILABLE_VIDEO = (
+    "video unavailable", "this video isn't available", "this video is not available",
+    "this video is unavailable", "this video is private", "this video has been removed",
+    "not available in your country", "sign in to confirm your age", "this video is age-restricted",
+)
+
+
+def _page_state(title: str, content: str) -> str:
+    """"unavailable" for YouTube's error pages, "unidentified" when the page names
+    no video (a bare "YouTube" title), else "ok"."""
+    head = f"{title}\n{content[:3000]}".lower()
+    if any(marker in head for marker in _UNAVAILABLE_VIDEO):
+        return "unavailable"
+    bare = re.sub(r"[\s\-–—|]+", " ", title).strip().lower()
+    if not bare or bare == "youtube":
+        return "unidentified"
+    return "ok"
+
+
 def _extract_video_id(url: str) -> str:
     """Extract the 11-character video ID from a YouTube video URL."""
     canonical = canonical_video_url(url)
@@ -317,6 +336,7 @@ async def fetch_youtube(url: str, sub_lang: str = "en") -> Dict[str, Any]:
     # Step 1: Get metadata via Jina (fast, always works)
     jina_data = fetch_via_jina(video_url or url)
     title = jina_data["title"]
+    page_state = _page_state(title, jina_data.get("content", ""))
 
     # Step 2: Try yt-dlp subtitles (with timing, so coverage can be proven).
     # The hosted surface runs no external tools: a hosted read is one process.
@@ -356,6 +376,7 @@ async def fetch_youtube(url: str, sub_lang: str = "en") -> Dict[str, Any]:
         "has_transcript": has_transcript,
         "transcript_source": transcript_source,
         "duration": subs["duration"],
+        "page_state": page_state,
         "platform": "youtube",
     }
     if transcript_source == "subtitles":

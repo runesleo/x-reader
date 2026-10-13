@@ -68,11 +68,31 @@ _VOID_TAGS = {
 }
 
 
+def _inline_display(style: str) -> str | None:
+    """The display value an inline style ends up with (declaration order and
+    !important respected), or None when the style does not set display."""
+    winner, winner_important = None, False
+    for declaration in style.split(";"):
+        name, _, value = declaration.partition(":")
+        if name.strip().lower() != "display":
+            continue
+        value = value.strip().lower()
+        important = value.endswith("!important")
+        value = value.replace("!important", "").strip()
+        if important or not winner_important:
+            winner, winner_important = value, important or winner_important
+    return winner
+
+
 def _is_hidden_element(attrs: dict) -> bool:
-    """Explicitly not rendered: the hidden attribute or an inline display:none /
-    visibility:hidden. aria-hidden only hides from assistive technology."""
-    style = (attrs.get("style") or "").replace(" ", "").lower()
-    return "hidden" in attrs or "display:none" in style or "visibility:hidden" in style
+    """Provably not rendered: an effective inline display:none, or the hidden
+    attribute with no inline display overriding it. Anything else counts as
+    visible: visibility can be undone by children, external CSS is unknown and
+    aria-hidden only hides from assistive technology."""
+    display = _inline_display(attrs.get("style") or "")
+    if display is not None:
+        return display == "none"
+    return "hidden" in attrs
 
 
 def _is_hidden_embed(attrs: dict) -> bool:
@@ -508,7 +528,7 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
     # A cookie banner or consent overlay beside substantial marked main content
     # hides nothing from this read (the article is in the HTML), so it is the
     # one signal that only counts inside the text itself.
-    signals = gate_signals(title, page_text, include_tail=False)
+    signals = gate_signals(title, page_text)
     if primary_used:
         signals = [s for s in signals if s not in ("consent", "consent_title")]
     return {
