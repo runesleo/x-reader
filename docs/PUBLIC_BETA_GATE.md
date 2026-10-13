@@ -16,7 +16,7 @@ Status (v0.5.0): the hosted surface runs as a **public beta** for public X, YouT
 
 - Request child processes get a minimal environment and a temporary HOME/inbox that is deleted afterwards; they skip `.env`, never write inbox or Markdown output, and inherit no saved sessions, Telegram credentials, Groq keys, output paths or proxies.
 - Runs as an unprivileged service user with a read-only system, private `/tmp` and no capabilities ([deploy/x-reader-evidence.service](../deploy/x-reader-evidence.service)).
-- Outbound connections from the service account to loopback, private, CGNAT/tailnet, link-local/metadata, multicast and reserved addresses are rejected at the host ([deploy/xreader-egress.nft](../deploy/xreader-egress.nft)).
+- Outbound connections from the service account to loopback, private, CGNAT/tailnet, link-local/metadata, multicast and class E (240.0.0.0/4) addresses are rejected at the host ([deploy/xreader-egress.nft](../deploy/xreader-egress.nft)); the reader's own address check refuses every other non-public range (documentation, benchmarking, NAT64, 6to4 and the rest) before connecting.
 
 ### Limits
 

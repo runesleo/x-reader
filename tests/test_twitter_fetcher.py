@@ -205,6 +205,15 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         self.assertEqual(data["media_status"], "present")
         self.assertEqual(data["structure_status"], "verified")
 
+    def test_polls_are_read_only_with_every_option(self):
+        base = {"id": "1", "text": "post"}
+        for poll in ({"choices": []}, {"choices": [None]}, {"choices": [{}]}, {"choices": [{"label": ""}]}, {},
+                     {"choices": [{"label": "Yes"}, {"label": 3}]}):
+            self.assertEqual(twitter._structure_from_fxtwitter(dict(base, poll=poll))["poll_status"], "unknown", poll)
+        read = twitter._structure_from_fxtwitter(dict(base, poll={"choices": [{"label": "Yes"}, {"label": "No"}]}))
+        self.assertEqual(read["poll_status"], "read")
+        self.assertEqual(twitter._structure_from_fxtwitter(dict(base))["poll_status"], "none")
+
     def test_status_paths_must_match_whole(self):
         self.assertEqual(twitter._extract_status_id("https://x.com/alice/status/123"), "123")
         self.assertEqual(twitter._extract_status_id("https://twitter.com/alice/status/123/photo/1?s=20"), "123")

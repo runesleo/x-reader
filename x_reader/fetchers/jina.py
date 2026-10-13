@@ -356,139 +356,169 @@ def _winners(declarations: list) -> dict:
     return {name: value for name, (value, _important) in won.items()}
 
 
+_NAMED_RGB = {
+    "black": (0, 0, 0), "white": (255, 255, 255), "red": (255, 0, 0), "green": (0, 128, 0), "blue": (0, 0, 255),
+    "gray": (128, 128, 128), "grey": (128, 128, 128), "silver": (192, 192, 192), "maroon": (128, 0, 0),
+    "navy": (0, 0, 128), "purple": (128, 0, 128), "teal": (0, 128, 128), "olive": (128, 128, 0),
+    "orange": (255, 165, 0), "yellow": (255, 255, 0), "darkgray": (169, 169, 169), "darkgrey": (169, 169, 169),
+    "dimgray": (105, 105, 105), "dimgrey": (105, 105, 105), "lightgray": (211, 211, 211),
+    "lightgrey": (211, 211, 211), "whitesmoke": (245, 245, 245), "gainsboro": (220, 220, 220),
+    "darkred": (139, 0, 0), "darkblue": (0, 0, 139), "darkgreen": (0, 100, 0), "brown": (165, 42, 42),
+    "crimson": (220, 20, 60), "firebrick": (178, 34, 34), "indigo": (75, 0, 130), "slategray": (112, 128, 144),
+}
+_RGB_FUNC = re.compile(r"rgba?\(\s*(\d{1,3})\s*,?\s*(\d{1,3})\s*,?\s*(\d{1,3})\s*(?:[,/]\s*(1|1\.0+|100%))?\s*\)")
+
+
+def _rgb(value: str):
+    """An opaque color as (r, g, b), or None for anything else (alpha, var(), hsl, unknown names)."""
+    if value in _NAMED_RGB:
+        return _NAMED_RGB[value]
+    hexcolor = _HEX_COLOR.fullmatch(value)
+    if hexcolor:
+        digits = hexcolor.group(1)
+        if len(digits) in (4, 8):
+            if digits[-1 if len(digits) == 4 else -2:] not in ("f", "ff"):
+                return None
+            digits = digits[:-1] if len(digits) == 4 else digits[:-2]
+        if len(digits) == 3:
+            digits = "".join(ch * 2 for ch in digits)
+        return tuple(int(digits[i:i + 2], 16) for i in (0, 2, 4))
+    func = _RGB_FUNC.fullmatch(value)
+    if func and all(int(func.group(i)) <= 255 for i in (1, 2, 3)):
+        return tuple(int(func.group(i)) for i in (1, 2, 3))
+    return None
+
+
+def _contrast(first, second) -> float:
+    def luminance(rgb):
+        channels = [c / 255 for c in rgb]
+        linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    light, dark = sorted((luminance(first), luminance(second)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+_INHERIT_COLOR = {"inherit", "currentcolor", "initial", "unset", "revert", "revert-layer"}
+_VENDOR_PREFIXES = ("-webkit-", "-moz-", "-ms-", "-o-", "-apple-", "-khtml-", "-epub-")
+# Properties allowed only with these exact values; every declaration of them is
+# checked, not just the one that wins, so an invalid later value cannot hide an
+# earlier hiding one.
+_EXACT_VALUES = {
+    "visibility": {"visible"},
+    "opacity": {"1", "1.0", "100%"},
+    "zoom": {"1", "1.0", "100%", "normal"},
+    "content-visibility": {"visible", "auto"},
+    "overflow": {"visible"}, "overflow-x": {"visible"}, "overflow-y": {"visible"},
+    "overflow-block": {"visible"}, "overflow-inline": {"visible"},
+    "position": {"static", "relative", "sticky"},
+    "-webkit-text-fill-color": set(),
+}
+
+
 def _style_context(attrs: dict, parent: dict) -> dict:
     """How an element's own markup affects whether its text is shown, given its
-    parent's: {"visibility": "visible" | "hidden" | "unknown", "opacity",
-    "zoom", "font_px"} (opacity, zoom and font size accumulate down the tree).
+    parent's: {"visibility": "visible" | "hidden" | "unknown", "font_px",
+    "custom"} (font size accumulates down the tree; custom notes inline custom
+    properties above, which var() could resolve to).
 
-    hidden: the hidden attribute, display:none or a popover (closed until a
-    script opens it). unknown: a style that cannot be parsed, or any property
-    outside the allowlist of ones that cannot hide text, or an allowlisted
-    risky property (display, visibility, opacity, zoom, font size, color,
-    indent, spacing, margins, positioning, clipped boxes) with a value x-reader
-    does not fully understand or that hides, shrinks, moves or recolors text
-    away. It decides only what counts as page text: wall notices and frames
-    count wherever they are.
+    hidden: the hidden attribute or a popover with no inline display, or
+    display:none. unknown: a style that cannot be parsed; any property outside
+    an allowlist of ones that cannot hide text; or any declaration of a risky
+    property with a value outside the plain ones x-reader understands: opacity,
+    zoom, visibility and overflow only at their defaults, colors only opaque and
+    readable against an inline background, font sizes that stay readable down
+    the tree, small indents and spacings, margins that keep text on screen,
+    no absolute/fixed positioning or offsets, transforms, filters, clipping,
+    masks, containment or animation. It decides only what counts as page text:
+    wall notices and frames count wherever they are.
     """
-    context = {"visibility": "visible", "opacity": parent["opacity"], "zoom": parent["zoom"],
-               "font_px": parent["font_px"]}
+    context = {"visibility": "visible", "font_px": parent["font_px"], "custom": parent["custom"]}
     declarations = _inline_declarations(attrs.get("style") or "")
     if declarations is None:
         return dict(context, visibility="unknown")
-    won = _winners(declarations)
-    display = won.get("display")
-    if display == "none" and "all" not in won:
+    names = [name for name, _value, _important in declarations]
+    if any(name.startswith("--") for name in names):
+        context["custom"] = True
+    displays = [value for name, value, _important in declarations if name == "display"]
+    if displays == ["none"] and "all" not in names:
         return dict(context, visibility="hidden")  # not rendered, whatever else the style says
 
     def unknown() -> dict:
         return dict(context, visibility="unknown")
 
-    for name, value in won.items():
-        if name.startswith(_INERT_PREFIXES) or name in _INERT_PROPERTIES:
+    if "popover" in attrs and displays:
+        return unknown()  # a popover shown by inline CSS: not the stated hiding, not plain text either
+    won = _winners(declarations)
+    for name, value, _important in declarations:
+        uses_var = "var(" in value or "env(" in value or "attr(" in value
+        if name.startswith("--") or (name.startswith("-") and not name.startswith(_VENDOR_PREFIXES)):
+            continue  # custom properties do nothing alone; other dash names are not CSS and are ignored
+        if name in _EXACT_VALUES:
+            if value not in _EXACT_VALUES[name]:
+                return unknown()
+        elif name.startswith(_INERT_PREFIXES) or name in _INERT_PROPERTIES:
             continue
-        if name in _NONE_ONLY:
-            if value not in ("none", "initial", "unset", "normal") or name == "contain" and value != "none":
+        elif name in _NONE_ONLY or name in ("all", "font"):
+            if value != "none" or name in ("all", "font"):
                 return unknown()
         elif name == "display":
             if value not in _VISIBLE_DISPLAYS:
                 return unknown()
-        elif name == "visibility":
-            if value != "visible":
-                return unknown()
-        elif name in ("opacity", "zoom"):
-            match = _PLAIN_NUMBER.fullmatch(value)
-            if value in ("normal", "reset") and name == "zoom":
-                continue
-            if not match:
-                return unknown()
-            context[name] *= float(match.group(1)) / (100 if match.group(2) else 1)
         elif name == "font-size":
+            if uses_var and context["custom"]:
+                return unknown()
             size = _font_px(value, parent["font_px"])
             if size is None:
                 return unknown()
             context["font_px"] = size
-        elif name in ("color", "-webkit-text-fill-color"):
-            if not _shown_color(value):
+        elif name == "color":
+            # inherit and friends keep the parent's color, already judged above; a
+            # design token with no inline custom property in scope comes from the
+            # stylesheet (judged like external CSS), and a fallback must be opaque
+            token = re.fullmatch(r"var\(\s*--[\w-]+\s*(?:,\s*(.+))?\)", value)
+            if token:
+                if context["custom"] or (token.group(1) is not None and _rgb(token.group(1).strip()) is None):
+                    return unknown()
+            elif value not in _INHERIT_COLOR and _rgb(value) is None:
                 return unknown()
         elif name in ("text-indent", "letter-spacing", "word-spacing"):
-            if value in ("normal",) and name != "text-indent":
+            if value == "normal" and name != "text-indent":
                 continue
             amount = _length_px(value, context["font_px"])
-            low, high = {"text-indent": (-3 * context["font_px"], 1000), "letter-spacing": (-0.3 * context["font_px"], 100),
-                         "word-spacing": (-0.5 * context["font_px"], 200)}[name]
+            low, high = {"text-indent": (-3 * context["font_px"], 1000),
+                         "letter-spacing": (-0.1 * context["font_px"], context["font_px"]),
+                         "word-spacing": (-0.25 * context["font_px"], 2 * context["font_px"])}[name]
             if amount is None or not low <= amount <= high:
                 return unknown()
         elif name in _MARGINS:
             for token in value.split():
-                if token in ("auto",) or token.startswith("var("):
+                if token == "auto":
+                    continue
+                if token.startswith("var("):
+                    if context["custom"] or "," in token:
+                        return unknown()
                     continue
                 amount = _length_px(token, context["font_px"])
-                if amount is None and not token.endswith("%"):
+                if amount is None or not -200 <= amount <= 2000:
                     return unknown()
-                if amount is not None and not -200 <= amount <= 2000:
-                    return unknown()
-                if token.endswith("%") and token.startswith("-"):
-                    return unknown()
-        elif name == "position":
-            if value not in ("static", "relative", "sticky"):
-                return unknown()
         else:
             return unknown()  # outside the allowlist
     if won.get("position") in ("relative", "sticky") and set(won) & _OFFSETS:
         return unknown()  # offsets can move it off-screen
-    if any("var(" in (won.get(name) or "") for name in _OVERFLOWS):
-        return unknown()  # clipping that depends on a custom property
-    text_color = won.get("color")
-    if text_color and text_color in (won.get("background-color"), won.get("background")):
-        return unknown()  # text painted in its own background color
-    if any(won.get(name) in ("hidden", "clip", "scroll", "auto") for name in _OVERFLOWS) and (
-            any(won.get(name) not in (None, "auto", "none") for name in _SIZES)
-            or won.get("white-space") not in (None, "normal", "pre-wrap", "pre-line", "break-spaces")
-            or "text-overflow" in won or won.get("line-height", "normal") != "normal"):
-        return unknown()  # a box that clips or scrolls its text
-    if context["opacity"] < _MIN_OPACITY or context["zoom"] < _MIN_OPACITY:
+    text_color = _rgb(won["color"]) if "color" in won else None
+    for name in ("background-color", "background"):
+        if name in won and text_color is not None:
+            background = _rgb(won[name])
+            if background is None or _contrast(text_color, background) < 1.5:
+                return unknown()  # text painted in (nearly) its own background color
+    if context["font_px"] < _MIN_TEXT_PX:
         return unknown()
-    if context["font_px"] * context["zoom"] < _MIN_TEXT_PX:
-        return unknown()
-    if display is not None:
+    if displays:
         return context  # an inline display overrides the hidden attribute
     if "hidden" in attrs or "popover" in attrs:
         return dict(context, visibility="hidden")
     return context
-
-
-# Inline properties that cannot make a 0/1-pixel frame show its content.
-_SIZE_NEUTRAL = {
-    "display", "visibility", "border", "position", "top", "left", "right", "bottom", "margin",
-    "padding", "opacity", "overflow", "clip", "clip-path", "z-index", "pointer-events", "float",
-    "width", "height",
-}
-
-
-def _is_tracking_frame(attrs: dict) -> bool:
-    """A frame with nothing to show: the hidden attribute or display:none on the
-    frame itself, or 0/1 pixel each way (a valid inline width/height overrides
-    the attribute, an invalid one is ignored, without either the frame keeps its
-    visible default size). Any other inline property that could show or enlarge
-    it (all, transform, zoom, min-height, ...) or a style that cannot be parsed
-    makes it count. A hidden container does not hide a frame."""
-    declarations = _inline_declarations(attrs.get("style") or "")
-    if declarations is None:
-        return False
-    for name, _value, _important in declarations:
-        if name not in _SIZE_NEUTRAL and not name.startswith(("border-", "margin-", "padding-")):
-            return False
-    displays = [value for name, value, _important in declarations if name == "display"]
-    if displays == ["none"] or (not displays and "hidden" in attrs):
-        return True
-
-    def tiny(prop: str) -> bool:
-        value = _effective(declarations, prop, _valid_css_size)
-        if value is None:
-            return _tiny_html_size(attrs.get(prop) or "")
-        return value != _UNRESOLVED and _tiny_css_size(value)
-
-    return tiny("width") and tiny("height")
 
 
 def _join_text(parts: list) -> str:
@@ -518,7 +548,7 @@ MAX_PARSE_ATTRIBUTES = 200_000
 MAX_PARSE_DEPTH = 1_500
 MAX_PARSE_WORK = 20_000_000
 MAX_TEXT_COPY = 64_000_000
-MAX_CONTENT_CHARS = 1_500_000
+MAX_CONTENT_CHARS = 1_000_000
 # Raw-text elements whose text x-reader never reads.
 _UNREAD_TEXT = {"script", "style", "noscript", "iframe", "noembed", "noframes", "xmp"}
 
@@ -530,9 +560,10 @@ class ParseBudgetExceeded(ValueError):
 def _attribute_heavy(html: str) -> bool:
     """True when some tag carries more than MAX_TAG_ATTRIBUTES attributes.
 
-    One linear pass that honors quoted values; it may also count tag-like text
-    inside scripts or comments, which only errs toward refusing.
-    """
+    One linear pass following the tokenizer's tag states: a quote opens a value
+    only right after "=", unquoted values end at whitespace or ">". It may also
+    count tag-like text inside scripts or comments, which only errs toward
+    refusing."""
     position, size = 0, len(html)
     while True:
         start = html.find("<", position)
@@ -541,23 +572,45 @@ def _attribute_heavy(html: str) -> bool:
         position = start + 1
         if not html[position].isalpha():
             continue
+        while position < size and not html[position].isspace() and html[position] not in "/>":
+            position += 1  # tag name
         count = 0
-        while position < size:
+        while position < size and html[position] != ">":
             char = html[position]
-            if char == ">":
-                break
-            if char in "\"'":
-                end = html.find(char, position + 1)
-                position = size if end == -1 else end + 1
-                continue
             if char.isspace() or char == "/":
                 position += 1
-                if position < size and not html[position].isspace() and html[position] not in ">/=":
-                    count += 1
-                    if count > MAX_TAG_ATTRIBUTES:
-                        return True
                 continue
-            position += 1
+            count += 1  # an attribute name starts here
+            if count > MAX_TAG_ATTRIBUTES:
+                return True
+            while position < size and not html[position].isspace() and html[position] not in "/>=":
+                position += 1
+            while position < size and html[position].isspace():
+                position += 1
+            if position < size and html[position] == "=":
+                position += 1
+                while position < size and html[position].isspace():
+                    position += 1
+                if position < size and html[position] in "\"'":
+                    end = html.find(html[position], position + 1)
+                    position = size if end == -1 else end + 1
+                else:
+                    while position < size and not html[position].isspace() and html[position] != ">":
+                        position += 1
+
+
+_INVALID_CODEPOINT = re.compile("[\x00-\x08\x0b\x0e-\x1f\x7f-\x9f\ufdd0-\ufdef\ufffe\uffff\ud800-\udfff]")
+MAX_INVALID_CODEPOINTS = 1_000
+
+
+def _error_heavy(html: str) -> bool:
+    """More control characters, noncharacters or lone surrogates than
+    MAX_INVALID_CODEPOINTS: html5lib reports each as a parse error and drains
+    that queue in quadratic time."""
+    for count, _match in enumerate(_INVALID_CODEPOINT.finditer(html), 1):
+        if count > MAX_INVALID_CODEPOINTS:
+            return True
+    return False
 
 
 def _budgeted_parser():
@@ -592,7 +645,14 @@ def _budgeted_parser():
                         if self.name in _UNREAD_TEXT:
                             return  # script/style bodies are never read; keeping them costs quadratic copies
                         children = self._element
-                        current = (children[-1].tail if len(children) else children.text) or ""
+                        if insertBefore is None or not len(children):
+                            current = (children[-1].tail if len(children) else children.text) or ""
+                        else:
+                            # html5lib copies the child list and searches it, then appends to the
+                            # tail before the table (foster parenting)
+                            index = list(children).index(insertBefore._element)
+                            builder.copied += len(children)
+                            current = (children[index - 1].tail if index else children.text) or ""
                         builder.copied += len(current) + len(data)
                         if builder.copied > MAX_TEXT_COPY:
                             raise ParseBudgetExceeded("too much text work")
@@ -669,7 +729,7 @@ def _parse_refresh(content: str) -> str:
     when it only reloads the page or is not valid (the HTML declarative-refresh
     steps: a delay, an optional ";" or ",", an optional "url=", a target that
     may be quoted)."""
-    match = re.match(r"\s*([0-9.]+)\s*[;,]?\s*", content)
+    match = re.match(r"\s*(\d+)[0-9.]*\s*[;,]?\s*", content)
     if not match:
         return ""
     rest = content[match.end():]
@@ -705,7 +765,7 @@ def _extract_html_page(html: str) -> dict:
 
     refused = {"title": "", "content": "", "embeds": 0, "page_text": "", "primary_used": False,
                "visibility_unknown": True, "templates": False, "too_complex": True, "client_redirect": False}
-    if _attribute_heavy(html):
+    if _attribute_heavy(html) or _error_heavy(html):
         return refused
     parser = _budgeted_parser()
     try:
@@ -714,10 +774,19 @@ def _extract_html_page(html: str) -> dict:
         return refused
     templates = parser.saw_template or any(True for _ in root.iter("template"))
     title_element = next(iter(root.iter("title")), None)
-    title = " ".join("".join(title_element.itertext()).split()) if title_element is not None else ""
+    title = ""
+    if title_element is not None:
+        pieces, kept = [], 0
+        for piece in title_element.itertext():
+            pieces.append(piece[:1000 - kept])
+            kept += len(pieces[-1])
+            if kept >= 1000:
+                break
+        title = " ".join("".join(pieces).split())
 
     parts: dict = {"gate": [], "body": [], "main": [], "article": []}
     unknown_in: set = set()
+    open_groups: set = set()
     embeds = 0
     client_redirect = any(
         (meta.get("http-equiv") or "").strip().lower() == "refresh" and _parse_refresh(meta.get("content") or "")
@@ -725,7 +794,7 @@ def _extract_html_page(html: str) -> dict:
     )
     base = {"skip": False, "foreign": False, "boiler": False, "main": False, "article": False,
             "hidden": False, "unknown": False, "block": False, "control": False, "collapsed": None,
-            "opacity": 1.0, "zoom": 1.0, "font_px": 16.0}
+            "font_px": 16.0, "custom": False}
 
     def emit(text, state) -> None:
         if not text or state["skip"]:
@@ -748,12 +817,12 @@ def _extract_html_page(html: str) -> dict:
         foreign = parent["foreign"] or tag.startswith("{")
         name = tag.rsplit("}", 1)[-1].lower()
         attrs = {str(key).rsplit("}", 1)[-1]: value for key, value in element.attrib.items()}
-        if name in _EMBED_TAGS and not parent["skip"] and not _is_tracking_frame(attrs):
-            embeds += 1
+        if name in _EMBED_TAGS and not parent["skip"]:
+            embeds += 1  # however small or hidden: ancestors and author CSS can show or enlarge it
         shadow_root = name == "template" and (
             (attrs.get("shadowrootmode") or attrs.get("shadowroot") or "").strip().lower() in ("open", "closed"))
-        style = {"visibility": "visible", "opacity": parent["opacity"], "zoom": parent["zoom"],
-                 "font_px": parent["font_px"]} if foreign else _style_context(attrs, parent)
+        style = {"visibility": "visible", "font_px": parent["font_px"], "custom": parent["custom"]} \
+            if foreign else _style_context(attrs, parent)
         hidden = parent["hidden"]
         if parent["collapsed"] is not None:
             # A closed <details> shows only its first summary.
@@ -761,7 +830,11 @@ def _extract_html_page(html: str) -> dict:
             if name == "summary":
                 parent["collapsed"]["summary_seen"] = True
             hidden = parent["collapsed"]["outer_hidden"] if first_summary else True
-        closed = not foreign and "open" not in attrs and name in ("details", "dialog")
+        group = (attrs.get("name") or "").strip() if name == "details" else ""
+        closed = not foreign and name in ("details", "dialog") and (
+            "open" not in attrs or (group and group in open_groups))
+        if not foreign and name == "details" and group and "open" in attrs:
+            open_groups.add(group)  # browsers keep one <details name=...> of a group open
         own_hidden = hidden or style["visibility"] == "hidden"
         return {
             "skip": parent["skip"] or (not foreign and name in _SKIP_TAGS and not shadow_root),
@@ -774,7 +847,7 @@ def _extract_html_page(html: str) -> dict:
             "block": not foreign and name in _BLOCK_TAGS,
             "control": parent["control"] or (not foreign and name in _CONTROL_TAGS),
             "collapsed": {"summary_seen": False, "outer_hidden": own_hidden} if closed and name == "details" else None,
-            "opacity": style["opacity"], "zoom": style["zoom"], "font_px": style["font_px"],
+            "font_px": style["font_px"], "custom": style["custom"],
             "button_text": name == "input" and (attrs.get("type") or "").strip().lower() in _BUTTON_INPUTS
             and (attrs.get("value") or ""),
             "placeholder": attrs.get("placeholder") or "" if name in ("input", "textarea") else "",
@@ -812,10 +885,12 @@ def _extract_html_page(html: str) -> dict:
         if primary and prose_chars(primary) >= MIN_GENERIC_BODY_CHARS:
             content, primary_used, chosen = primary, True, name
             break
+    if len(content) > MAX_CONTENT_CHARS:
+        return refused  # too much text to judge, or to hand on, within the service's limits
     return {
         "title": title[:200], "content": content, "embeds": embeds,
         "page_text": _join_text(parts["gate"]), "primary_used": primary_used,
-        "visibility_unknown": chosen in unknown_in or len(content) > MAX_CONTENT_CHARS,
+        "visibility_unknown": chosen in unknown_in,
         "templates": templates, "too_complex": False, "client_redirect": client_redirect,
     }
 

@@ -453,7 +453,7 @@ class GenericReadTest(unittest.TestCase):
         page = _extract_html_page(html)
         title, content, embeds = page["title"], page["content"], page["embeds"]
         self.assertEqual(title, "T")
-        self.assertEqual(embeds, 4)  # video, two frames, embed; hidden and noscript frames ignored
+        self.assertEqual(embeds, 5)  # video, three frames (a 0-pixel one too), embed; only noscript is skipped
         self.assertNotIn("Pricing", content)
         self.assertNotIn("Copyright", content)
         self.assertIn("careful argument", content)
@@ -630,7 +630,7 @@ class GenericReadTest(unittest.TestCase):
             _page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{opening}{article}</main></body></html>")
             self.assertNotEqual(receipt["status"], "PASS", opening)
         for opening in ("<main style='color:rgb(0,0,0)'>", "<main style='color:rgb(255, 0, 0)'>",
-                        "<main style='color:#333;font-size:18px'>", "<main style='color:rgba(0,0,0,.87)'>",
+                        "<main style='color:#333;font-size:18px'>", "<main style='color:rgba(0,0,0,1)'>",
                         "<main style='display:block;margin:0 auto;max-width:720px'>"):
             _page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{opening}{article}</main></body></html>")
             self.assertEqual(receipt["status"], "PASS", opening)
@@ -652,10 +652,21 @@ class GenericReadTest(unittest.TestCase):
                      f"<main style='contain:paint;width:0;height:0'>{article}</main>",
                      f"<main style='font-size-adjust:0'>{article}</main>",
                      f"<main style='color:white;background:white'>{article}</main>",
-                     f"<main style='letter-spacing:-50px'>{article}</main>"):
+                     f"<main style='letter-spacing:-50px'>{article}</main>",
+                     f"<main style='opacity:2'><div style='opacity:.05'>{article}</div></main>",
+                     f"<main style='transform:scale(0);transform:normal'>{article}</main>",
+                     f"<main style='color:transparent;color:notacolor'>{article}</main>",
+                     f"<main style='overflow:hidden visible;width:0'>{article}</main>",
+                     f"<main style='--c:transparent;color:var(--c)'>{article}</main>",
+                     f"<main style='color:var(--missing,#0000)'>{article}</main>",
+                     f"<main style='color:#fff;background:white'>{article}</main>",
+                     f"<main style='-webkit-text-fill-color:white;background:white;color:black'>{article}</main>",
+                     f"<div style='display:flex'><main style='flex:0 0 0;overflow:hidden'>{article}</main></div>",
+                     f"<main popover style='display:block'>{article}</main>",
+                     f"<div style='--fs:0px'><main style='font-size:var(--fs)'>{article}</main></div>"):
             self.assertNotEqual(receipt(body)["status"], "PASS", body[:70])
-        for body in (f"<main style='opacity:.9'><div style='font-size:90%'>{article}</div></main>",
-                     f"<main style='color:transparent;color:black'>{article}</main>",
+        for body in (f"<main style='opacity:1'><div style='font-size:90%'>{article}</div></main>",
+                     f"<main style='color:black;background:#fff'>{article}</main>",
                      f"<main style='font-size:var(--wp--preset--font-size--large);margin-top:var(--gap)'>{article}</main>"):
             self.assertEqual(receipt(body)["status"], "PASS", body[:70])
 
@@ -668,6 +679,36 @@ class GenericReadTest(unittest.TestCase):
             self.assertNotIn("careful argument", page["content"], body[:60])
             self.assertNotEqual(receipt["status"], "PASS", body[:60])
 
+    def test_input_shapes_that_slow_or_swell_the_parser_are_refused(self):
+        import time
+        from x_reader.fetchers import jina
+
+        cases = (
+            "<p>" + "\x01" * (jina.MAX_INVALID_CODEPOINTS + 10) + "</p>",  # parse errors drained quadratically
+            "<div a=x\" " + " ".join(f"a{i}=1" for i in range(jina.MAX_TAG_ATTRIBUTES + 10)) + " \">x</div>",
+            "<table>" + "x<b></b>" * 12000,  # foster-parented text copies
+            "<html><head><title>" + "word " * 200_000 + "</title></head><body><main>"
+            + "<p>x</p>" * 10 + "</main></body></html>",
+            "<main>" + ("<p>" + "a" * 999 + "</p>") * 1100 + "</main>",  # text over the content cap
+        )
+        for html in cases:
+            started = time.perf_counter()
+            page = jina._extract_html_page(html)
+            self.assertLess(time.perf_counter() - started, 15, html[:40])
+            if "title" in html[:30]:
+                self.assertLessEqual(len(page["title"]), 200)
+            else:
+                self.assertTrue(page["too_complex"], html[:40])
+
+    def test_details_groups_keep_one_open(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        body = (f"<main><details name=faq open><summary>A</summary><p>Visible answer.</p></details>"
+                f"<details name=faq open><summary>B</summary>{article}</details><p>Short.</p></main>")
+        page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{body}</body></html>")
+        self.assertIn("Visible answer", page["content"])
+        self.assertNotIn("careful argument", page["content"])
+        self.assertNotEqual(receipt["status"], "PASS")
+
     def test_meta_refresh_grammar(self):
         from x_reader.fetchers.jina import _parse_refresh
 
@@ -676,6 +717,7 @@ class GenericReadTest(unittest.TestCase):
         self.assertEqual(_parse_refresh("3, URL='https://e.example/a'"), "https://e.example/a")
         self.assertEqual(_parse_refresh("5"), "")
         self.assertEqual(_parse_refresh("not-a-delay-url"), "")
+        self.assertEqual(_parse_refresh(".; url=https://e.example/"), "")
 
     def test_pages_over_the_parse_budget_are_unknown(self):
         from x_reader.evidence import build_receipt
@@ -770,18 +812,15 @@ class GenericReadTest(unittest.TestCase):
             self.assertEqual(page["embedded_media"], counted, extra)
             self.assertEqual(page["title"], "T", extra)
 
-    def test_frame_size_comes_from_inline_css_first(self):
+    def test_every_frame_counts_however_small(self):
+        # ancestors (zoom, transform) and author CSS can enlarge or show any frame
         main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
-        for frame, counted in (("<iframe width='1' style='width:600px;height:400px' src='https://p.example/v'>", 1),
-                               ("<iframe width='1' height='1' style='transform:scale(400)' src='https://p.example/v'>", 1),
-                               ("<iframe width='1' src='https://p.example/v'>", 1),
-                               ("<iframe style='width:1;height:1' src='https://p.example/v'>", 1),
-                               ("<iframe width='1' height='1' style='width:1;height:1' src='https://t.example/p'>", 0),
-                               ("<iframe width='0' height='0' style='border:0' src='https://t.example/p'>", 0),
-                               ("<iframe style='width:0;height:0;border:none' src='https://t.example/p'>", 0)):
-            page, _receipt = self._page_receipt(
-                f"<html><head><title>T</title></head><body>{main}{frame}</iframe></body></html>")
-            self.assertEqual(page["embedded_media"], counted, frame)
+        for frame in ("<iframe width='1' height='1' src='https://t.example/p'>",
+                      "<iframe style='display:none' src='https://t.example/p'>",
+                      "<div style='zoom:400'><iframe width=1 height=1 src='https://t.example/p'></iframe></div>"):
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{main}{frame}</iframe></body></html>")
+            self.assertEqual(page["embedded_media"], 1, frame)
+            self.assertNotEqual(receipt["status"], "PASS", frame)
 
     def test_aria_hidden_frames_are_still_visible_embeds(self):
         main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
@@ -852,6 +891,8 @@ class YoutubeTest(unittest.TestCase):
             self.assertEqual(state(title), "unavailable", title)
         self.assertEqual(state("YouTube", "This video isn\u2019t available anymore"), "unavailable")
         self.assertEqual(state("Video unavailable errors explained - YouTube"), "ok")
+        for body in ("Video unavailable errors explained in this tutorial.", "A guide to age-restricted video settings."):
+            self.assertEqual(state("YouTube", body), "unidentified", body)
         for title in ("Before you continue to YouTube", "Sign in - YouTube", "Consent", ""):
             self.assertEqual(state(title, "Before you continue"), "unidentified", title)
         self.assertEqual(state("Bevor Sie zu YouTube weitergehen", "[Accept](https://consent.youtube.com/s)"),

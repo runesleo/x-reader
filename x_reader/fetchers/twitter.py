@@ -222,16 +222,18 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     elif quote:
         result["quote_status"] = "unknown"
     poll = tweet.get("poll")
-    if isinstance(poll, dict) and isinstance(poll.get("choices"), list):
+    choices = poll.get("choices") if isinstance(poll, dict) else None
+    labels = [str(choice.get("label")).strip() if isinstance(choice, dict) and isinstance(choice.get("label"), str)
+              else "" for choice in choices] if isinstance(choices, list) else []
+    if labels and all(labels):
+        # Read only when every option came back with its wording.
         lines = []
-        for choice in poll["choices"]:
-            if isinstance(choice, dict):
-                label = str(choice.get("label") or "").strip()
-                pct = choice.get("percentage")
-                lines.append(f"- {label} ({pct}%)" if pct is not None else f"- {label}")
+        for choice, label in zip(choices, labels):
+            pct = choice.get("percentage")
+            lines.append(f"- {label} ({pct}%)" if pct is not None else f"- {label}")
         result["poll_text"] = "[Poll]\n" + "\n".join(lines)
         result["poll_status"] = "read"
-    elif poll:
+    elif "poll" in tweet and poll is not None:
         result["poll_status"] = "unknown"
     if tweet.get("article"):
         result["article_status"] = "present"

@@ -98,7 +98,9 @@ def _page_state(video_id: str, title: str, content: str, source_url: str = "") -
     if not _NOT_A_VIDEO_TITLE.search(name):
         return "ok"
     if name in ("", "youtube"):
-        if any(marker in head for marker in _UNAVAILABLE_VIDEO):
+        # YouTube's error page states the notice on a line of its own.
+        lines = {re.sub(r"[\s.!?…]+$", "", _plain(line)) for line in content[:3000].splitlines()}
+        if lines & _UNAVAILABLE_TITLES:
             return "unavailable"
     return "unidentified"
 
