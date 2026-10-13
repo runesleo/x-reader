@@ -110,7 +110,7 @@ class MoatBenchmarkTest(unittest.TestCase):
     def test_podcast_preview_benchmark_is_explicit_and_still_partial(self):
         row = next(r for r in self.rows if r["category"] == "podcast")
         payload = {
-            "source_type": "podcast", "title": "Episode",
+            "source_type": "podcast", "title": "Episode", "media_type": "audio",
             "content": "Episode show notes " * 25,
             "extra": {
                 "media_status": "present", "has_transcript": False,
@@ -127,6 +127,30 @@ class MoatBenchmarkTest(unittest.TestCase):
         self.assertEqual(result["preview_seconds"], 12)
         self.assertFalse(result["media_complete"])
         self.assertEqual(moat.classify(row, result), "PARTIAL_MEDIA")
+
+    def test_every_source_is_scored_from_its_receipt(self):
+        row = {"id": "r", "category": "video", "url": "https://www.youtube.com/watch?v=abcdefghijk",
+               "min_chars": 10}
+        cases = (
+            # a transcript flag alone used to count as MEDIA_COMPLETE
+            ({"source_type": "youtube", "media_type": "video", "title": "V", "content": "transcript " * 40,
+              "extra": {"has_transcript": True, "transcript_source": "subtitles", "duration": 600}},
+             "PARTIAL", "PARTIAL_MEDIA"),
+            # media_status=unknown used to default to PASS
+            ({"source_type": "twitter", "media_type": "text", "title": "X", "content": "post text " * 30,
+              "extra": {"fetch_method": "oembed", "media_status": "unknown"}},
+             "PARTIAL", "PARTIAL_MEDIA"),
+            ({"source_type": "manual", "media_type": "text", "title": "Nav", "content": "Home\nAbout\n" * 60,
+              "extra": {"fetch_method": "jina_pinned", "redirects_verified": True}},
+             "UNKNOWN", "UNVERIFIED"),
+        )
+        for payload, status, outcome in cases:
+            done = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+            with patch("subprocess.run", return_value=done):
+                result = moat.x_reader_provider(row, timeout=60)
+            self.assertEqual(result["evidence_status"], status, payload["source_type"])
+            self.assertFalse(result["media_complete"], payload["source_type"])
+            self.assertEqual(moat.classify(row, result), outcome, payload["source_type"])
 
     def test_normal_benchmark_does_not_call_media_preview(self):
         row = next(r for r in self.rows if r["category"] == "podcast")

@@ -29,6 +29,19 @@ class OutputCompatibilityTest(unittest.TestCase):
         for key in ("likes", "retweets", "fetch_method", "media_status"):
             self.assertIn(key, tw.to_dict()["extra"])
 
+    def test_all_extra_covers_every_optional_extra(self):
+        try:
+            import tomllib
+        except ImportError:  # Python 3.10
+            self.skipTest("tomllib needs Python 3.11+")
+        from pathlib import Path
+
+        extras = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())[
+            "project"]["optional-dependencies"]
+        everything = set(extras.pop("all"))
+        for name, deps in extras.items():
+            self.assertTrue(set(deps) <= everything, name)
+
     def test_mcp_read_url_returns_the_same_shape(self):
         try:
             from x_reader import mcp_server

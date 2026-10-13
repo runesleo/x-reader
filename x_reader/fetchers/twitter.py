@@ -113,9 +113,13 @@ def _is_thin_oembed_text(text: str) -> bool:
 
 
 def _media_status_from_fxtwitter(tweet: dict) -> str:
-    """Return present/none/unknown from FxTwitter's structured media field."""
+    """Return present/none/unknown from FxTwitter's structured media field.
+
+    FxTwitter omits "media" for posts without media, so a missing key on a
+    real tweet object (it has an id and text) means none.
+    """
     if "media" not in tweet:
-        return "unknown"
+        return "none" if tweet.get("id") and "text" in tweet else "unknown"
 
     media = tweet.get("media")
     if isinstance(media, dict):
@@ -182,7 +186,70 @@ def _fetch_via_fxtwitter(url: str, timeout: float = 10) -> Dict[str, Any]:
         "author_name": author_name,
         "title": text[:100] if text else "",
         "media_status": _media_status_from_fxtwitter(tweet),
+        **_structure_from_fxtwitter(tweet),
     }
+
+
+def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
+    """Quoted post, poll and X Article layers, which the post text alone does not carry."""
+    if not (tweet.get("id") and "text" in tweet):
+        return {"structure_status": "unknown"}
+    result: Dict[str, Any] = {"structure_status": "verified", "quote_status": "none",
+                              "poll_status": "none", "article_status": "none"}
+    quote = tweet.get("quote")
+    if isinstance(quote, dict):
+        quote_text = str(quote.get("text") or "").strip()
+        quote_author = str((quote.get("author") or {}).get("screen_name") or "")
+        if not quote_text:
+            result["quote_status"] = "unknown"
+        else:
+            result["quote_text"] = f"[Quoted post by @{quote_author}]\n{quote_text}"
+            result["quote_status"] = (
+                "read" if _media_status_from_fxtwitter(quote) == "none" else "media_unread"
+            )
+    elif quote:
+        result["quote_status"] = "unknown"
+    poll = tweet.get("poll")
+    if isinstance(poll, dict) and isinstance(poll.get("choices"), list):
+        lines = []
+        for choice in poll["choices"]:
+            if isinstance(choice, dict):
+                label = str(choice.get("label") or "").strip()
+                pct = choice.get("percentage")
+                lines.append(f"- {label} ({pct}%)" if pct is not None else f"- {label}")
+        result["poll_text"] = "[Poll]\n" + "\n".join(lines)
+        result["poll_status"] = "read"
+    elif poll:
+        result["poll_status"] = "unknown"
+    if tweet.get("article"):
+        result["article_status"] = "present"
+    return result
+
+
+_STRUCTURE_KEYS = ("structure_status", "quote_status", "poll_status", "article_status")
+_THREAD_START = re.compile(r"^\s*[\(（]?1\s*/\s*(?:\d{1,2}|n)?[\)）]?(?=\s|$)", re.IGNORECASE)
+_THREAD_COUNTER_END = re.compile(r"[\(（]\d{1,2}\s*/\s*(?:\d{1,2}|n)[\)）]\s*$", re.IGNORECASE)
+
+
+def _looks_like_thread(text: str) -> bool:
+    """A post that opens or continues a thread: the other posts are not in this read."""
+    stripped = text.strip()
+    if "🧵" in stripped or _THREAD_START.search(stripped) or _THREAD_COUNTER_END.search(stripped):
+        return True
+    return "thread" in stripped.lower() and any(mark in stripped for mark in ("👇", "⬇", "↓"))
+
+
+def _with_structure(result: Dict[str, Any], structure: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach structure fields and append quoted-post / poll text that was actually read."""
+    result["thread_marker"] = _looks_like_thread(result["text"])
+    for key in _STRUCTURE_KEYS:
+        if key in structure:
+            result[key] = structure[key]
+    result.setdefault("structure_status", "unknown")
+    extras = [structure[key] for key in ("quote_text", "poll_text") if structure.get(key)]
+    if extras:
+        result["text"] = "\n\n".join([result["text"], *extras])
+    return result
 
 
 def _fetch_via_oembed(url: str) -> Dict[str, Any]:
@@ -304,27 +371,23 @@ async def _fetch_via_playwright(url: str) -> Dict[str, Any]:
             except Exception:
                 pass  # May not appear if login required
 
-            # Extract tweet content with X-specific selectors
-            tweet_text = await page.evaluate("""() => {
-                // Priority 1: tweet text element
+            # A status URL must render the post itself; a login or "this post was
+            # deleted" shell has no tweetText element and is not a post read.
+            extracted = await page.evaluate("""() => {
                 const tweetEl = document.querySelector('[data-testid="tweetText"]');
-                if (tweetEl) return tweetEl.innerText;
-
-                // Priority 2: article element (thread view)
+                if (tweetEl) return {text: tweetEl.innerText, kind: 'tweet'};
                 const article = document.querySelector('article');
-                if (article) return article.innerText;
-
-                // Priority 3: main content area
+                if (article) return {text: article.innerText, kind: 'page'};
                 const main = document.querySelector('main');
-                if (main) return main.innerText;
-
-                return '';
+                if (main) return {text: main.innerText, kind: 'page'};
+                return {text: '', kind: 'page'};
             }""")
 
             title = await page.title()
 
             return {
-                "text": (tweet_text or "").strip(),
+                "text": (extracted.get("text") or "").strip(),
+                "kind": extracted.get("kind") or "page",
                 "title": (title or "").strip()[:200],
             }
         finally:
@@ -354,18 +417,20 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
             if text and not _is_thin_oembed_text(text):
                 media_status = data.get("media_status", "unknown")
                 media_probe_method = "oembed_html"
-                if media_status == "unknown":
-                    try:
-                        probe = _fetch_via_fxtwitter(url, timeout=3)
-                        media_status = probe.get("media_status", "unknown")
+                # oEmbed carries no structured media, quote, poll or article data.
+                structure: Dict[str, Any] = {}
+                try:
+                    structure = _fetch_via_fxtwitter(url, timeout=3)
+                    if media_status == "unknown":
+                        media_status = structure.get("media_status", "unknown")
                         media_probe_method = "fxtwitter"
-                    except Exception as probe_error:
-                        logger.warning(
-                            f"[Twitter] Media probe unavailable ({probe_error}); "
-                            "keeping media_status=unknown"
-                        )
+                except Exception as probe_error:
+                    logger.warning(
+                        f"[Twitter] Structure probe unavailable ({type(probe_error).__name__}); "
+                        "media and structure stay unknown"
+                    )
 
-                return {
+                return _with_structure({
                     "text": text,
                     "author": author or data.get("author", ""),
                     "url": url,
@@ -374,7 +439,7 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                     "fetch_method": "oembed",
                     "media_status": media_status,
                     "media_probe_method": media_probe_method,
-                }
+                }, structure)
             logger.warning("[Twitter] oEmbed returned thin or truncated content")
         except Exception as e:
             logger.warning(f"[Twitter] oEmbed failed ({e})")
@@ -386,7 +451,7 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
             data = _fetch_via_fxtwitter(url)
             text = (data.get("text") or "").strip()
             if text:
-                return {
+                return _with_structure({
                     "text": text,
                     "author": author or data.get("author", ""),
                     "url": url,
@@ -395,7 +460,7 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                     "fetch_method": "fxtwitter",
                     "media_status": data.get("media_status", "unknown"),
                     "media_probe_method": "fxtwitter",
-                }
+                }, data)
             logger.warning("[Twitter] FxTwitter returned empty text")
         except Exception as e:
             logger.warning(f"[Twitter] FxTwitter failed ({e})")
@@ -447,22 +512,33 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"[Twitter] Jina failed ({e})")
 
-    # Tier 5: Playwright + session with X-specific extraction
+    # Tier 5: Playwright + session with X-specific extraction.
+    # Not on the hosted surface: it has no sessions and must not start browsers.
+    from x_reader.routing import hosted_mode
+    if hosted_mode():
+        raise RuntimeError(f"All public X fetch methods failed for: {url}")
     try:
         logger.info(f"[Twitter] Tier 5 — Playwright: {url}")
         data = await _fetch_via_playwright(url)
         content = data.get("text", "")
-        if content and len(content.strip()) > 20:
+        is_post = data.get("kind") == "tweet"
+        if _is_tweet_url(url) and not is_post:
+            logger.warning("[Twitter] Playwright page has no post text (login or deleted shell)")
+        elif content and len(content.strip()) > 20:
             return {
                 "text": content,
                 "author": author,
                 "url": url,
                 "title": data.get("title", ""),
                 "platform": "twitter",
-                "fetch_method": "playwright",
+                # Only a rendered tweetText element counts as the post itself.
+                "fetch_method": "playwright" if is_post else "playwright_page",
                 "media_status": "unknown",
+                "structure_status": "unknown",
+                "thread_marker": _looks_like_thread(content),
             }
-        logger.warning("[Twitter] Playwright returned empty content")
+        else:
+            logger.warning("[Twitter] Playwright returned empty content")
     except RuntimeError:
         raise
     except Exception as e:

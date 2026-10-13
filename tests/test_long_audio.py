@@ -324,6 +324,10 @@ class LongAudioEvidenceTests(unittest.TestCase):
           "duration_short":lambda x:x["extra"].update(decoded_duration_seconds=60.0),
           "over_max":lambda x:x["extra"].update(media_duration_seconds=5401),
           "ratio_short":lambda x:x["extra"].update(coverage_ratio=0.5),
+          # 1 s of declared audio never processed: inside the old 1% tolerance
+          "declared_tail_uncovered":lambda x:x["extra"].update(
+              media_duration_seconds=121.0, coverage_ratio=round(120.0/121.0, 4)),
+          "ratio_not_recomputed":lambda x:x["extra"].update(media_duration_seconds=120.3),
           "text_spoof":lambda x:x.update(content="Tampered transcription"),
           "no_bytes":lambda x:x["extra"].update(verified_complete_bytes=False),
         }

@@ -17,7 +17,7 @@ x-reader 是给 AI Agent 用的通用内容读取层（Universal Content Reader�
 
 ## Evidence Receipt 网页工具
 
-稳定 Beta 已上线：**[中文介绍](https://xreader.leolabs.me/zh) · [English](https://xreader.leolabs.me/en) · [打开工具](https://xreader.leolabs.me/app)**，面向公开 X、YouTube 和普通网页 URL。粘贴链接后，它直接返回与 x-reader 相同的四种证据状态：`PASS`、`PARTIAL`、`FAIL`、`UNKNOWN`。结果可以复制为可读收据或 JSON，也可以分享；任何分享都不会把缺失证据包装成成功。
+公开 Beta 已上线：**[中文介绍](https://xreader.leolabs.me/zh) · [English](https://xreader.leolabs.me/en) · [打开工具](https://xreader.leolabs.me/app)**，面向公开 X、YouTube 和普通网页 URL。粘贴链接后，它直接返回与 x-reader 相同的四种证据状态：`PASS`、`PARTIAL`、`FAIL`、`UNKNOWN`。结果可以复制为可读收据或 JSON，也可以分享；任何分享都不会把缺失证据包装成成功。
 
 本地运行使用 `x-reader-web`，也可以直接使用上面的 Hosted Beta。详见 [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md)、[分发方案](./docs/DISTRIBUTION.md) 和 [公开 Beta 发布门](./docs/PUBLIC_BETA_GATE.md)。
 
@@ -110,16 +110,18 @@ npx skills add runesleo/x-reader --skill x-reader
 | 搜索结果 / preview card | 只能用于发现，不能当原文证据 |
 | X 推文正文 | 只能支持正文里的内容 |
 | 推文正文 + 未读取的附件视频 | 正文可通过；视频必须保持 `PARTIAL` |
+| 线程首帖、引用帖或 X Article 没读到 | 在读到或确认不存在之前保持 `PARTIAL` |
 | 视频标题 / 简介 | 只是 metadata，不是视频内容 |
-| 字幕 / transcript | 才能支持视频里的口头内容 |
+| 覆盖整段视频的字幕 | 能支持视频里的口头内容；画面没有分析，视频整体保持 `PARTIAL` |
 | 登录墙 / 删除页 / 空响应 | `FAIL` 或 `PARTIAL`，不能脑补 |
+| 付费墙试读、Cookie 同意页、只有菜单的页面 | `PARTIAL`、`FAIL` 或 `UNKNOWN`；普通网页要有足量正文才能 `PASS` |
 
 ## 支持来源
 
 | 来源 | 基础读取链路 | 媒体 / 登录补全 |
 |---|---|---|
 | X / Twitter | oEmbed → FxTwitter → Article/Jina → Playwright | Skill 可继续读取附件媒体 |
-| 普通网页 / 文章 | Jina Reader | 支持时走 browser fallback |
+| 普通网页 / 文章 | 先查跳转 → Jina Reader → 固定 IP 直连 HTML | 跳到 X、YouTube、播客等平台时交给对应读取器 |
 | YouTube | yt-dlp metadata / 字幕 | 配置后可 Groq Whisper |
 | Bilibili | Bilibili API | 字幕 / 音频转录流程 |
 | 微信公众号 | Jina → Playwright | 公开文章走无头浏览器兜底；暂不使用保存的登录态 |

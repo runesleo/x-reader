@@ -8,23 +8,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-13
+
 ### Added
 
-- Hosted Evidence Receipt web reader (`x-reader-web`, live at xreader.leolabs.me): public X, YouTube and generic web URLs, with a PASS / PARTIAL / FAIL / UNKNOWN receipt for each read.
-- Podcast episodes (Xiaoyuzhou, Apple Podcasts): show notes by default, plus opt-in local ASR in the CLI: `--media-preview-seconds N` (≤30 s sample, always `PARTIAL`), `--media-full-short` (≤120 s / ≤2 MiB, verified full transcript) and `--media-full-long` (≤90 min / ≤64 MiB, resumable, verified chunks). Needs `x-reader[media]` and ffmpeg.
+- Hosted Evidence Receipt web reader (`x-reader-web`, public beta at xreader.leolabs.me): public X, YouTube and generic web URLs, with a PASS / PARTIAL / FAIL / UNKNOWN receipt for each read. Deployment configuration is in `deploy/`.
+- Podcast episodes (Xiaoyuzhou, Apple Podcasts): show notes by default, plus opt-in local ASR in the CLI: `--media-preview-seconds N` (≤30 s sample, always `PARTIAL`), `--media-full-short` (≤120 s / ≤2 MiB, verified full transcript) and `--media-full-long` (≤90 min / ≤64 MiB, resumable, verified chunks). Needs `x-reader[media]`, ffmpeg and ffprobe.
+- X posts: the quoted post and poll options are appended to the post text when they were read; extra fields `structure_status`, `quote_status`, `poll_status`, `article_status` and `thread_marker` record what was checked.
+- A generic URL that redirects into X, YouTube, a podcast or another supported platform is read by that platform's reader.
+- `x-reader doctor` checks ffprobe and local transcription (faster-whisper).
 - Bilibili, Xiaohongshu and browser-fallback fixes from the Evidence Receipt work.
 
 ### Changed
 
 - **Podcast URLs now return `source_type=podcast` and `media_type=audio`** (before: read as generic pages, `manual` / `text`). Consumers that branch on `source_type` should handle `podcast`.
 - URL routing is shared by the CLI and the hosted reader and matches hosts exactly: `dropbox.com` is no longer treated as X, a `/feedback` path is no longer a feed; fxtwitter / vxtwitter / fixupx links go to the X reader.
-- Evidence status is stricter: YouTube needs a subtitle track covering at least 85% of the video for `PASS`; generic pages under 280 characters are `UNKNOWN`; RSS teasers, Xiaohongshu notes with unverified media and Telegram posts with attachments are `PARTIAL`.
+- Evidence receipts are stricter:
+  - YouTube videos are never `PASS`, because pictures are not analyzed; the `spoken_media` component is `PASS` only when subtitle cues cover the whole video (no uncaptioned stretch over 30 s).
+  - X posts are `PASS` only when media, quoted post, poll, X Article and thread layers were checked and are absent or read; text from a page reader (Jina, a page without the post element) is `UNKNOWN`.
+  - Generic pages need 280+ characters of sentence-like prose and no login, paywall, consent, removed or challenge markers; paywall teasers and media-site pages are `PARTIAL`; thin text and unverifiable redirects are `UNKNOWN`.
+  - RSS items count as full only with 280+ characters of visible prose and no "read more" ending; WeChat removal/verification notices `FAIL`, image-carried posts are `PARTIAL`.
+  - Full-audio proofs allow 0.5 s between declared and decoded duration (was 1 %), and `coverage_ratio` is the measured processed/declared ratio.
+- Podcast previews report the seconds actually decoded (`preview_seconds`) next to `requested_preview_seconds`.
 - Telegram message URLs (`t.me/<channel>/<id>`, `t.me/s/...`) read that exact message instead of the channel's latest post.
+- FxTwitter posts without a `media` field count as having no media (before: unknown).
+- RSS feeds served as `text/plain`, `application/octet-stream` or without a Content-Type are accepted when the body is a feed.
+- With `--json`, usage errors print `{"ok": false, "error_type": "UsageError", ...}` and exit 2; an unknown command exits 2.
+- The `all` extra includes `media` (faster-whisper).
+- Moat benchmark: every x-reader row is scored from its Evidence Receipt; new outcome `UNVERIFIED`.
 
 ### Security
 
+- yt-dlp only receives a rebuilt `https://www.youtube.com/watch?v=<id>` URL with its generic extractor disabled, so consent or redirect URLs cannot send it to other hosts.
 - RSS feeds are downloaded with the pinned, per-hop validated fetcher and parsed from bytes, so feed reads can no longer be redirected to private addresses.
-- Hosted reads: one shared router plus a child-side platform allowlist; the child skips `.env`, writes no inbox or Markdown, and inherits no proxies; timeouts kill the whole process group; CLI output is size-capped; the server has a socket deadline, a connection cap, JSON-only POSTs, stable public error codes and a stricter CSP.
+- External tools run with a deadline and an output budget enforced while they run; on exit, timeout or overflow their whole process group is killed.
+- Hosted reads: one shared router plus a child-side platform allowlist that also covers redirects; the child skips `.env`, writes no inbox or Markdown, inherits no proxies, runs with CPU / file-size / open-file ceilings, and keeps every tool it starts in the request's process group; no browser fallback; CLI output is size-capped.
+- Hosted server: absolute 20 s request-read deadline, connection cap, JSON-only POSTs, JSON for every error, a fixed set of public reason codes, control characters refused in URLs, no interpreter version in headers, stricter CSP.
 - yt-dlp calls skip playlists, cap audio downloads at 25 MB and bound subtitle / metadata files; short-audio decoding stops at the PCM budget and long-audio decoding has an idle watchdog.
 
 ## [0.4.0] - 2026-10-13

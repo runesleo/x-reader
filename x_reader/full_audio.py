@@ -176,8 +176,9 @@ def _decode_entire_file(source: Path, target: Path, home: str, duration: float) 
         if stream.getnchannels() != 1 or stream.getframerate() != SAMPLE_RATE:
             raise RuntimeError("Decoded audio format mismatch")
         decoded = stream.getnframes() / stream.getframerate()
-    tolerance = max(0.75, duration * 0.01)
-    if decoded <= 0 or abs(decoded - duration) > tolerance:
+    from x_reader.evidence import audio_duration_matches
+
+    if decoded <= 0 or not audio_duration_matches(duration, decoded):
         raise RuntimeError("Decoded audio coverage does not match encoded duration")
     if target.stat().st_size > int(2 * SAMPLE_RATE * (MAX_FULL_AUDIO_SECONDS + 2)) + 4096:
         raise RuntimeError("Decoded audio exceeded the bounded PCM budget")
@@ -238,7 +239,7 @@ def transcribe_full_short(url: str, cache_dir: str | None = None) -> dict:
             "media_duration_seconds": round(encoded_duration, 3),
             "decoded_duration_seconds": round(decoded_duration, 3),
             "processed_seconds": round(decoded_duration, 3),
-            "coverage_ratio": 1.0,
+            "coverage_ratio": round(decoded_duration / encoded_duration, 4),
             "audio_bytes": acquired["audio_bytes"],
             "media_sha256": acquired["media_sha256"],
             "media_url_sha256": hashlib.sha256(audio_url.encode()).hexdigest(),

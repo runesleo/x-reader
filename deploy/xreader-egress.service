@@ -1,0 +1,15 @@
+# Loads xreader-egress.nft (installed as /etc/nftables.d/xreader-egress.nft)
+# before the reader starts; stopping it removes the table.
+[Unit]
+Description=x-reader hosted reader egress guard (nftables; blocks internal destinations for user xreader)
+After=network-pre.target
+Before=x-reader-evidence.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/xreader-egress.nft
+ExecStop=/usr/sbin/nft delete table inet xreader_egress
+
+[Install]
+WantedBy=multi-user.target

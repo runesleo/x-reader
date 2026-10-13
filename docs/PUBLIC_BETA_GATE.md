@@ -1,72 +1,46 @@
 # Evidence Receipt public-beta gate
 
-Status (2026-10-13): the hosted beta is live for public X, YouTube and generic web URLs. This page records what was verified for it and what remains open.
+Status (2026-10-13): the hosted surface runs as a **public beta** for public X, YouTube and generic web URLs. It is not a production-grade or multi-tenant service. This page records what was verified for the beta, where the evidence is, and what is still open.
 
-## Already proven
+## Verified for the beta
 
-- canonical PASS / PARTIAL / FAIL / UNKNOWN projection is shared with x-reader;
-- hosted path shells out to the existing CLI rather than implementing a second reader;
-- public URL validation remains in the request path;
-- request child processes receive a minimal environment;
-- saved browser sessions, Telegram credentials, Groq keys, output paths, and persistent inboxes are not inherited;
-- each read uses a temporary HOME/inbox;
-- the hosted policy and the CLI reader share one URL router, and the child process refuses platforms outside the hosted allowlist;
-- hosted child processes skip `.env` loading and never write inbox or Markdown output;
-- request timeouts end the whole child process group (yt-dlp, browsers), and CLI output is size-capped;
-- the server has a per-socket deadline, a connection-thread cap, JSON-only POSTs and stable public error codes;
-- outbound connections from the service account to loopback, private, tailnet and metadata addresses are blocked at the host;
-- response content preview is bounded;
-- request concurrency is bounded in-process;
-- Linux canary has exercised repository tests, a live generic page, a live mixed-media X URL, and CLI/HTTP receipt parity.
+### Reader path
 
-## Required before public internet exposure
+- The canonical PASS / PARTIAL / FAIL / UNKNOWN projection is shared with x-reader (`x_reader/evidence.py`); the web layer shells out to the CLI instead of implementing a second reader.
+- The hosted policy and the CLI reader share one URL router (`x_reader/routing.py`); the child process refuses platforms outside the hosted allowlist, including when a generic URL redirects into one (`tests/test_hosted_hardening.py`).
+- Every network hop the server opens itself is re-resolved, checked against private/special addresses and pinned to the checked IP; RSS is downloaded this way before parsing; yt-dlp only ever receives a rebuilt `https://www.youtube.com/watch?v=<id>` URL with the generic extractor disabled.
 
-### Abuse and network boundary
+### Isolation
 
-- Edge rate limit by client/IP or equivalent abuse identity.
-- Global request budget in addition to the in-process semaphore.
-- Deployment-level outbound network policy appropriate for a service that fetches user-supplied URLs.
-- Confirm DNS rebinding / redirect handling remains inside the public-destination policy for every network hop.
-- Maximum response/download/body budgets at the deployment layer.
-- No generic proxy behavior: unsupported destinations must fail closed.
+- Request child processes get a minimal environment and a temporary HOME/inbox that is deleted afterwards; they skip `.env`, never write inbox or Markdown output, and inherit no saved sessions, Telegram credentials, Groq keys, output paths or proxies.
+- Runs as an unprivileged service user with a read-only system, private `/tmp` and no capabilities ([deploy/x-reader-evidence.service](../deploy/x-reader-evidence.service)).
+- Outbound connections from the service account to loopback, private, CGNAT/tailnet, link-local/metadata, multicast and reserved addresses are rejected at the host ([deploy/xreader-egress.nft](../deploy/xreader-egress.nft)).
 
-### Runtime isolation
+### Limits
 
-- Run as an unprivileged service user.
-- Read-only application filesystem where practical; writable temp only.
-- No cloud metadata credentials or unrelated runtime secrets available to the process.
-- Explicit CPU/memory/process/time limits for each instance.
-- Verify temporary files are removed on normal and timeout paths.
-
-### Observability without collecting source content
-
-- Health and readiness checks.
-- Aggregate counters for requests, status class, platform, latency, timeout, 429, and server errors.
-- Do not log full fetched content.
-- Avoid storing raw submitted URLs unless there is a specific disclosed need.
-- Error logs must not serialize inherited environment/secrets.
+- Per request: 75 s deadline and 8 MiB output cap enforced while the reader runs; its whole process group is killed on exit, timeout or overflow; 120 CPU-seconds, 64 MiB per written file and 256 open files per process; reader processes are the first OOM-kill candidates.
+- Per service: 512 MiB memory, 80 % CPU, 64 tasks, 512 open files; at most 4 concurrent reads and 32 connection threads; requests not fully read within 20 s are cut off.
+- At the edge: 12 reads/minute and 2 concurrent reads per client IP, 8 KiB bodies, full request buffering ([deploy/nginx-xreader.conf](../deploy/nginx-xreader.conf)).
+- Responses: bounded content preview, JSON for every error, stable reason codes only (no exception text), no interpreter version in headers, strict CSP.
 
 ### Product truth
 
-- Page says beta, not production-grade or universal.
-- Supported public surfaces are named exactly.
-- PARTIAL/FAIL/UNKNOWN remain visible and shareable without being rewritten as success.
-- Privacy/security text matches deployed behavior.
-- Stable domain and support/issue path exist.
-- A concise privacy notice explains request/log retention.
+- Pages say beta; supported surfaces are named exactly; PARTIAL / FAIL / UNKNOWN stay visible and shareable without being rewritten as success.
+- Fetched content is not logged; failures log only an exception type, not the URL.
 
 ### Release verification
 
-- Focused web/evidence tests pass.
-- Full repository test suite passes from a clean checkout/worktree.
-- Build/install smoke passes for the package containing `x_reader.web`.
-- Preview deployment: `/healthz` passes.
-- Preview deployment: live generic web read passes.
-- Preview deployment: known mixed-media X remains PARTIAL unless its attached media was actually consumed.
-- CLI and HTTP classifications match on the same canary source.
-- Final diff reviewed; no credentials, local paths, or private canary data promoted.
+- Repository test suite passes on Linux and macOS (CI: Python 3.10 and 3.11).
+- Live canaries on the deployed host: `/healthz`, a generic page, and a mixed-media X post that stays PARTIAL; CLI and HTTP receipts match.
 
-## Explicitly not required for the first beta
+## Still open
+
+- Aggregate counters (requests, status class, platform, latency, timeouts, 429s, server errors) without collecting content.
+- A short privacy notice on the site explaining request and log retention.
+- A global daily request budget in addition to per-IP limits.
+- Per-request memory and process ceilings (today they are per process and per service, not per request group).
+
+## Explicitly not required for the beta
 
 - billing;
 - accounts;

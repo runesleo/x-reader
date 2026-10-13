@@ -77,7 +77,10 @@ def classify(row: dict[str, Any], result: dict[str, Any]) -> str:
         return "MEDIA_COMPLETE"
     if len(content.strip()) < int(row.get("min_chars") or 200):
         return "THIN"
-    if row.get("media_expected") is True or result.get("media_status") == "present":
+    evidence = result.get("evidence_status")  # x-reader rows carry the canonical receipt
+    if evidence in ("FAIL", "UNKNOWN"):
+        return "UNVERIFIED"
+    if evidence == "PARTIAL" or row.get("media_expected") is True or result.get("media_status") == "present":
         return "PARTIAL_MEDIA"
     return "READ"
 
@@ -129,18 +132,14 @@ def x_reader_provider(row: dict[str, Any], timeout: int,
     extra = payload.get("extra") or {}
     content = str(payload.get("content") or "")
     media_status = extra.get("media_status")
-    media_complete = bool(extra.get("has_transcript")) and extra.get("transcript_coverage") != "preview"
-    evidence_status = "PASS"
-    if payload.get("source_type") == "podcast":
-        from x_reader.evidence import build_receipt
-        receipt = build_receipt(payload)
-        evidence_status = receipt["status"]
-        media_complete = bool(
-            extra.get("transcript_coverage") == "full"
-            and receipt["status"] == "PASS"
-        )
-    elif media_status == "present" and not media_complete:
-        evidence_status = "PARTIAL"
+    # Every source is scored from the canonical receipt, never from raw fields:
+    # a transcript flag or a media field alone does not prove coverage.
+    from x_reader.evidence import build_receipt
+    receipt = build_receipt(payload)
+    evidence_status = receipt["status"]
+    media_complete = bool(
+        evidence_status == "PASS" and payload.get("media_type") in ("audio", "video")
+    )
     return {
         "ok": True,
         "latency_ms": latency,
@@ -166,6 +165,7 @@ def x_reader_provider(row: dict[str, Any], timeout: int,
         "asr_boundary_adjustments": extra.get("asr_boundary_adjustments") or 0,
         "max_boundary_overrun_seconds": extra.get("max_boundary_overrun_seconds") or 0.0,
         "evidence_status": evidence_status,
+        "evidence_reason": receipt["reason_code"],
     }
 
 def jina_provider(row: dict[str, Any], timeout: int) -> dict[str, Any]:

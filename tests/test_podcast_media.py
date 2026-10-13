@@ -117,14 +117,18 @@ class MediaPreviewSecurityTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "non-audio"):
                         _download_media_prefix(AUDIO, Path(temp) / "source.m4a")
 
-    def test_bounded_audio_preview_is_explicit_and_not_full_coverage(self):
-        commands = []
+    def _preview(self, decoded_seconds: float, commands: list):
         def fake_run(command, **kwargs):
             commands.append(command)
             if command[0] == "yt-dlp":
                 return subprocess.CompletedProcess(command, 0, json.dumps({"url": AUDIO}), "")
             if command[0] == "ffmpeg":
-                Path(command[-1]).write_bytes(b"RIFF" + b"\x00" * 512)
+                import wave
+                with wave.open(command[-1], "wb") as out:
+                    out.setnchannels(1)
+                    out.setsampwidth(2)
+                    out.setframerate(16000)
+                    out.writeframes(b"\x00\x00" * int(16000 * decoded_seconds))
                 return subprocess.CompletedProcess(command, 0, "", "")
             raise AssertionError("unexpected process")
 
@@ -144,7 +148,18 @@ class MediaPreviewSecurityTests(unittest.TestCase):
                 with patch("x_reader.media_preview._download_media_prefix", side_effect=fake_download):
                     with patch("x_reader.media_preview.subprocess.run", side_effect=fake_run):
                         with patch.dict(sys.modules, {"faster_whisper": types.SimpleNamespace(WhisperModel=FakeModel)}):
-                            output = transcribe_preview(EPISODE, 12, cache_dir="/tmp/xreader-test-cache")
+                            return transcribe_preview(EPISODE, 12, cache_dir="/tmp/xreader-test-cache")
+
+    def test_preview_reports_the_seconds_actually_decoded(self):
+        short = self._preview(3.4, [])
+        self.assertEqual(short["preview_seconds"], 3)
+        self.assertEqual(short["requested_preview_seconds"], 12)
+        with self.assertRaises(RuntimeError):
+            self._preview(0.5, [])
+
+    def test_bounded_audio_preview_is_explicit_and_not_full_coverage(self):
+        commands = []
+        output = self._preview(12, commands)
         self.assertEqual(output["preview_seconds"], 12)
         self.assertEqual(output["transcript_coverage"], "preview")
         self.assertEqual(output["transcription_method"], "local_whisper_tiny_cpu")

@@ -42,11 +42,16 @@ class FirstSuccessSmokeTest(unittest.TestCase):
                 "extra": {
                     "fetch_method": "oembed",
                     "media_status": "none",
+                    "structure_status": "verified",
+                    "quote_status": "none",
+                    "poll_status": "none",
+                    "article_status": "none",
+                    "thread_marker": False,
                 },
             }
         )
         self.assertEqual(coverage, "READ")
-        self.assertIn("no media reported", evidence)
+        self.assertIn("no media", evidence)
         self.assertEqual(components, {"post_text": "READ"})
 
     def test_twitter_media_unknown_is_conservatively_partial(self):

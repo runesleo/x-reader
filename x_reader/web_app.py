@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -33,8 +34,31 @@ REQUEST_TIMEOUT_SECONDS = 75
 REQUEST_SLOTS = threading.BoundedSemaphore(4)
 ALLOWED_PLATFORMS = {"twitter", "youtube", "generic"}
 SOCKET_TIMEOUT_SECONDS = 15
+# Absolute budget for the request line, headers and body together: a client
+# dripping one byte at a time cannot hold a connection thread past it.
+REQUEST_READ_DEADLINE_SECONDS = 20
 MAX_CONNECTION_THREADS = 32
 MAX_CLI_OUTPUT_BYTES = 8 * 1024 * 1024
+
+# Public failure reasons are a fixed set; exception names never reach clients.
+_FAILURE_REASONS = {
+    "ValueError": "source_unreadable",
+    "TimeoutError": "source_timeout",
+    "ReadTimeout": "source_timeout",
+    "ConnectTimeout": "source_timeout",
+    "TooManyRedirects": "too_many_redirects",
+}
+SECURITY_HEADERS = (
+    ("Cache-Control", "no-store"),
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "no-referrer"),
+    (
+        "Content-Security-Policy",
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; "
+        "base-uri 'none'; object-src 'none'; form-action 'self'",
+    ),
+)
 
 
 class HostedPolicyError(ValueError):
@@ -52,6 +76,10 @@ def normalize_input_url(raw_url: str) -> str:
         raise HostedPolicyError("URL is required")
     if len(url) > MAX_URL_CHARS:
         raise HostedPolicyError("URL is too long")
+    # Control characters or inner whitespace could forge extra lines in a
+    # shared receipt; real URLs percent-encode them.
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in url):
+        raise HostedPolicyError("URL must not contain spaces or control characters")
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
@@ -102,12 +130,14 @@ def run_cli(url: str) -> subprocess.CompletedProcess[str]:
         home = Path(tmp)
         (home / "tmp").mkdir(parents=True, exist_ok=True)
         env = _minimal_child_env(home, home / "inbox.json")
-        # Own process group: a timeout also ends yt-dlp / browser grandchildren.
+        # The CLI gets its own session and process group; tools it starts stay in
+        # that group (hosted mode), so exit, timeout or overflow kills all of them.
         return run_bounded(
             [sys.executable, "-m", "x_reader.cli", url, "--json"],
             timeout=REQUEST_TIMEOUT_SECONDS,
             env=env,
             max_output_bytes=MAX_CLI_OUTPUT_BYTES,
+            new_session=True,
         )
 
 
@@ -116,17 +146,18 @@ def _parse_cli_failure(
     url: str,
     platform: str,
 ) -> dict[str, Any]:
-    # Only a stable reason code is public; raw exception text stays server-side.
-    reason = "source_fetch_failed"
-    evidence = "x-reader could not fetch the public source reliably"
+    # Only a reason from a fixed set is public; the exception type goes to the
+    # service log (no URL, no message) and raw error text is dropped.
+    error_type = ""
     try:
         payload = json.loads(proc.stdout)
         if isinstance(payload, dict) and payload.get("error"):
-            error_type = "".join(ch for ch in str(payload.get("error_type") or "") if ch.isalnum())
-            if error_type:
-                reason = "source_fetch_failed_" + error_type.lower()[:40]
+            error_type = "".join(ch for ch in str(payload.get("error_type") or "") if ch.isalnum())[:40]
     except (json.JSONDecodeError, TypeError):
         pass
+    print(f"x-reader-evidence read_failed error_type={error_type or 'unknown'}", file=sys.stderr)
+    reason = _FAILURE_REASONS.get(error_type, "source_fetch_failed")
+    evidence = "x-reader could not fetch the public source reliably"
     return failure_receipt(url, reason, evidence, source_type=platform)
 
 
@@ -226,35 +257,98 @@ def _asset_html(name: str = "index.html") -> bytes:
     return files("x_reader.web").joinpath(name).read_bytes()
 
 
+_ERROR_CODES = {
+    400: "bad_request",
+    404: "not_found",
+    405: "method_not_allowed",
+    408: "request_timeout",
+    413: "request_body_too_large_or_empty",
+    414: "uri_too_long",
+    431: "request_header_fields_too_large",
+    501: "method_not_allowed",
+    503: "busy",
+    505: "http_version_not_supported",
+}
+
+
+def _error_json(status: int) -> bytes:
+    return json.dumps({"ok": False, "error": _ERROR_CODES.get(status, "error")}).encode("utf-8")
+
+
 class EvidenceRequestHandler(BaseHTTPRequestHandler):
-    server_version = "x-reader-evidence/0.1"
-    # Socket deadline for request line, headers and body: slow clients cannot pin a thread.
+    server_version = "x-reader-evidence"
+    sys_version = ""
+    # Per-read socket timeout; REQUEST_READ_DEADLINE_SECONDS bounds the whole read.
     timeout = SOCKET_TIMEOUT_SECONDS
+
+    def version_string(self) -> str:
+        return self.server_version  # no interpreter version in the Server header
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return
 
-    def _headers(self, status: int, content_type: str, length: int) -> None:
+    def setup(self) -> None:
+        super().setup()
+        self._read_aborted = False
+        self._read_timer = threading.Timer(REQUEST_READ_DEADLINE_SECONDS, self._abort_slow_read)
+        self._read_timer.daemon = True
+        self._read_timer.start()
+
+    def _abort_slow_read(self) -> None:
+        self._read_aborted = True
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def _request_read(self) -> bool:
+        """Mark the request fully read; False if the read deadline already cut it off."""
+        self._read_timer.cancel()
+        if self._read_aborted:
+            self.close_connection = True
+            return False
+        return True
+
+    def finish(self) -> None:
+        self._read_timer.cancel()
+        try:
+            super().finish()
+        except OSError:
+            pass
+
+    def _headers(self, status: int, content_type: str, length: int,
+                 extra: tuple[tuple[str, str], ...] = ()) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(length))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; "
-            "base-uri 'none'; object-src 'none'; form-action 'self'",
-        )
+        for name, value in (*SECURITY_HEADERS, *extra):
+            self.send_header(name, value)
         self.end_headers()
 
-    def _json(self, status: int, payload: dict[str, Any]) -> None:
+    def _json(self, status: int, payload: dict[str, Any],
+              extra: tuple[tuple[str, str], ...] = ()) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self._headers(status, "application/json; charset=utf-8", len(body))
-        self.wfile.write(body)
+        self._headers(status, "application/json; charset=utf-8", len(body), extra)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+        """Every stdlib error path (bad request line, oversized headers, ...) answers in JSON."""
+        self.close_connection = True
+        try:
+            self._json(code, {"ok": False, "error": _ERROR_CODES.get(code, "error")})
+        except OSError:
+            pass
+
+    def _method_not_allowed(self) -> None:
+        if self._request_read():
+            self._json(405, {"ok": False, "error": "method_not_allowed"}, (("Allow", "GET, POST"),))
+
+    do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed  # noqa: N815
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._request_read():
+            return
         path = urlparse(self.path).path
         page = {
             "/": "landing-en.html",
@@ -278,26 +372,36 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if path != "/api/read":
-            self._json(404, {"ok": False, "error": "not_found"})
+            if self._request_read():
+                self._json(404, {"ok": False, "error": "not_found"})
             return
 
         content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
         if content_type != "application/json":
-            self._json(415, {"ok": False, "error": "json_content_type_required"})
+            if self._request_read():
+                self._json(415, {"ok": False, "error": "json_content_type_required"})
             return
 
         try:
             length = int(self.headers.get("Content-Length") or "0")
         except ValueError:
-            self._json(400, {"ok": False, "error": "invalid_content_length"})
+            if self._request_read():
+                self._json(400, {"ok": False, "error": "invalid_content_length"})
             return
         if length <= 0 or length > MAX_BODY_BYTES:
-            self._json(413, {"ok": False, "error": "request_body_too_large_or_empty"})
+            if self._request_read():
+                self._json(413, {"ok": False, "error": "request_body_too_large_or_empty"})
             return
 
         try:
-            payload = json.loads(self.rfile.read(length))
-        except json.JSONDecodeError:
+            raw_body = self.rfile.read(length)
+        except OSError:
+            raw_body = b""
+        if not self._request_read():
+            return
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
             self._json(400, {"ok": False, "error": "invalid_json"})
             return
         if not isinstance(payload, dict) or not isinstance(payload.get("url"), str):
@@ -339,10 +443,17 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
 
     def process_request(self, request: Any, client_address: Any) -> None:
         if not self._thread_slots.acquire(blocking=False):
+            body = _error_json(503)
+            head = [
+                "HTTP/1.1 503 Service Unavailable",
+                "Content-Type: application/json; charset=utf-8",
+                f"Content-Length: {len(body)}",
+                "Connection: close",
+                *(f"{name}: {value}" for name, value in SECURITY_HEADERS),
+            ]
             try:
-                request.sendall(
-                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                )
+                request.settimeout(2)
+                request.sendall("\r\n".join(head).encode("ascii") + b"\r\n\r\n" + body)
             except OSError:
                 pass
             self.shutdown_request(request)
@@ -357,6 +468,12 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
             self.process_request_thread(request, client_address)
         finally:
             self._thread_slots.release()
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # Clients that hang up or hit the read deadline are routine, not tracebacks.
+        if isinstance(sys.exc_info()[1], OSError):
+            return
+        super().handle_error(request, client_address)
 
 
 def main() -> None:

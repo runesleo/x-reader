@@ -1,5 +1,7 @@
 # x-reader Moat Test — 2026-10-08
 
+> Historical snapshot (2026-10-08), recorded before v0.5.0. Since v0.5.0 every x-reader row is scored from its Evidence Receipt; rerun the benchmark before quoting these numbers.
+
 ## Status and honest scope
 
 This is a **first-party baseline plus targeted repairs**, not a claim that x-reader beats native ChatGPT, Exa, Firecrawl, or Jina across the board. Those provider comparisons are not complete under identical execution environments. The results below are tied to the benchmark host, its optional dependencies, and the test URLs as of 2026-10-08.

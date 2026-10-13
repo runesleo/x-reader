@@ -169,6 +169,14 @@ def transcribe_preview(url: str, seconds: int, cache_dir: str | None = None) -> 
         size = wav_file.stat().st_size
         if size <= 44 or size > 32_000 * seconds + 1_000_000:
             raise RuntimeError("Audio clip failed size validation")
+        # -t is only an upper bound: a short source or a cut-off prefix decodes
+        # to less, and the receipt must report what was actually sampled.
+        import wave
+        with wave.open(str(wav_file), "rb") as stream:
+            decoded_seconds = stream.getnframes() / float(stream.getframerate() or 1)
+        sampled_seconds = int(min(seconds, decoded_seconds))
+        if sampled_seconds < 1:
+            raise RuntimeError("Audio clip decoded to less than one second")
 
         try:
             from faster_whisper import WhisperModel
@@ -194,7 +202,8 @@ def transcribe_preview(url: str, seconds: int, cache_dir: str | None = None) -> 
 
         return {
             "text": text,
-            "preview_seconds": seconds,
+            "preview_seconds": sampled_seconds,
+            "requested_preview_seconds": seconds,
             "transcription_method": "local_whisper_tiny_cpu",
             "transcript_coverage": "preview",
         }

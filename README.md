@@ -21,7 +21,7 @@ Your agent installs the skill and the CLI, runs the read-only `x-reader doctor` 
 
 ## Evidence Receipt web utility
 
-The stable beta is live for public X, YouTube, and generic web URLs: **[Product](https://xreader.leolabs.me/en) · [中文](https://xreader.leolabs.me/zh) · [Open app](https://xreader.leolabs.me/app)**. Paste a URL and it returns the same canonical evidence states used by x-reader: `PASS`, `PARTIAL`, `FAIL`, or `UNKNOWN`. Results can be copied as a human-readable receipt or JSON, and shared without upgrading missing evidence into success.
+The public beta is live for public X, YouTube, and generic web URLs: **[Product](https://xreader.leolabs.me/en) · [中文](https://xreader.leolabs.me/zh) · [Open app](https://xreader.leolabs.me/app)**. Paste a URL and it returns the same canonical evidence states used by x-reader: `PASS`, `PARTIAL`, `FAIL`, or `UNKNOWN`. Results can be copied as a human-readable receipt or JSON, and shared without upgrading missing evidence into success.
 
 Run it locally with `x-reader-web`, or use the hosted beta above. See [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md), the [distribution plan](./docs/DISTRIBUTION.md), and the [public-beta gate](./docs/PUBLIC_BETA_GATE.md).
 
@@ -108,16 +108,18 @@ x-reader makes these distinctions explicit:
 | Search result / preview card | Discovery only — not source evidence |
 | X post text | Claims in the post text only |
 | X post text + unconsumed attached video | Post may pass; video stays `PARTIAL` |
+| First post of a thread, quoted post or X Article not read | `PARTIAL` until that layer is read or shown absent |
 | Video page title / description | Metadata only — not spoken content |
-| Subtitle / transcript | Spoken-content evidence |
+| Subtitle track covering the whole video | Spoken-content evidence; the video stays `PARTIAL` because pictures are not analyzed |
 | Login wall / deleted page / empty payload | `FAIL` or `PARTIAL`, never invented completion |
+| Paywall teaser, cookie wall, menu-only page | `PARTIAL`, `FAIL` or `UNKNOWN`; a generic page passes only with substantial prose |
 
 ## What it reads
 
 | Source | Base read path | Media / gated completion |
 |---|---|---|
 | X / Twitter | oEmbed → FxTwitter → Article/Jina → Playwright | Agent Skill can inspect attached media with local media tools |
-| Web / articles | Jina Reader | Browser fallback where supported |
+| Web / articles | Redirect check → Jina Reader → pinned direct HTML | A redirect into X, YouTube, podcasts, etc. is handed to that reader |
 | YouTube | yt-dlp metadata/subtitles | Groq Whisper fallback when configured |
 | Bilibili | Bilibili API | Subtitle/audio transcription workflow |
 | WeChat | Jina → Playwright | Headless browser fallback for public articles; saved login sessions are not used yet |

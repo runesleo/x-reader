@@ -1,6 +1,6 @@
 # x-reader · Long-audio chunk resume and complete coverage
 
-**2026-10-10 · experimental product branch** — This report describes the *existing* x-reader source-ingestion layer. The public hosted web service and `main` are unchanged.
+**2026-10-10 · historical verification snapshot** — Recorded on the pre-release development branch; the capability shipped in v0.5.0 (local CLI only) with a tighter duration check (processed audio within 0.5 s of the declared length). The hosted web beta never runs audio work.
 
 ## Real source
 
@@ -31,18 +31,15 @@
 - Cached byte chunks and local ASR transcript text remain on disk to enable later resumes. Directories are private (0700) and files 0600, but the cache **is persistent**, not encrypted by x-reader, and does not auto-expire. Users can select a separate private `X_READER_LONG_CACHE_DIR`; do not run this mode against private/credentialed sources.
 - Model word recognition may be incorrect or hallucinated. **100% means all PCM source audio was processed**, not that every word is accurate.
 
-## Reproduce in the existing product branch
+## Reproduce on the release
 
 ```bash
-git clone https://github.com/runesleo/x-reader.git
-cd x-reader
-git switch product/evidence-receipt-mvp-20261007
-python -m pip install -e '.[media]'
+python -m pip install "x-reader[media] @ git+https://github.com/runesleo/x-reader.git@v0.5.0"
 # ffmpeg, ffprobe and yt-dlp must be in PATH
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6aab4896051af796b9e966c5' --media-full-long --json
 ```
 
-This is an **experimental development-branch** capability, not a change to the public hosted x-reader web beta. The benchmark source case was deliberately kept separate from the canonical 50-URL corpus. Private caches, binary audio and machine transcript artifacts are **not** committed.
+This is an **experimental local CLI** capability, not part of the public hosted x-reader web beta. The benchmark source case was deliberately kept separate from the canonical 50-URL corpus. Private caches, binary audio and machine transcript artifacts are **not** committed.
 
 ## What remains unproven
 

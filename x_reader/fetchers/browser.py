@@ -130,7 +130,9 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
                     return elements.join('\\n\\n');
                 }""")
 
-                # Generic fallback if WeChat specific extraction yields nothing
+                # Generic fallback if WeChat specific extraction yields nothing;
+                # recorded so the receipt does not treat page chrome as the article.
+                extraction = "container" if content else "page_body"
                 if not content:
                     content = await page.evaluate("""() => {
                         const el = document.querySelector('article')
@@ -145,6 +147,7 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
                     "content": (content or "").strip(),
                     "url": page.url,
                     "author": "",
+                    "extraction": extraction,
                 }
             else:
                 # Generic fallback: a Bilibili page may navigate after the

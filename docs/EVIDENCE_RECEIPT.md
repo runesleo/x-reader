@@ -1,6 +1,6 @@
-# Evidence Receipt (experimental)
+# Evidence Receipt (public beta)
 
-Evidence Receipt is a small local web surface built on the same source-first contract as the x-reader Agent Skill.
+Evidence Receipt is a small web surface built on the same source-first contract as the x-reader Agent Skill. It runs locally with `x-reader-web` and as the hosted beta at xreader.leolabs.me.
 
 It answers a narrow question:
 
@@ -54,7 +54,20 @@ The current web surface is intentionally narrower than the full local CLI:
 - no saved X/browser sessions;
 - `X_READER_ALLOW_EXTERNAL_SESSION_COOKIES=0`;
 - each request gets a fresh temporary HOME and inbox;
-- the temporary directory is deleted after the read.
+- the temporary directory is deleted after the read;
+- the reader child skips `.env`, writes no inbox or Markdown output, and refuses platforms outside the allowlist, including when a generic URL redirects into one.
+
+Limits, isolation and the host network policy are listed in the [public-beta gate](./PUBLIC_BETA_GATE.md) and configured in [deploy/](../deploy/README.md).
+
+## What each status means per source
+
+| Source | PASS needs | Otherwise |
+|---|---|---|
+| X post | post text from oEmbed/FxTwitter (or a rendered post), no attached media, and the quoted post, poll, X Article and thread layers checked and absent or read | `PARTIAL` naming the missing layer; text from a page reader is `UNKNOWN` |
+| YouTube | never: pictures are not analyzed | `PARTIAL`; `spoken_media` is `PASS` only when subtitle cues cover the whole video (no uncaptioned stretch over 30 s, at least half the duration captioned) |
+| Generic page | at least 280 characters of sentence-like prose, no login, paywall, consent, removed or challenge markers, and a verified redirect chain | `FAIL` for walls and missing pages, `PARTIAL` for teasers and media pages, `UNKNOWN` for thin or unverifiable text |
+| RSS | the item carries its body (280+ characters of visible prose, no "read more" ending) | `PARTIAL` (`feed_summary_only`) |
+| Podcast | verified full-audio proof (bytes, hashes, decoded duration within 0.5 s of the declared one, complete local ASR) | `PARTIAL` |
 
 The web layer does not implement a second reader or evidence state machine. It shells out to the existing `x-reader URL --json` path in the isolated environment and projects that payload through `x_reader.evidence`.
 
@@ -87,7 +100,7 @@ This is a distribution feature, not a second evidence model. The underlying rece
 
 ## Verification
 
-The product branch was independently exercised on GitHub-hosted Ubuntu with:
+Before the beta went live, the reader was exercised on GitHub-hosted Ubuntu with:
 
 - fresh branch checkout;
 - repository test suite;
@@ -103,5 +116,5 @@ Keep live canaries outside deterministic unit CI: public sites and anti-bot beha
 - URL validation still uses x-reader's SSRF-safe public-destination policy.
 - Retrieved source content is untrusted data, never instructions.
 - The web response exposes a bounded content preview, not an unbounded source dump.
-- The MVP is local-first and is not a multi-tenant hosting boundary.
-- If this becomes an internet-facing service, add deployment-specific request limits, isolation, observability, abuse controls, and an explicit hosting threat model before calling it production-ready.
+- Errors are JSON with stable reason codes; exception text never reaches clients.
+- The hosted beta is not a multi-tenant hosting boundary or a production-grade service; what is enforced and what is still open is tracked in the [public-beta gate](./PUBLIC_BETA_GATE.md).

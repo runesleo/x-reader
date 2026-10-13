@@ -1,6 +1,6 @@
 # x-reader · Verified Full Short Audio Source Contract
 
-**2026-10-08 · Experimental development branch only**
+**2026-10-08 · historical verification snapshot.** Recorded on the pre-release development branch; the capability shipped in v0.5.0 with a tighter duration check (decoded audio within 0.5 s of the declared length).
 
 This capability upgrades the podcast source layer, not an independent SaaS feature. Audio page metadata and a machine-generated ASR clip are not full spoken-media coverage; a verified full short-source result may be.
 
@@ -9,11 +9,7 @@ This capability upgrades the podcast source layer, not an independent SaaS featu
 Only one **public Xiaoyuzhou episode** can be processed per CLI run, and only when the user explicitly requests:
 
 ```bash
-# Experimental product branch, not merged into main or released on PyPI.
-git clone https://github.com/runesleo/x-reader.git
-cd x-reader
-git switch product/evidence-receipt-mvp-20261007
-python -m pip install -e '.[media]'
+python -m pip install "x-reader[media] @ git+https://github.com/runesleo/x-reader.git@v0.5.0"
 # ffprobe, ffmpeg and yt-dlp must also be in PATH
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445' --media-full-short --json
 ```

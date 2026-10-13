@@ -21,6 +21,22 @@ FEED_TYPES = {
 }
 
 
+def looks_like_feed(body: bytes) -> bool:
+    """True for RSS/Atom/RDF XML or a JSON Feed, whatever Content-Type it came with."""
+    head = body[:2048].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    if head.startswith(b"{"):
+        return b"jsonfeed.org" in head
+    return head.startswith(b"<?xml") or any(tag in head for tag in (b"<rss", b"<feed", b"<rdf:rdf"))
+
+
+def _is_full_body(html_body: str) -> bool:
+    """A feed item carries the article only if its visible text is substantial and not a teaser."""
+    from x_reader.evidence import MIN_GENERIC_BODY_CHARS, _ends_with_read_more, prose_chars, visible_text
+
+    text = visible_text(html_body)
+    return prose_chars(text) >= MIN_GENERIC_BODY_CHARS and not _ends_with_read_more(text)
+
+
 async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:
     """Fetch and parse an RSS/Atom feed.
 
@@ -28,7 +44,9 @@ async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:
     content_kind ("full" when the feed carries the article body, else "summary").
     """
     logger.info(f"Fetching RSS: {url}")
-    body, content_type, final_url = await asyncio.to_thread(fetch_public_bytes, url, FEED_TYPES)
+    body, content_type, final_url = await asyncio.to_thread(
+        fetch_public_bytes, url, FEED_TYPES, sniff=looks_like_feed,
+    )
     feed = feedparser.parse(
         body,
         resolve_relative_uris=False,
@@ -48,7 +66,7 @@ async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:
         articles.append({
             "title": entry.get("title", ""),
             "summary": full or summary,
-            "content_kind": "full" if full else "summary",
+            "content_kind": "full" if full and _is_full_body(full) else "summary",
             "url": entry.get("link", ""),
             "source": source_name,
             "published": entry.get("published", ""),

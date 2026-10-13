@@ -173,7 +173,7 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         self.assertEqual(data["media_status"], "none")
         self.assertEqual(data["media_probe_method"], "fxtwitter")
 
-    def test_fetch_twitter_preserves_oembed_media_presence_without_probe(self):
+    def test_fetch_twitter_keeps_oembed_media_presence_and_probes_structure(self):
         original_oembed = twitter._fetch_via_oembed
         original_fx = twitter._fetch_via_fxtwitter
         calls = []
@@ -185,11 +185,13 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
                 "media_status": "present",
             }
 
-            def unexpected_probe(*_args, **_kwargs):
+            def probe(*_args, **_kwargs):
                 calls.append(True)
-                raise AssertionError("media probe should not run")
+                # A probe that disagrees about media must not erase oEmbed's evidence.
+                return {"media_status": "none", "structure_status": "verified", "quote_status": "none",
+                        "poll_status": "none", "article_status": "none"}
 
-            twitter._fetch_via_fxtwitter = unexpected_probe
+            twitter._fetch_via_fxtwitter = probe
             data = asyncio.run(
                 twitter.fetch_twitter("https://x.com/runesleo/status/123")
             )
@@ -197,8 +199,40 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
             twitter._fetch_via_oembed = original_oembed
             twitter._fetch_via_fxtwitter = original_fx
 
-        self.assertEqual(calls, [])
+        self.assertEqual(calls, [True])
         self.assertEqual(data["media_status"], "present")
+        self.assertEqual(data["structure_status"], "verified")
+
+    def test_fxtwitter_structure_appends_quote_and_poll_and_flags_articles(self):
+        tweet = {
+            "id": "1", "text": "My take 👇",
+            "quote": {"id": "2", "text": "Original claim", "author": {"screen_name": "alice"}},
+            "poll": {"choices": [{"label": "Yes", "percentage": 60}, {"label": "No", "percentage": 40}]},
+        }
+        structure = twitter._structure_from_fxtwitter(tweet)
+        self.assertEqual(structure["quote_status"], "read")
+        self.assertEqual(structure["poll_status"], "read")
+        self.assertEqual(structure["article_status"], "none")
+        result = twitter._with_structure({"text": tweet["text"]}, structure)
+        self.assertIn("[Quoted post by @alice]\nOriginal claim", result["text"])
+        self.assertIn("- Yes (60%)", result["text"])
+        with_media = twitter._structure_from_fxtwitter({**tweet, "quote": {
+            "id": "2", "text": "chart", "media": {"photos": [{"url": "https://pbs.twimg.com/x.jpg"}]}}})
+        self.assertEqual(with_media["quote_status"], "media_unread")
+        article = twitter._structure_from_fxtwitter({"id": "3", "text": "x.com/i/article/3", "article": {"title": "T"}})
+        self.assertEqual(article["article_status"], "present")
+        self.assertEqual(twitter._structure_from_fxtwitter({})["structure_status"], "unknown")
+
+    def test_text_only_fxtwitter_post_has_no_media(self):
+        # FxTwitter omits "media" for posts without media.
+        self.assertEqual(twitter._media_status_from_fxtwitter({"id": "20", "text": "just setting up"}), "none")
+        self.assertEqual(twitter._media_status_from_fxtwitter({}), "unknown")
+
+    def test_thread_markers(self):
+        for text in ("1/ Here is why", "(1/5) A thread", "Last point (5/5)", "Big news 🧵", "A thread 👇"):
+            self.assertTrue(twitter._looks_like_thread(text), text)
+        for text in ("Plain post with no thread", "Updated 10/13 numbers below", "50/50 odds"):
+            self.assertFalse(twitter._looks_like_thread(text), text)
 
     def test_fetch_twitter_falls_back_after_thin_oembed(self):
         original_oembed = twitter._fetch_via_oembed

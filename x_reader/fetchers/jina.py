@@ -33,6 +33,17 @@ MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _DIRECT_TYPES = {"text/html", "application/xhtml+xml", "text/plain"}
 _JINA_TYPES = {"text/plain", "text/markdown"}
+# Labels servers put on bodies of any kind; the body itself decides (see sniff).
+_SNIFFABLE_TYPES = {"", "text/plain", "application/octet-stream", "binary/octet-stream"}
+
+
+class CrossPlatformRedirect(ValueError):
+    """A redirect leads to a URL another reader handles (X, YouTube, podcasts, ...)."""
+
+    def __init__(self, url: str, platform: str):
+        super().__init__(f"Redirects to a {platform} URL")
+        self.url = url
+        self.platform = platform
 
 
 def _extract_html_text(html: str) -> tuple[str, str]:
@@ -196,11 +207,17 @@ def _read_bounded(
     response,
     deadline: float,
     allowed_types: set[str],
+    sniff=None,
 ) -> tuple[bytes, str]:
-    """Read a text response with Content-Type, size, and total-deadline checks."""
+    """Read a text response with Content-Type, size, and total-deadline checks.
+
+    With sniff, a missing or generic Content-Type is accepted when sniff(body)
+    recognises the bounded body (feeds served as text/plain, for example).
+    """
     raw_content_type = (response.headers.get("Content-Type") or "").strip().lower()
     content_type = raw_content_type.split(";", 1)[0].strip()
-    if content_type not in allowed_types:
+    needs_sniff = content_type not in allowed_types
+    if needs_sniff and (sniff is None or content_type not in _SNIFFABLE_TYPES):
         raise ValueError(
             "Unsupported Content-Type: "
             f"{raw_content_type or '<missing>'}"
@@ -228,7 +245,13 @@ def _read_bounded(
             raise ValueError("Response exceeds 5 MiB limit")
         chunks.append(chunk)
 
-    return b"".join(chunks), raw_content_type
+    body = b"".join(chunks)
+    if needs_sniff and not sniff(body):
+        raise ValueError(
+            "Unsupported Content-Type: "
+            f"{raw_content_type or '<missing>'}"
+        )
+    return body, raw_content_type
 
 
 def fetch_public_bytes(
@@ -237,6 +260,7 @@ def fetch_public_bytes(
     max_redirects: int = 5,
     total_timeout: float | None = None,
     headers: dict | None = None,
+    sniff=None,
 ) -> tuple[bytes, str, str]:
     """GET a public URL with the same SSRF defenses as the direct HTML fallback.
 
@@ -263,7 +287,7 @@ def fetch_public_bytes(
                 continue
             if not 200 <= status < 300:
                 raise ValueError(f"HTTP status {status}")
-            body, raw_content_type = _read_bounded(response, deadline, allowed_types)
+            body, raw_content_type = _read_bounded(response, deadline, allowed_types, sniff=sniff)
             return body, raw_content_type, current
         finally:
             if response is not None:
@@ -273,8 +297,43 @@ def fetch_public_bytes(
     raise requests.TooManyRedirects(f"Too many redirects while fetching: {url}")
 
 
-def fetch_direct_html(url: str, max_redirects: int = 5) -> dict:
-    """Direct public HTML fallback with pinned-IP SSRF defense and bounded reads."""
+def resolve_final_url(url: str, max_redirects: int = 5, total_timeout: float = 10) -> str:
+    """Follow HTTP redirects with pinned, validated connections; return the final URL.
+
+    Bodies are never read. Any status other than a redirect ends the chain (a 403
+    or 404 still shows there is no further hop). Private or special addresses on
+    any hop raise ValueError, like every other pinned request.
+    """
+    current = url
+    deadline = time.monotonic() + total_timeout
+    for _ in range(max_redirects + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Redirect check exceeded total time limit")
+        pool = None
+        response = None
+        try:
+            pool, response, _pinned_ip = _request_pinned(current, remaining, headers=DIRECT_HEADERS)
+            if response.status not in _REDIRECT_STATUSES:
+                return current
+            location = response.headers.get("Location")
+            if not location:
+                return current
+            current = urljoin(current, location)
+        finally:
+            if response is not None:
+                response.close()
+            if pool is not None:
+                pool.close()
+    raise requests.TooManyRedirects(f"Too many redirects while fetching: {url}")
+
+
+def fetch_direct_html(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
+    """Direct public HTML fallback with pinned-IP SSRF defense and bounded reads.
+
+    hop_guard(url), when given, runs on every redirect target before it is
+    followed; it raises to stop the chain (e.g. CrossPlatformRedirect).
+    """
     current = url
     deadline = time.monotonic() + DIRECT_TOTAL_TIMEOUT
 
@@ -301,6 +360,8 @@ def fetch_direct_html(url: str, max_redirects: int = 5) -> dict:
                         f"Direct fallback got redirect status {status} without Location"
                     )
                 current = urljoin(current, location)
+                if hop_guard is not None:
+                    hop_guard(current)
                 continue
 
             if not 200 <= status < 300:

@@ -16,11 +16,8 @@ With the explicit preview flag (integer **1–30 seconds**), x-reader may instal
 Optional dependencies:
 
 ```bash
-# Experimental product branch; not yet merged into main or published on PyPI.
-git clone https://github.com/runesleo/x-reader.git
-cd x-reader
-git switch product/evidence-receipt-mvp-20261007
-python -m pip install -e '.[media]'
+# Released in v0.5.0 (local CLI only; the hosted beta never runs audio work).
+python -m pip install "x-reader[media] @ git+https://github.com/runesleo/x-reader.git@v0.5.0"
 # Also install ffmpeg and yt-dlp in PATH; model weights may be downloaded
 # only when you explicitly request --media-preview-seconds.
 ```

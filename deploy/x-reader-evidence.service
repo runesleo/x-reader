@@ -1,0 +1,52 @@
+# Hosted Evidence Receipt service (systemd). Service-wide ceilings live here;
+# per-request ceilings (deadline, output cap, CPU/file-size limits, process-group
+# cleanup) are enforced by x_reader.web_app and x_reader.utils.proc.
+[Unit]
+Description=x-reader Evidence Receipt
+After=network-online.target xreader-egress.service
+Wants=network-online.target
+Requires=xreader-egress.service
+
+[Service]
+Type=simple
+User=xreader
+Group=xreader
+WorkingDirectory=/opt/x-reader
+ExecStart=/opt/x-reader/.venv/bin/python -m x_reader.web_app --host 127.0.0.1 --port 8787
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/var/lib/xreader
+
+# Isolation
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+StateDirectory=xreader
+StateDirectoryMode=0750
+
+# Service-wide resource ceilings (all requests together)
+MemoryMax=512M
+CPUQuota=80%
+TasksMax=64
+LimitNOFILE=512
+
+[Install]
+WantedBy=multi-user.target

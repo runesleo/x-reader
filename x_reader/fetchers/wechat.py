@@ -47,6 +47,7 @@ async def fetch_wechat(url: str) -> Dict[str, Any]:
                 "author": data.get("author", ""),
                 "url": url,
                 "platform": "wechat",
+                "extraction": "reader",
             }
         logger.warning("[WeChat] Jina returned CAPTCHA/anti-scrape stub, falling back to browser")
     except Exception as e:
@@ -64,6 +65,7 @@ async def fetch_wechat(url: str) -> Dict[str, Any]:
             "author": data.get("author", ""),
             "url": url,
             "platform": "wechat",
+            "extraction": data.get("extraction", "page_body"),
         }
     except RuntimeError:
         # Playwright not installed — re-raise with original Jina error context

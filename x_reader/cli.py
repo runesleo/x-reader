@@ -182,6 +182,15 @@ Examples:
     args = sys.argv[1:]
     json_output = "--json" in args
     args = [arg for arg in args if arg != "--json"]
+
+    def usage_error(message: str, code: int = 2):
+        # With --json, stdout stays machine-readable even for usage errors.
+        if json_output:
+            print(json.dumps({"ok": False, "error": message, "error_type": "UsageError"}, ensure_ascii=False))
+        else:
+            print(f"❌ {message}")
+        sys.exit(code)
+
     try:
         if args.count("--media-full-short") > 1 or args.count("--media-full-long") > 1:
             raise ValueError("Specify each full-media flag at most once")
@@ -192,11 +201,9 @@ Examples:
         if sum((full_short_audio, full_long_audio, bool(media_preview_seconds))) > 1:
             raise ValueError("Full-long, full-short and preview flags are mutually exclusive")
     except ValueError as exc:
-        print(f"❌ {exc}")
-        sys.exit(2)
+        usage_error(str(exc))
     if not args:
-        print("❌ Missing URL or command")
-        sys.exit(1)
+        usage_error("Missing URL or command", code=1)
 
     cmd = args[0].lower()
 
@@ -214,9 +221,7 @@ Examples:
 
     if cmd == "login":
         if len(args) < 2:
-            print("❌ Usage: x-reader login <platform> [--headless]")
-            print("   Supported: xhs, wechat, twitter")
-            sys.exit(1)
+            usage_error("Usage: x-reader login <platform> [--headless] (supported: xhs, wechat, twitter)", code=1)
         headless = "--headless" in args
         cmd_login(args[1], headless=headless)
     elif cmd == "list":
@@ -228,23 +233,23 @@ Examples:
             arg for arg in args
             if arg.startswith(("http", "www.")) or "." in arg
         ]
+        if _os.environ.get("X_READER_HOSTED") == "1":
+            from x_reader.utils.proc import apply_hosted_limits
+            apply_hosted_limits()
         if full_long_audio:
             if len(urls) != 1:
-                print("❌ --media-full-long accepts exactly one podcast URL")
-                sys.exit(2)
+                usage_error("--media-full-long accepts exactly one podcast URL")
             cmd_fetch(urls, json_output=json_output, full_long_audio=True)
         elif full_short_audio:
             if len(urls) != 1:
-                print("❌ --media-full-short accepts exactly one podcast URL")
-                sys.exit(2)
+                usage_error("--media-full-short accepts exactly one podcast URL")
             cmd_fetch(urls, json_output=json_output, full_short_audio=True)
         elif media_preview_seconds:
             cmd_fetch(urls, json_output=json_output, media_preview_seconds=media_preview_seconds)
         else:
             cmd_fetch(urls, json_output=json_output)
     else:
-        print(f"❌ Unknown command: {cmd}")
-        print("   Run 'x-reader' with no args for help")
+        usage_error(f"Unknown command: {cmd}. Run 'x-reader' with no args for help")
 
 
 if __name__ == "__main__":

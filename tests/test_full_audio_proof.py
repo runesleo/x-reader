@@ -236,6 +236,12 @@ class FullAudioContractTests(unittest.TestCase):
                 {"start_seconds": 0.0, "end_seconds": 8.0}]},
             "no_asr_segments": {"asr_segments": 0},
             "wrong_basis": {"coverage_basis": "unknown"},
+            # self-consistent apart from 0.7 s of declared audio never decoded
+            "declared_longer_than_decoded": {
+                "media_duration_seconds": 0.8, "decoded_duration_seconds": 0.1,
+                "processed_seconds": 0.1, "coverage_ratio": 0.125,
+                "coverage_intervals": [{"start_seconds": 0.0, "end_seconds": 0.1}]},
+            "ratio_not_recomputed": {"media_duration_seconds": 13.5},
         }
         for name, changes in invalid.items():
             payload = json.loads(json.dumps(base))
@@ -245,6 +251,11 @@ class FullAudioContractTests(unittest.TestCase):
                 self.assertEqual(classified["status"], "PARTIAL")
                 self.assertEqual(classified["reason_code"],
                                  "full_media_proof_unverified")
+
+    def test_codec_padding_within_tolerance_still_passes(self):
+        payload = from_podcast(valid_episode()).to_dict()
+        payload["extra"].update(media_duration_seconds=13.3, coverage_ratio=round(13.12 / 13.3, 4))
+        self.assertEqual(classify_payload(payload)["status"], "PASS")
 
     def test_preview_mode_never_upgrades_to_full(self):
         data = from_podcast({

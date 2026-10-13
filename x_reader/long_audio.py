@@ -22,6 +22,7 @@ import threading
 import time
 import wave
 
+from x_reader.evidence import audio_duration_matches
 from x_reader.full_audio import _probe_local_duration as _probe_short_duration
 from x_reader.media_preview import (
     AUDIO_TYPES, _discover_audio, _public_episode_url, _tool_env,
@@ -465,7 +466,7 @@ def _decode_segments(source: Path, home: str, duration: float):
         if status:
             raise RuntimeError("Long-audio ffmpeg decode failed")
         decoded_seconds = total_frames / SAMPLE_RATE
-        if abs(decoded_seconds - duration) > max(0.75, duration * 0.01):
+        if not audio_duration_matches(duration, decoded_seconds):
             raise RuntimeError("Long-audio decoded timeline does not match source duration")
     finally:
         watchdog.close()
@@ -603,7 +604,7 @@ def transcribe_long(url: str, cache_dir: str | None = None,
             transcript = "\n".join(i["transcript"] for i in segment_records)
             frames = sum(i["sample_frames"] for i in segment_records)
             processed = frames / SAMPLE_RATE
-            if abs(processed - duration) > max(0.75, duration * 0.01):
+            if not audio_duration_matches(duration, processed):
                 raise RuntimeError("ASR interval coverage missed decoded duration")
             proof_segments = [
                 {
@@ -633,7 +634,7 @@ def transcribe_long(url: str, cache_dir: str | None = None,
                 "media_duration_seconds": round(duration, 4),
                 "decoded_duration_seconds": round(processed, 4),
                 "processed_seconds": round(processed, 4),
-                "coverage_ratio": 1.0,
+                "coverage_ratio": round(processed / duration, 4),
                 "audio_bytes": transfer["audio_bytes"],
                 "media_sha256": transfer["media_sha256"],
                 "media_url_sha256": transfer["media_url_sha256"],

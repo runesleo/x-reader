@@ -8,6 +8,8 @@ contract used by the Agent Skill and the Evidence Receipt web surface.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
+import html
 import json
 import hashlib
 import math
@@ -19,33 +21,146 @@ PARTIAL = "PARTIAL"
 FAIL = "FAIL"
 UNKNOWN = "UNKNOWN"
 
-# A subtitle track proves spoken coverage only when its last cue reaches this
-# share of the video's duration.
-TRANSCRIPT_COVERAGE_RATIO = 0.85
-# Shorter generic bodies are too thin to show they are the page's full text
-# rather than navigation, a cookie wall or an error shell.
+# Subtitle cues prove spoken coverage only when no stretch of the video longer
+# than this is uncaptioned (before the first cue, between cues, after the last)
+# and the cues span at least MIN_TRANSCRIPT_UNION_RATIO of the duration.
+MAX_TRANSCRIPT_GAP_SECONDS = 30.0
+MIN_TRANSCRIPT_UNION_RATIO = 0.5
+# Encoded and decoded audio may differ only by codec priming/padding (MP3 and
+# AAC add well under 0.1 s); the bound does not grow with the episode length.
+AUDIO_DURATION_TOLERANCE_SECONDS = 0.5
+MIN_AUDIO_COVERAGE_RATIO = 0.95
+# Less visible prose than this is too thin to show it is a page's body rather
+# than navigation, a teaser, a cookie wall or an error shell.
 MIN_GENERIC_BODY_CHARS = 280
 
 
+def audio_duration_matches(declared: float, measured: float) -> bool:
+    """True when measured audio covers the declared duration up to codec padding."""
+    return (
+        declared > 0
+        and abs(measured - declared) <= AUDIO_DURATION_TOLERANCE_SECONDS
+        and measured / declared >= MIN_AUDIO_COVERAGE_RATIO
+    )
+
+
 def _finite_positive(value: Any) -> float | None:
+    number = _finite_non_negative(value)
+    return number if number else None
+
+
+def _finite_non_negative(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    if number != number or number in (float("inf"), float("-inf")) or number <= 0:
+    if not math.isfinite(number) or number < 0:
         return None
     return number
 
 
-def _subtitle_coverage(extra: dict) -> float | None:
-    """Share of the video covered by the subtitle track, or None when unprovable."""
+def _subtitle_coverage_proven(extra: dict) -> bool:
+    """Subtitle cues cover the whole video: no long uncaptioned start, gap or tail."""
     if extra.get("transcript_source") != "subtitles":
-        return None
+        return False
     duration = _finite_positive(extra.get("duration"))
+    start = _finite_non_negative(extra.get("transcript_start_seconds"))
     end = _finite_positive(extra.get("transcript_end_seconds"))
-    if duration is None or end is None or end > duration * 1.05:
-        return None
-    return min(1.0, end / duration)
+    covered = _finite_positive(extra.get("transcript_covered_seconds"))
+    gap = _finite_non_negative(extra.get("transcript_max_gap_seconds"))
+    if None in (duration, start, end, covered, gap):
+        return False
+    if start >= end or end > duration * 1.05 + 1 or covered > end - start + 0.01:
+        return False
+    return (
+        start <= MAX_TRANSCRIPT_GAP_SECONDS
+        and duration - end <= MAX_TRANSCRIPT_GAP_SECONDS
+        and gap <= MAX_TRANSCRIPT_GAP_SECONDS
+        and covered / duration >= MIN_TRANSCRIPT_UNION_RATIO
+    )
+
+
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_HTML_TAG = re.compile(r"</?[A-Za-z][^>]*>")
+_BARE_URL = re.compile(r"https?://\S+")
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+
+def visible_text(content: str) -> str:
+    """Text a reader would see: no markup, image links, link targets or bare URLs."""
+    text = _MD_IMAGE.sub(" ", content)
+    text = _MD_LINK.sub(r"\1", text)
+    text = html.unescape(_HTML_TAG.sub(" ", text))
+    text = _BARE_URL.sub(" ", text)
+    return "\n".join(" ".join(line.split()) for line in text.splitlines()).strip()
+
+
+def prose_chars(text: str) -> int:
+    """Characters in sentence-like lines: six or more words, or 20+ CJK characters.
+
+    Menus, buttons, captions, link lists and character runs do not count.
+    """
+    total = 0
+    for line in text.splitlines():
+        if (len(line) >= 40 and len(line.split()) >= 6) or len(_CJK.findall(line)) >= 20:
+            total += len(line)
+    return total
+
+
+_PAYWALL_PHRASES = (
+    "subscribe to continue", "subscribe to read", "subscribe now to continue",
+    "subscribe to unlock", "subscribers only", "for subscribers only",
+    "this article is for subscribers", "this content is for subscribers",
+    "this post is for paid subscribers", "this post is for paying subscribers",
+    "become a member to read", "this story is only available to members",
+    "members-only content", "unlock this article", "sign up to read the full",
+    "register to continue reading", "create a free account to continue",
+    "log in to read the full", "sign in to read the full",
+    "reached your free article limit", "reached your article limit",
+    "upgrade to paid to read", "keep reading with a 7-day free trial",
+    "订阅后阅读", "订阅后查看", "付费阅读", "付费后阅读", "会员专享", "开通会员后",
+    "登录后查看全文", "登录后阅读全文", "解锁全文", "购买后阅读",
+)
+_UNAVAILABLE_PHRASES = (
+    "page not found", "404 not found", "this page doesn't exist", "this page does not exist",
+    "this page isn't available", "this page is no longer available",
+    "content is no longer available", "this content has been removed",
+    "页面不存在", "页面不见了", "内容已删除", "该内容已被删除", "内容不存在",
+)
+_CONSENT_PHRASES = (
+    "we value your privacy", "accept all cookies", "manage cookie preferences",
+    "cookie consent", "we use cookies", "this site uses cookies",
+    "your privacy choices", "consent to the use of cookies",
+)
+# Pages whose substance is audio/video x-reader does not read on the generic path.
+_MEDIA_PAGE_HOSTS = (
+    "vimeo.com", "tiktok.com", "instagram.com", "soundcloud.com", "open.spotify.com",
+    "twitch.tv", "dailymotion.com", "rumble.com", "loom.com", "music.apple.com",
+    "douyin.com", "kuaishou.com", "ixigua.com", "v.qq.com", "youku.com",
+)
+_WECHAT_UNAVAILABLE = (
+    "此内容因违规无法查看", "该内容已被发布者删除", "此内容被投诉且经审核涉嫌侵权",
+    "此内容因涉嫌违反相关法律法规", "该公众号已迁移", "此帐号已被屏蔽", "此帐号已自主注销",
+    "内容无法查看", "该内容暂时无法查看", "当前环境异常", "完成验证后即可继续访问",
+    "参数错误", "链接已过期",
+)
+_READ_MORE_TAIL = (
+    "read more", "continue reading", "read the full", "read the rest",
+    "阅读全文", "阅读原文", "查看全文", "点击阅读",
+)
+
+
+def _host_in(url: str, domains: tuple) -> bool:
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    return any(host == domain or host.endswith("." + domain) for domain in domains)
+
+
+def _ends_with_read_more(text: str) -> bool:
+    tail = text.strip().lower()[-300:]
+    return tail.endswith(("…", "...", "[…]", "[...]")) or any(m in tail for m in _READ_MORE_TAIL)
 
 
 def _generic_shell_state(title: str, content: str) -> str | None:
@@ -110,9 +225,9 @@ def _podcast_full_audio_proof_valid(content: str, extra: dict) -> bool:
         ratio = float(extra["coverage_ratio"])
         if not all(math.isfinite(v) for v in (duration, decoded, processed, ratio)):
             return False
-        if not 0 < duration <= 120 or abs(decoded - duration) > max(0.75, duration * 0.01):
+        if not 0 < duration <= 120 or not audio_duration_matches(duration, decoded):
             return False
-        if abs(processed - decoded) > 0.1 or not 0.999 <= ratio <= 1.001:
+        if abs(processed - decoded) > 0.1 or abs(ratio - processed / duration) > 0.001:
             return False
         intervals = extra.get("coverage_intervals")
         if not isinstance(intervals, list) or len(intervals) != 1:
@@ -255,14 +370,130 @@ def _podcast_long_audio_proof_valid(content: str, extra: dict) -> bool:
         if not all(math.isfinite(x) for x in (declared, decoded, recorded, ratio)):
             return False
         if (not 0 < declared <= 90 * 60
-                or abs(decoded - declared) > max(0.75, declared * 0.01)
+                or not audio_duration_matches(declared, decoded)
                 or abs(processed - decoded) > 0.1
                 or abs(recorded - processed) > 0.1
-                or not 0.999 <= ratio <= 1.001):
+                or abs(ratio - processed / declared) > 0.001):
             return False
     except (KeyError, TypeError, ValueError, OverflowError):
         return False
     return True
+
+
+_VERIFIED_X_METHODS = {"oembed", "fxtwitter", "playwright"}
+
+
+def _classify_article(source: str, title: str, content: str, extra: dict) -> dict[str, Any]:
+    """WeChat article: unavailable notices fail; image-carried or container-less reads do not pass."""
+    body = visible_text(content)
+    head = f"{title}\n{body[:600]}"
+    if any(phrase in head for phrase in _WECHAT_UNAVAILABLE):
+        return {
+            "status": FAIL,
+            "reason_code": "source_unavailable",
+            "evidence": f"{source} returned a removed, blocked or verification notice instead of the article",
+            "components": {"text_body": FAIL},
+        }
+    if extra.get("extraction") == "page_body":
+        return {
+            "status": UNKNOWN,
+            "reason_code": "article_container_missing",
+            "evidence": f"the {source} article container was not found; whole-page text cannot prove the body",
+            "components": {"text_body": UNKNOWN},
+        }
+    images = content.count("![")
+    if prose_chars(body) < MIN_GENERIC_BODY_CHARS:
+        if images:
+            return {
+                "status": PARTIAL,
+                "reason_code": "attached_media_unread",
+                "evidence": f"{source} article is carried mainly by {images} image(s) that were not analyzed",
+                "components": {"text_body": PASS, "images": PARTIAL},
+            }
+        return {
+            "status": UNKNOWN,
+            "reason_code": "thin_article_body",
+            "evidence": f"{source} returned too little article text to prove the body was read",
+            "components": {"text_body": UNKNOWN},
+        }
+    note = f"; {images} inline image(s) not analyzed" if images else ""
+    return {
+        "status": PASS,
+        "reason_code": "text_body_read",
+        "evidence": f"{source} article text retrieved{note}",
+        "components": {"text_body": PASS},
+    }
+
+
+def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dict[str, Any]:
+    """Generic page: walls fail, teasers are partial, and PASS needs substantial prose."""
+    title = str(payload.get("title") or "")
+    body = visible_text(content)
+    lowered = body.lower()
+    prose = prose_chars(body)
+    shell_state = _generic_shell_state(title, content)
+    if shell_state == "auth_required":
+        return {
+            "status": FAIL,
+            "reason_code": "auth_required",
+            "evidence": "generic reader returned a login/authentication shell",
+            "components": {"text_body": FAIL},
+        }
+    head = f"{title.lower()}\n{lowered[:600]}"
+    if shell_state == "challenge_or_error" or (
+        prose < 600 and any(phrase in lowered for phrase in _CONSENT_PHRASES)
+    ):
+        return {
+            "status": FAIL,
+            "reason_code": "challenge_or_error",
+            "evidence": "generic reader returned an error, challenge or consent shell",
+            "components": {"text_body": FAIL},
+        }
+    if any(phrase in head for phrase in _UNAVAILABLE_PHRASES):
+        return {
+            "status": FAIL,
+            "reason_code": "source_unavailable",
+            "evidence": "the page reports that the content is missing or removed",
+            "components": {"text_body": FAIL},
+        }
+    if any(phrase in lowered for phrase in _PAYWALL_PHRASES):
+        return {
+            "status": PARTIAL,
+            "reason_code": "paywall_or_teaser",
+            "evidence": "some page text was read, but the page gates the rest behind a subscription or login",
+            "components": {"text_body": PARTIAL},
+        }
+    if prose < MIN_GENERIC_BODY_CHARS:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "thin_generic_body",
+            "evidence": "generic reader returned text, but it is too thin to prove source coverage",
+            "components": {"text_body": UNKNOWN},
+        }
+    if extra.get("redirects_verified") is False:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "redirect_target_unverified",
+            "evidence": "page text was read, but where the URL redirects could not be verified",
+            "components": {"text_body": UNKNOWN},
+        }
+    page_url = str(payload.get("url") or "")
+    if _host_in(page_url, _MEDIA_PAGE_HOSTS):
+        return {
+            "status": PARTIAL,
+            "reason_code": "embedded_media_unread",
+            "evidence": "page text was read, but this is a media page whose audio/video was not",
+            "components": {"text_body": PASS, "media": PARTIAL},
+        }
+    return {
+        "status": PASS,
+        "reason_code": "text_body_read",
+        "evidence": (
+            f"{prose} characters of page prose read; no login, paywall, consent or challenge "
+            "markers detected"
+        ),
+        "components": {"text_body": PASS},
+    }
 
 
 def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -285,60 +516,90 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
             }
 
         method = str(extra.get("fetch_method") or "unknown")
+        if method not in _VERIFIED_X_METHODS:
+            # Page readers can return a login shell or a profile instead of the post.
+            return {
+                "status": UNKNOWN,
+                "reason_code": "post_text_unverified",
+                "evidence": f"X page text came from {method}, so it could not be confirmed as the post itself",
+                "components": {"post_text": UNKNOWN},
+            }
+        components: dict[str, str] = {"post_text": PASS}
+        gaps: list[tuple[str, str]] = []
         media_status = str(extra.get("media_status") or "unknown")
         if media_status == "present":
-            return {
-                "status": PARTIAL,
-                "reason_code": "attached_media_unread",
-                "evidence": (
-                    f"post text retrieved via {method}; attached media present but not retrieved"
-                ),
-                "components": {"post_text": PASS, "attached_media": PARTIAL},
-            }
-        if media_status == "none":
+            components["attached_media"] = PARTIAL
+            gaps.append(("attached_media_unread", "attached media present but not retrieved"))
+        elif media_status != "none":
+            components["attached_media"] = UNKNOWN
+            gaps.append(("media_presence_unknown", "attached-media presence could not be verified"))
+        quote = extra.get("quote_status")
+        if quote == "read":
+            components["quoted_post"] = PASS
+        elif quote in ("media_unread", "unknown"):
+            components["quoted_post"] = PARTIAL
+            gaps.append(("quoted_post_incomplete", "the quoted post or its media was not fully retrieved"))
+        if extra.get("poll_status") == "read":
+            components["poll"] = PASS
+        elif extra.get("poll_status") == "unknown":
+            components["poll"] = UNKNOWN
+            gaps.append(("poll_unread", "a poll is attached but its options were not retrieved"))
+        if extra.get("article_status") == "present":
+            components["article_body"] = PARTIAL
+            gaps.append(("article_body_unread", "the post carries an X Article whose body was not retrieved"))
+        if extra.get("thread_marker") is True:
+            components["thread"] = PARTIAL
+            gaps.append(("thread_continuation_unread", "the post is part of a thread; the other posts were not read"))
+        if extra.get("structure_status") != "verified":
+            components["post_structure"] = UNKNOWN
+            gaps.append((
+                "post_structure_unverified",
+                "quoted posts, polls and X Articles could not be checked",
+            ))
+        if not gaps:
             return {
                 "status": PASS,
                 "reason_code": "source_complete",
-                "evidence": f"post text retrieved via {method}; no media reported",
-                "components": {"post_text": PASS},
+                "evidence": (
+                    f"post text retrieved via {method}; no media, unread quoted post, "
+                    "X Article or thread continuation reported"
+                ),
+                "components": components,
             }
         return {
             "status": PARTIAL,
-            "reason_code": "media_presence_unknown",
-            "evidence": (
-                f"post text retrieved via {method}; attached-media presence could not "
-                "be verified"
-            ),
-            "components": {"post_text": PASS, "attached_media": UNKNOWN},
+            "reason_code": gaps[0][0],
+            "evidence": f"post text retrieved via {method}; " + "; ".join(text for _, text in gaps),
+            "components": components,
         }
 
     if source == "youtube" and media_type == "video":
-        has_transcript = bool(extra.get("has_transcript"))
-        if has_transcript:
-            coverage = _subtitle_coverage(extra)
-            if coverage is not None and coverage >= TRANSCRIPT_COVERAGE_RATIO:
-                return {
-                    "status": PASS,
-                    "reason_code": "spoken_media_read",
-                    "evidence": (
-                        f"subtitle track covers {round(coverage * 100)}% of the video's spoken timeline; "
-                        "visual content was not analyzed"
-                    ),
-                    "components": {"page_metadata": PASS, "spoken_media": PASS},
-                }
+        # x-reader reads speech, never pictures: a video is at most PARTIAL.
+        if extra.get("has_transcript") and _subtitle_coverage_proven(extra):
+            return {
+                "status": PARTIAL,
+                "reason_code": "visual_media_unread",
+                "evidence": (
+                    "subtitle cues cover the whole spoken timeline (no uncaptioned stretch over "
+                    f"{int(MAX_TRANSCRIPT_GAP_SECONDS)}s); the video's visual content was not analyzed"
+                ),
+                "components": {"page_metadata": PASS, "spoken_media": PASS, "visual_media": PARTIAL},
+            }
+        if extra.get("has_transcript"):
             return {
                 "status": PARTIAL,
                 "reason_code": "transcript_coverage_unproven",
                 "evidence": (
-                    "a transcript was read, but it could not be shown to cover the whole video"
+                    "a transcript was read, but it could not be shown to cover the whole video; "
+                    "visual content was not analyzed"
                 ),
-                "components": {"page_metadata": PASS, "spoken_media": PARTIAL},
+                "components": {"page_metadata": PASS, "spoken_media": PARTIAL, "visual_media": PARTIAL},
             }
         return {
             "status": PARTIAL,
             "reason_code": "spoken_media_unread",
-            "evidence": "YouTube page metadata/description was read, but spoken media was not proven",
-            "components": {"page_metadata": PASS, "spoken_media": PARTIAL},
+            "evidence": "YouTube page metadata/description was read; spoken and visual media were not",
+            "components": {"page_metadata": PASS, "spoken_media": PARTIAL, "visual_media": PARTIAL},
         }
 
     if source == "podcast" and media_type == "audio":
@@ -393,12 +654,17 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "status": PARTIAL,
             "reason_code": "spoken_media_unread",
-            "evidence": "Bilibili page metadata/description was read, but spoken media was not proven",
-            "components": {"page_metadata": PASS, "spoken_media": PARTIAL},
+            "evidence": "Bilibili page metadata/description was read; spoken and visual media were not",
+            "components": {"page_metadata": PASS, "spoken_media": PARTIAL, "visual_media": PARTIAL},
         }
 
     if source == "rss" and content:
-        if extra.get("rss_content") == "full" and len(content) >= MIN_GENERIC_BODY_CHARS:
+        body = visible_text(content)
+        if (
+            extra.get("rss_content") == "full"
+            and prose_chars(body) >= MIN_GENERIC_BODY_CHARS
+            and not _ends_with_read_more(body)
+        ):
             return {
                 "status": PASS,
                 "reason_code": "text_body_read",
@@ -436,43 +702,12 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     if source == "wechat" and content:
-        return {
-            "status": PASS,
-            "reason_code": "text_body_read",
-            "evidence": "wechat text body retrieved",
-            "components": {"text_body": PASS},
-        }
+        return _classify_article(
+            "wechat", str(payload.get("title") or ""), content, extra,
+        )
 
-    if source == "manual":
-        shell_state = _generic_shell_state(str(payload.get("title") or ""), content)
-        if shell_state == "auth_required":
-            return {
-                "status": FAIL,
-                "reason_code": "auth_required",
-                "evidence": "generic reader returned a login/authentication shell",
-                "components": {"text_body": FAIL},
-            }
-        if shell_state == "challenge_or_error":
-            return {
-                "status": FAIL,
-                "reason_code": "challenge_or_error",
-                "evidence": "generic reader returned an error/challenge shell",
-                "components": {"text_body": FAIL},
-            }
-        if len(content) >= MIN_GENERIC_BODY_CHARS:
-            return {
-                "status": PASS,
-                "reason_code": "text_body_read",
-                "evidence": "substantial web body retrieved via generic reader",
-                "components": {"text_body": PASS},
-            }
-        if content:
-            return {
-                "status": UNKNOWN,
-                "reason_code": "thin_generic_body",
-                "evidence": "generic reader returned text, but it is too thin to prove source coverage",
-                "components": {"text_body": UNKNOWN},
-            }
+    if source == "manual" and content:
+        return _classify_generic(payload, content, extra)
 
     if content:
         return {

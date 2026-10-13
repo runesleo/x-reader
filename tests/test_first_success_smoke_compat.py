@@ -29,9 +29,21 @@ class FirstSuccessSmokeCompatibilityTest(unittest.TestCase):
             "source_type": "twitter",
             "content": "post text",
             "media_type": "text",
-            "extra": {"fetch_method": "oembed", "media_status": "none"},
+            "extra": {"fetch_method": "oembed", "media_status": "none",
+                      "structure_status": "verified", "quote_status": "none",
+                      "poll_status": "none", "article_status": "none", "thread_marker": False},
         })
         self.assertEqual(coverage, "READ")
+        self.assertEqual(components, {"post_text": "READ"})
+
+    def test_twitter_payload_without_structure_is_partial(self):
+        coverage, _evidence, components = smoke.classify({
+            "source_type": "twitter",
+            "content": "post text",
+            "media_type": "text",
+            "extra": {"fetch_method": "oembed", "media_status": "none"},
+        })
+        self.assertEqual(coverage, "PARTIAL")
         self.assertEqual(components, {"post_text": "READ"})
 
     def test_twitter_unknown_media_drops_unknown_legacy_component(self):

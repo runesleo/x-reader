@@ -175,6 +175,28 @@ def collect_checks(
             else "see https://ffmpeg.org/download.html",
         ))
 
+    if which("ffprobe"):
+        checks.append(Check("ffprobe", "optional", "OK", "ffprobe", detail="Audio duration checks for podcast transcription"))
+    else:
+        checks.append(Check(
+            "ffprobe", "optional", "MISSING", "ffprobe",
+            detail="Needed by the podcast --media-* modes to measure audio duration (ships with ffmpeg).",
+            fix_by="agent",
+            next="brew install ffmpeg" if mac
+            else "sudo apt install ffmpeg  (or the distro's package manager; ask the user before using sudo)" if linux
+            else "see https://ffmpeg.org/download.html",
+        ))
+
+    if has_module("faster_whisper"):
+        checks.append(Check("local-asr", "optional", "OK", "Local transcription (faster-whisper)",
+                            detail="podcast --media-* modes; model weights download on first use"))
+    else:
+        checks.append(Check(
+            "local-asr", "optional", "MISSING", "Local transcription (faster-whisper)",
+            detail="Only needed for the opt-in podcast --media-preview-seconds / --media-full-* modes.",
+            fix_by="agent", next=pip("media"),
+        ))
+
     if is_set("GROQ_API_KEY"):
         checks.append(Check("groq", "optional", "OK", "GROQ_API_KEY", detail="set (value not shown)"))
     else:

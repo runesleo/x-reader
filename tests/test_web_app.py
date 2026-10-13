@@ -74,7 +74,7 @@ class WebAppPolicyTest(unittest.TestCase):
         )
         self.assertTrue(data["ok"])
         self.assertEqual(data["receipt"]["status"], "FAIL")
-        self.assertIn("valueerror", data["receipt"]["reason_code"])
+        self.assertEqual(data["receipt"]["reason_code"], "source_unreadable")
 
 
 if __name__ == "__main__":

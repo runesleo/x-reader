@@ -23,14 +23,21 @@ The corpus should stay real and dated. Replace dead public URLs rather than weak
 
 Transport success is not enough.
 
-- `READ`: substantive source text; when media is required, text-only retrieval is not full completion.\n- `PARTIAL_MEDIA`: page text/description read but material audio/video is not proven consumed.\n- `MEDIA_COMPLETE`: transcript/subtitles or other material media evidence has been retrieved.
+- `READ`: substantive source text; when media is required, text-only retrieval is not full completion.
+- `PARTIAL_MEDIA`: page text/description read but material audio/video is not proven consumed.
+- `MEDIA_COMPLETE`: transcript/subtitles or other material media evidence has been retrieved.
 - `THIN`: technically returned, but too little content to support normal source use.
+- `UNVERIFIED`: x-reader returned content, but its Evidence Receipt is `FAIL` or `UNKNOWN` (for example an unverified page reader or an unresolved redirect), so it is not counted as a read.
 - `BLOCK_SHELL`: returned a login/security/unavailable shell rather than source content.
 - `FAIL`: source could not be retrieved.
-- `EXPECTED_BLOCK`: an auth-gated or known restricted control fails closed.\n- `AUTH_SHELL` / `AUTH_UNVERIFIED`: a private source yielded an auth page or unverified public/marketing content.\n- `CONTROL_READ_REVIEW`: a previously restricted control became readable and needs recuration.
+- `EXPECTED_BLOCK`: an auth-gated or known restricted control fails closed.
+- `AUTH_SHELL` / `AUTH_UNVERIFIED`: a private source yielded an auth page or unverified public/marketing content.
+- `CONTROL_READ_REVIEW`: a previously restricted control became readable and needs recuration.
 - `SKIP`: provider unavailable because a required credential is absent.
 
-The JSONL result also records latency, content size, fetch method, media status and x-reader evidence status when available. `full_read_rate` and `usable_text_rate` use only eligible public cases as the denominator; the five auth-gated cases and two known restricted XHS controls are separately counted as safety/access tests. Do not treat `PARTIAL_MEDIA` as `MEDIA_COMPLETE`.\n\n**Baseline caveats (2026-10-08):** From the base package, WeChat/XHS failed before the optional Playwright runtime was installed, Telegram needed Telethon and API credentials, and Bilibili's API returned 412. A full-dependency retest recovered 4/5 WeChat text pages. Two externally verified Bilibili video pages were subsequently recovered through the browser fallback as `PARTIAL_MEDIA` (~3,177 and ~3,619 characters), not full video transcription. Other Bilibili URLs are still unverified or failing. Local XHS session still encounters platform error `300031` on some externally readable links. Never publish the old 28% full-read headline after corpus/eligibility changes without a new complete run.
+The JSONL result also records latency, content size, fetch method, media status and x-reader evidence status when available. x-reader rows are scored from the canonical Evidence Receipt (`x_reader.evidence.build_receipt`) for every source type: a receipt `PARTIAL` is never counted as `READ`, and only a receipt `PASS` on audio/video counts as `MEDIA_COMPLETE`. `full_read_rate` and `usable_text_rate` use only eligible public cases as the denominator; the five auth-gated cases and two known restricted XHS controls are separately counted as safety/access tests. Do not treat `PARTIAL_MEDIA` as `MEDIA_COMPLETE`.
+
+**Baseline caveats (2026-10-08):** From the base package, WeChat/XHS failed before the optional Playwright runtime was installed, Telegram needed Telethon and API credentials, and Bilibili's API returned 412. A full-dependency retest recovered 4/5 WeChat text pages. Two externally verified Bilibili video pages were subsequently recovered through the browser fallback as `PARTIAL_MEDIA` (~3,177 and ~3,619 characters), not full video transcription. Other Bilibili URLs are still unverified or failing. Local XHS session still encounters platform error `300031` on some externally readable links. Never publish the old 28% full-read headline after corpus/eligibility changes without a new complete run.
 
 ## Providers
 

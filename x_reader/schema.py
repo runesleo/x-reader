@@ -183,6 +183,11 @@ def from_twitter(data: dict) -> UnifiedContent:
         extra["media_status"] = data.get('media_status')
     if data.get('media_probe_method'):
         extra["media_probe_method"] = data.get('media_probe_method')
+    for key in ("structure_status", "quote_status", "poll_status", "article_status"):
+        if data.get(key):
+            extra[key] = data.get(key)
+    if "thread_marker" in data:
+        extra["thread_marker"] = bool(data.get("thread_marker"))
 
     return UnifiedContent(
         source_type=SourceType.TWITTER,
@@ -201,6 +206,7 @@ def from_wechat(article: dict) -> UnifiedContent:
         title=article.get('title', ''),
         content=article.get('content', ''),
         url=article.get('url', ''),
+        extra={"extraction": article.get('extraction', '')} if article.get('extraction') else {},
     )
 
 
@@ -235,7 +241,10 @@ def from_youtube(video: dict) -> UnifiedContent:
             # page-description fallback.
             "has_transcript": bool(video.get('has_transcript', False)),
             "transcript_source": video.get('transcript_source', ''),
+            "transcript_start_seconds": video.get('transcript_start_seconds'),
             "transcript_end_seconds": video.get('transcript_end_seconds'),
+            "transcript_covered_seconds": video.get('transcript_covered_seconds'),
+            "transcript_max_gap_seconds": video.get('transcript_max_gap_seconds'),
             "video_id": video.get('video_id', ''),
         },
     )

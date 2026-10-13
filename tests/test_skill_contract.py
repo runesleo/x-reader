@@ -61,6 +61,19 @@ class AgentSkillContractTest(unittest.TestCase):
         self.assertIn("git+https://github.com/runesleo/x-reader.git@$XR_CLI_COMMIT", text)
         self.assertNotIn("pip install -U pip", text)
 
+    def test_skill_bootstrap_installs_exactly_the_requested_release(self):
+        # The pin moves only together with .github/release-request, so a fresh
+        # `npx skills add` always installs the commit tagged for the newest release.
+        skill = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        request = dict(
+            line.split("=", 1)
+            for line in (ROOT / ".github/release-request").read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        )
+        pinned = re.search(r'XR_CLI_COMMIT="([0-9a-f]{40})"', skill).group(1)
+        self.assertEqual(pinned, request["TARGET_SHA"])
+        self.assertRegex(request["VERSION"], r"^v\d+\.\d+\.\d+$")
+
 
 if __name__ == "__main__":
     unittest.main()

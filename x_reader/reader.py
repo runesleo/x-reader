@@ -83,7 +83,7 @@ class UniversalReader:
             logger.error(f"[{platform}] Failed: {e}")
             raise
 
-    async def _fetch(self, platform: str, url: str) -> UnifiedContent:
+    async def _fetch(self, platform: str, url: str, redirected: bool = False) -> UnifiedContent:
         """Dispatch to platform-specific fetcher."""
 
         if platform == "bilibili":
@@ -142,24 +142,69 @@ class UniversalReader:
                 return from_telegram(messages[0], channel, channel)
             raise ValueError(f"No messages from Telegram channel: {url}")
 
-        logger.info(f"Using Jina fallback for: {url}")
+        return await self._fetch_generic(url, redirected)
+
+    async def _fetch_generic(self, url: str, redirected: bool) -> UnifiedContent:
+        """Read any other page; a redirect into another platform goes to that reader."""
+        from x_reader.fetchers.jina import CrossPlatformRedirect, fetch_direct_html, resolve_final_url
+
+        # Jina follows redirects on its side and reports the requested URL, so the
+        # final page is resolved here first (pinned, validated hops, no bodies).
+        final_url, redirects_verified = url, False
         try:
-            data = await asyncio.to_thread(fetch_via_jina, url)
+            final_url = await asyncio.to_thread(resolve_final_url, url)
+            redirects_verified = True
+        except ValueError:
+            raise  # a hop points at a private/special address or a non-http scheme
+        except Exception as exc:
+            logger.warning(f"Redirect check failed ({type(exc).__name__}); continuing unverified")
+
+        target = detect_platform(final_url)
+        if target != "generic":
+            return await self._redispatch(target, final_url, redirected)
+
+        def generic_only(hop: str) -> None:
+            hop_platform = detect_platform(hop)
+            if hop_platform != "generic":
+                raise CrossPlatformRedirect(hop, hop_platform)
+
+        logger.info(f"Using Jina fallback for: {final_url}")
+        try:
+            data = await asyncio.to_thread(fetch_via_jina, final_url)
         except Exception as exc:
             logger.warning(
-                f"Jina generic fallback failed ({exc}); trying direct HTML"
+                f"Jina generic fallback failed ({type(exc).__name__}); trying direct HTML"
             )
-            from x_reader.fetchers.jina import fetch_direct_html
-            data = await asyncio.to_thread(fetch_direct_html, url)
+            try:
+                data = await asyncio.to_thread(fetch_direct_html, final_url, hop_guard=generic_only)
+            except CrossPlatformRedirect as hop:
+                return await self._redispatch(hop.platform, hop.url, redirected)
+            redirects_verified = True  # the direct fetcher checked every hop itself
 
         return UnifiedContent(
             source_type=SourceType.MANUAL,
-            source_name=urlparse(url).netloc,
+            source_name=urlparse(final_url).netloc,
             title=data["title"],
             content=data["content"],
-            url=data.get("url", url),
-            extra={"fetch_method": data.get("fetch_method", "jina")},
+            url=data.get("url", final_url),
+            extra={
+                "fetch_method": data.get("fetch_method", "jina"),
+                "redirects_verified": redirects_verified,
+            },
         )
+
+    async def _redispatch(self, platform: str, url: str, redirected: bool) -> UnifiedContent:
+        """Hand a redirect target to its own reader, under the same policy as a direct URL."""
+        if redirected:
+            raise ValueError("Redirect chain crosses platforms more than once")
+        await asyncio.to_thread(validate_url, url)
+        allowed = allowed_platforms()
+        if allowed is not None and platform not in allowed:
+            raise ValueError(f"URL redirects to a {platform} page, which is not allowed in this environment")
+        if (self.full_short_audio or self.full_long_audio) and platform != "podcast":
+            raise ValueError("Full-audio mode supports podcast episodes only")
+        logger.info(f"Redirect leads to {platform}: {url[:60]}")
+        return await self._fetch(platform, url, redirected=True)
 
     async def read_batch(self, urls: list[str]) -> list[UnifiedContent]:
         """Fetch multiple URLs concurrently, except costly full-short audio."""
