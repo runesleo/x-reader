@@ -1,3 +1,37 @@
+# Codex Review — doctor self-check and agent install guide
+
+Date: 2026-10-13
+Scope: `x-reader doctor`, `install.md`, README / CHANGELOG / FIRST_SUCCESS updates, skill bootstrap, product landing pages (install block, boundaries)
+Reviewer: independent Codex pass, prompted to evaluate from scratch. Verdict: SHIP_AFTER_FIXES.
+
+## Blockers
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | `x-reader doctor` imported third-party modules before dispatch, so it crashed on an install with missing dependencies | Fixed: CLI import guard; doctor runs and reports the missing libraries; other commands explain the missing dependency (verified in a `--no-deps` venv) |
+| 2 | Skill bootstrap pins a commit without `doctor`, and a cached venv was never upgraded | Partly fixed: the cache venv is now named after the pinned commit. **Open (release gate):** bump `XR_CLI_COMMIT` to the merged release commit |
+| 3 | `XR_BIN` does not survive fresh shells used by agent tools | Fixed: install.md and SKILL.md tell agents to reuse the full path or run steps in one shell |
+| 4 | Landing page said cookies and keys stay on the computer, but transcription sends the key and audio to Groq after opt-in | Fixed in the landing branch: credentials go only to a provider the user explicitly enables |
+| 5 | Receipt said "exactly as written" while the CLI came from the release candidate | Wording fixed. **Open (release gate):** rerun the clean install against the public pinned commit before deploying the landing pages |
+
+## Warnings
+
+Addressed: Playwright row says the browser binary is not checked; unreadable `.env` no longer breaks the report; whitespace-only credentials count as missing; install hints differ for macOS / Linux / other; install.md says to follow `ready` / exit code; copy button keeps a stable label and announces success or fallback via `aria-live`; `__version__` synced with `pyproject.toml`.
+
+Not addressed in this change:
+
+- Supply-chain drift from unversioned `npx skills`, `-y`, and repair hints that install from `main`.
+- Install hints show the interpreter path (under `~` when inside the home directory).
+- Pre-existing README claims to recheck: saved WeChat sessions, podcast media discovery, Whisper model name.
+
+## Verified
+
+- Unit tests: 82 passed.
+- Clean installs: macOS empty `HOME` (244 s) and blank Debian container (103 s); see `docs/FIRST_SUCCESS.md`.
+- Landing pages: 14 web tests passed; copy button checked in a 390 px viewport, no horizontal overflow.
+
+---
+
 # Codex Review — MCP compatibility fix
 
 Date: 2026-08-30  

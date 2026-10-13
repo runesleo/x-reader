@@ -77,7 +77,21 @@ class DoctorTest(unittest.TestCase):
 
     def test_platform_specific_install_hint(self):
         self.assertEqual(self.checks(platform="darwin")["yt-dlp"].next, "brew install yt-dlp")
-        self.assertIn("pip install yt-dlp", self.checks(platform="linux")["yt-dlp"].next)
+        self.assertIn("pipx install yt-dlp", self.checks(platform="linux")["yt-dlp"].next)
+        self.assertIn("ask the user before using sudo", self.checks(platform="linux")["ffmpeg"].next)
+        self.assertIn("ffmpeg.org", self.checks(platform="win32")["ffmpeg"].next)
+
+    def test_whitespace_only_credentials_count_as_missing(self):
+        checks = self.checks(env={"GROQ_API_KEY": "   ", "TG_API_ID": " ", "TG_API_HASH": "x"})
+        self.assertEqual(checks["groq"].status, "MISSING")
+        self.assertEqual(checks["telegram"].status, "MISSING")
+
+    def test_unreadable_env_file_does_not_break_the_report(self):
+        output = io.StringIO()
+        with patch("dotenv.load_dotenv", side_effect=UnicodeDecodeError("utf-8", b"", 0, 1, "bad")):
+            code = run_doctor(json_output=True, stream=output)
+        self.assertIn(code, (0, 1))
+        json.loads(output.getvalue())
 
     def test_telegram_lists_every_missing_step_once(self):
         both = self.checks(find_spec=_spec_for(missing=("telethon",)))["telegram"]
@@ -127,6 +141,32 @@ class DoctorTest(unittest.TestCase):
                 main()
         self.assertEqual(raised.exception.code, 0)
         run.assert_called_once_with(json_output=True)
+
+
+class CliImportGuardTest(unittest.TestCase):
+    def test_other_commands_explain_a_missing_dependency(self):
+        from x_reader import cli
+
+        output = io.StringIO()
+        with patch.object(cli, "_IMPORT_ERROR", ModuleNotFoundError("No module named 'loguru'")), \
+                patch.object(sys, "argv", ["x-reader", "https://example.com", "--json"]):
+            with self.assertRaises(SystemExit) as raised, redirect_stdout(output):
+                cli.main()
+        self.assertEqual(raised.exception.code, 1)
+        payload = json.loads(output.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertIn("x-reader doctor", payload["error"])
+
+    @patch("x_reader.doctor.run_doctor", return_value=1)
+    def test_doctor_still_runs_when_a_dependency_is_missing(self, run):
+        from x_reader import cli
+
+        with patch.object(cli, "_IMPORT_ERROR", ModuleNotFoundError("No module named 'loguru'")), \
+                patch.object(sys, "argv", ["x-reader", "doctor"]):
+            with self.assertRaises(SystemExit) as raised:
+                cli.main()
+        self.assertEqual(raised.exception.code, 1)
+        run.assert_called_once_with(json_output=False)
 
 
 if __name__ == "__main__":

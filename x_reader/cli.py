@@ -16,11 +16,16 @@ import asyncio
 import json
 from pathlib import Path
 
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
 
-from x_reader.reader import UniversalReader
-from x_reader.schema import UnifiedInbox, SourceType
+    from x_reader.reader import UniversalReader
+    from x_reader.schema import UnifiedInbox, SourceType
+    _IMPORT_ERROR = None
+except ImportError as exc:  # keep `x-reader doctor` usable on a broken install
+    UniversalReader = UnifiedInbox = SourceType = None
+    _IMPORT_ERROR = exc
 
 
 def get_inbox_path() -> str:
@@ -152,6 +157,18 @@ Examples:
 
     cmd = args[0].lower()
 
+    if cmd == "doctor":
+        from x_reader.doctor import run_doctor
+        sys.exit(run_doctor(json_output=json_output))
+
+    if _IMPORT_ERROR is not None:
+        message = f"x-reader is missing a dependency ({_IMPORT_ERROR}). Run `x-reader doctor` to see what to fix."
+        if json_output:
+            print(json.dumps({"ok": False, "error": message, "error_type": "ImportError"}, ensure_ascii=False))
+        else:
+            print(f"❌ {message}")
+        sys.exit(1)
+
     if cmd == "login":
         if len(args) < 2:
             print("❌ Usage: x-reader login <platform> [--headless]")
@@ -159,9 +176,6 @@ Examples:
             sys.exit(1)
         headless = "--headless" in args
         cmd_login(args[1], headless=headless)
-    elif cmd == "doctor":
-        from x_reader.doctor import run_doctor
-        sys.exit(run_doctor(json_output=json_output))
     elif cmd == "list":
         cmd_list()
     elif cmd == "clear":

@@ -28,6 +28,8 @@ If it asks which agent, add `-a claude-code`, `-a codex` or `-a cursor` — whic
 
 Run the **First-use bootstrap** block from the installed skill (`SKILL.md`, usually under `~/.agents/skills/x-reader/` or your agent's own skills folder). It installs a pinned, verified x-reader revision into its own cache environment and sets `XR_BIN`, without touching the user's projects.
 
+Your shell commands may each start in a fresh shell, so `XR_BIN` will not carry over. Print it once (`echo "$XR_BIN"`) and use that full path in steps 4–5, or run steps 3–5 in one shell session.
+
 Without the skill, install from GitHub into an environment the user agrees to:
 
 ```bash
@@ -43,6 +45,7 @@ XR_BIN=x-reader
 
 It is read-only and prints each item as `OK`, `MISSING`, `BLOCKED` or `INFO`, with who fixes it (`agent` or `user`) and the next command. Add `--json` if you prefer to parse it.
 
+- Continue only when the report says `ready: true` (exit code 0). Rows that are not `OK` carry `fix_by` and `next`.
 - **Core** items must be `OK` before you continue.
 - **Optional** items unlock specific sources (video tools, transcription, logged-in pages, Telegram, MCP). Only set up the ones the user actually needs, and ask before installing system packages.
 

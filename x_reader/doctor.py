@@ -98,6 +98,9 @@ def collect_checks(
     installed_version: Callable[[], Optional[str]] = _installed_version,
 ) -> list[Check]:
     environ: Mapping[str, str] = os.environ if env is None else env
+
+    def is_set(name: str) -> bool:
+        return bool(str(environ.get(name, "")).strip())
     home = Path.home() if home is None else home
     cwd = Path.cwd() if cwd is None else cwd
     checks: list[Check] = []
@@ -144,14 +147,17 @@ def collect_checks(
         ))
 
     # ── Optional: only for the sources you need ──────────
-    mac = platform == "darwin"
+    mac, linux = platform == "darwin", platform.startswith("linux")
     if which("yt-dlp"):
         checks.append(Check("yt-dlp", "optional", "OK", "yt-dlp", detail="YouTube / Bilibili subtitles and media"))
     else:
         checks.append(Check(
             "yt-dlp", "optional", "MISSING", "yt-dlp",
             detail="Needed for YouTube / Bilibili subtitles and media.",
-            fix_by="agent", next="brew install yt-dlp" if mac else "python3 -m pip install yt-dlp",
+            fix_by="agent",
+            next="brew install yt-dlp" if mac
+            else "pipx install yt-dlp  (or the distro's package manager)" if linux
+            else "see https://github.com/yt-dlp/yt-dlp#installation",
         ))
 
     if which("ffmpeg"):
@@ -160,10 +166,13 @@ def collect_checks(
         checks.append(Check(
             "ffmpeg", "optional", "MISSING", "ffmpeg",
             detail="Needed to extract audio when a video has no subtitles.",
-            fix_by="agent", next="brew install ffmpeg" if mac else "sudo apt install ffmpeg",
+            fix_by="agent",
+            next="brew install ffmpeg" if mac
+            else "sudo apt install ffmpeg  (or the distro's package manager; ask the user before using sudo)" if linux
+            else "see https://ffmpeg.org/download.html",
         ))
 
-    if environ.get("GROQ_API_KEY"):
+    if is_set("GROQ_API_KEY"):
         checks.append(Check("groq", "optional", "OK", "GROQ_API_KEY", detail="set (value not shown)"))
     else:
         checks.append(Check(
@@ -178,7 +187,7 @@ def collect_checks(
         saved = sorted(p.stem for p in sessions.glob("*.json")) if sessions.is_dir() else []
         checks.append(Check(
             "browser", "optional", "OK", "Browser fallback (Playwright)",
-            detail="saved logins: " + (", ".join(saved) if saved else "none"),
+            detail="package found (browser binary not checked) · saved logins: " + (", ".join(saved) if saved else "none"),
         ))
     else:
         checks.append(Check(
@@ -188,7 +197,7 @@ def collect_checks(
         ))
 
     tg_ready = has_module("telethon")
-    tg_creds = bool(environ.get("TG_API_ID") and environ.get("TG_API_HASH"))
+    tg_creds = is_set("TG_API_ID") and is_set("TG_API_HASH")
     if tg_ready and tg_creds:
         checks.append(Check("telegram", "optional", "OK", "Telegram", detail="telethon installed, credentials set (values not shown)"))
     else:
@@ -281,7 +290,7 @@ def run_doctor(json_output: bool = False, stream=None) -> int:
     try:  # Match the CLI, which reads .env; optional so this stays stdlib-only.
         from dotenv import load_dotenv
         load_dotenv()
-    except ImportError:
+    except Exception:  # a missing library or an unreadable .env must not break the report
         pass
     stream = sys.stdout if stream is None else stream
     checks = collect_checks()

@@ -134,7 +134,7 @@ The skill came from public `main`; the CLI was installed from the release candid
 | macOS, empty temporary `HOME` | Python 3.14 and Node.js already installed | 244 s |
 | Debian bookworm container (`node:24-bookworm-slim`) | no Python; user installs `python3`, `python3-venv`, `git` | 103 s |
 
-Steps, exactly as written in [install.md](../install.md):
+Steps, following [install.md](../install.md) (skill from public `main` at `8a5bcda`; CLI from the release-candidate branch, as noted above):
 
 ```text
 1 basics   python3 --version · git --version · npx --version
