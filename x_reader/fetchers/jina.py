@@ -68,6 +68,8 @@ _VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
     "source", "track", "wbr",
 }
+_FORMATTING_TAGS = {"a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"}
+_SCOPE_TAGS = {"applet", "button", "caption", "html", "marquee", "object", "select", "table", "td", "template", "th"}
 _OPTIONAL_END_TAGS = {
     "p", "li", "dt", "dd", "option", "optgroup", "tr", "td", "th", "thead", "tbody", "tfoot",
     "colgroup", "caption", "rb", "rt", "rtc", "rp",
@@ -295,6 +297,9 @@ def _extract_html_page(html: str) -> dict:
             self.stack = []  # (tag, kinds) of open elements
             self.depth = {"skip": 0, "svg": 0, "boiler": 0, "main": 0, "article": 0, "hidden": 0, "unknown": 0}
             self.unknown_in = set()  # regions (body, main, article) holding text of unknown visibility
+            # Set once a hidden element ends out of order (misnested or unclosed markup):
+            # browsers may keep it open, so later text may be hidden.
+            self.hidden_end_unsure = False
             self.in_head = self.in_title = False
             self.title_parts, self.body_parts, self.gate_parts = [], [], []
             self.main_parts, self.article_parts = [], []
@@ -307,7 +312,7 @@ def _extract_html_page(html: str) -> dict:
             if self.depth["boiler"]:
                 return
             regions = ["body"] + [region for region in ("main", "article") if self.depth[region]]
-            if self.depth["unknown"] and chunk != "\n":
+            if (self.depth["unknown"] or self.hidden_end_unsure) and chunk != "\n":
                 self.unknown_in.update(regions)
             self.body_parts.append(chunk)
             if self.depth["main"]:
@@ -318,7 +323,15 @@ def _extract_html_page(html: str) -> dict:
         def _close(self, tag) -> bool:
             for index in range(len(self.stack) - 1, -1, -1):
                 if self.stack[index][0] == tag:
-                    for _tag, kinds in self.stack[index:]:
+                    closing = self.stack[index:]
+                    inner = [open_tag for open_tag, _kinds in closing[1:]]
+                    # Browsers re-nest around formatting elements and ignore end tags
+                    # that cross a table, cell or similar boundary; popping to the
+                    # target is only certain without either.
+                    if any("hidden" in kinds for _tag, kinds in closing) and (
+                            (tag in _FORMATTING_TAGS and inner) or any(t in _SCOPE_TAGS for t in inner)):
+                        self.hidden_end_unsure = True
+                    for _tag, kinds in closing:
                         for kind in kinds:
                             self.depth[kind] -= 1
                     del self.stack[index:]
@@ -354,12 +367,13 @@ def _extract_html_page(html: str) -> dict:
                 kinds.append("boiler")
             if tag in ("main", "article"):
                 kinds.append(tag)
-            # Elements whose end tag may be left out end where a browser decides,
-            # so their hidden attribute or style is not trusted.
+            # Elements whose end tag may be left out end where a browser decides, so
+            # what they hide is uncertain: walls and frames in them still count, and
+            # text in them (or after them, until their parent ends) cannot pass.
             hidden = _is_hidden_element(values)
-            if hidden is None:
+            if hidden is None or (hidden and tag in _OPTIONAL_END_TAGS):
                 kinds.append("unknown")
-            elif hidden and tag not in _OPTIONAL_END_TAGS:
+            elif hidden:
                 kinds.append("hidden")
             for kind in kinds:
                 self.depth[kind] += 1

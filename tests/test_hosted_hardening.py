@@ -562,6 +562,11 @@ class GenericReadTest(unittest.TestCase):
         sloppy = f"<html><head><title>T</title></head><body>{main}<p hidden>Template<div>Subscribe to continue reading.</div></body></html>"
         _page, receipt = self._page_receipt(sloppy)
         self.assertEqual(receipt["status"], "PARTIAL")
+        # ...and text it may hide cannot pass
+        for tag in ("p", "li", "td"):
+            body = f"<main><{tag} hidden>" + "".join(f"<span>{line}</span>" for line in (ARTICLE * 2).splitlines()) + "</main>"
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{body}</body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", tag)
 
     def test_content_of_unresolved_or_hidden_visibility_never_passes(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
@@ -574,6 +579,22 @@ class GenericReadTest(unittest.TestCase):
         page, receipt = self._page_receipt(unresolved)
         self.assertIn("visibility_unknown", page["page_signals"])
         self.assertEqual(receipt["reason_code"], "visibility_unverified")
+
+    def test_misnested_hidden_markup_cannot_vouch_for_text(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        # browsers may keep the hidden div open here (adoption agency), so the article may be hidden
+        html = f"<html><head><title>T</title></head><body><main><b><div hidden></b>{article}</div></main></body></html>"
+        page, receipt = self._page_receipt(html)
+        self.assertNotEqual(receipt["status"], "PASS")
+        boundary = f"<html><head><title>T</title></head><body><main><div hidden><table><tr><td></div>{article}</main></body></html>"
+        _page, receipt = self._page_receipt(boundary)
+        self.assertNotEqual(receipt["status"], "PASS")
+        # end tags a browser applies the same way leave the text certain
+        for template in ("<div hidden><p>Template</p></div>", "<div hidden><p>Template</div>",
+                         "<div hidden><span>Template</div>"):
+            tidy = f"<html><head><title>T</title></head><body><main>{template}{article}</main></body></html>"
+            _page, receipt = self._page_receipt(tidy)
+            self.assertEqual(receipt["status"], "PASS", template)
 
     def test_frames_in_svg_and_shadow_roots_count(self):
         main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
