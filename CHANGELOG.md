@@ -8,11 +8,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-13
+
 ### Added
 
 - `x-reader doctor [--json]`: read-only self-check that lists core and optional capabilities as `OK` / `MISSING` / `BLOCKED` / `INFO`, says who fixes each item (agent or user) and the next command, never prints secret values, and exits non-zero only when a core item is not ready. Also runnable as `python3 -m x_reader.doctor`.
 - `install.md`: step-by-step setup written for AI agents, so a user can paste one sentence into Claude Code, Codex or Cursor and have the agent install, self-check and complete a first read.
 - README (EN / 简体中文): one-step "paste this into your agent" setup, plus links to the product site and the hosted web reader.
+
+### Changed
+
+- The Agent Skill bootstrap pins a verified commit that includes `doctor`, and names its cache venv after the pinned commit, so a new pin installs a fresh environment instead of reusing an older CLI.
+- `doctor` repair hints reinstall the running release tag instead of moving `main`.
+
+### Fixed
+
+- `x-reader doctor` runs on an install with missing dependencies; other commands explain what is missing and exit non-zero.
+- README: WeChat uses a headless browser fallback for public articles (saved login sessions are not used yet); Xiaoyuzhou / Apple Podcasts links are read as generic web pages; the transcription model is `whisper-large-v3`.
+- `x_reader.__version__` matches the package version.
 
 ## [0.3.1] - 2026-09-29
 

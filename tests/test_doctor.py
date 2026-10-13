@@ -70,6 +70,13 @@ class DoctorTest(unittest.TestCase):
         self.assertNotIn("hash-secret", rendered)
         self.assertIn("value not shown", rendered)
 
+    def test_repair_hints_pin_the_running_release(self):
+        checks = self.checks(find_spec=_spec_for(missing=("requests", "mcp")))
+        self.assertIn("x-reader.git@v0.3.1", checks["core-libraries"].next)
+        self.assertIn("x-reader.git@v0.3.1", checks["mcp"].next)
+        unknown = self.checks(find_spec=_spec_for(missing=("requests",)), installed_version=lambda: None)
+        self.assertNotIn("@v", unknown["core-libraries"].next)
+
     def test_missing_groq_key_is_a_user_step(self):
         checks = self.checks()
         self.assertEqual(checks["groq"].fix_by, "user")

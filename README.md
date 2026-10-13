@@ -99,11 +99,11 @@ x-reader makes these distinctions explicit:
 | Web / articles | Jina Reader | Browser fallback where supported |
 | YouTube | yt-dlp metadata/subtitles | Groq Whisper fallback when configured |
 | Bilibili | Bilibili API | Subtitle/audio transcription workflow |
-| WeChat | Jina → Playwright | Saved browser session when needed |
+| WeChat | Jina → Playwright | Headless browser fallback for public articles; saved login sessions are not used yet |
 | Xiaohongshu | Jina → Playwright | One-time local login may be required |
 | Telegram | Telethon | Telegram credentials required |
 | RSS | feedparser | — |
-| Xiaoyuzhou / Apple Podcasts | Media discovery | Transcript required for spoken-content claims |
+| Xiaoyuzhou / Apple Podcasts | Generic web read (page text and metadata) | Audio is not fetched; transcribe it locally before claiming spoken content |
 
 Platform behavior changes over time. x-reader's contract is to expose the gap rather than overclaim coverage.
 
@@ -237,7 +237,7 @@ For Whisper transcription, set a Groq API key:
 export GROQ_API_KEY=your_key_here
 ```
 
-The default transcription model is `whisper-large-v3-turbo`.
+The transcription model is `whisper-large-v3`.
 
 ## Python library
 

@@ -101,11 +101,11 @@ npx skills add runesleo/x-reader --skill x-reader
 | 普通网页 / 文章 | Jina Reader | 支持时走 browser fallback |
 | YouTube | yt-dlp metadata / 字幕 | 配置后可 Groq Whisper |
 | Bilibili | Bilibili API | 字幕 / 音频转录流程 |
-| 微信公众号 | Jina → Playwright | 必要时使用本地浏览器 session |
+| 微信公众号 | Jina → Playwright | 公开文章走无头浏览器兜底；暂不使用保存的登录态 |
 | 小红书 | Jina → Playwright | 部分页面需一次性本地登录 |
 | Telegram | Telethon | 需要 Telegram 凭证 |
 | RSS | feedparser | — |
-| 小宇宙 / Apple Podcasts | 媒体发现 | 必须转录后才能声称读过口头内容 |
+| 小宇宙 / Apple Podcasts | 按普通网页读取（页面文字和元数据） | 不下载音频；要声称读过口头内容，需先在本地转录 |
 
 平台规则会变化。x-reader 的承诺不是“永远全覆盖”，而是**覆盖不到时不装作覆盖到了**。
 
@@ -226,7 +226,7 @@ Whisper 转录需要：
 export GROQ_API_KEY=your_key_here
 ```
 
-默认模型：`whisper-large-v3-turbo`。
+转录模型：`whisper-large-v3`。
 
 ## Python 库
 

@@ -71,8 +71,10 @@ def _python(home: Path) -> str:
     return f'"{exe}"' if " " in shown else shown
 
 
-def _pip(home: Path, extra: str = "") -> str:
-    target = f"x-reader[{extra}] @ {REPO_SPEC}" if extra else f"x-reader @ {REPO_SPEC}"
+def _pip(home: Path, extra: str = "", version: Optional[str] = None) -> str:
+    """Reinstall hint pinned to the running release tag; moving main only when the version is unknown."""
+    spec = f"{REPO_SPEC}@v{version}" if version else REPO_SPEC
+    target = f"x-reader[{extra}] @ {spec}" if extra else f"x-reader @ {spec}"
     return f'{_python(home)} -m pip install --upgrade "{target}"'
 
 
@@ -124,13 +126,14 @@ def collect_checks(
         ))
 
     version = installed_version()
+    pip = lambda extra="": _pip(home, extra, version)  # noqa: E731
     if version:
         checks.append(Check("package", "core", "OK", f"x-reader {version}"))
     else:
         checks.append(Check(
             "package", "core", "INFO", "x-reader package metadata not found",
             detail="Running from a source checkout is fine; otherwise reinstall.",
-            fix_by="agent", next=_pip(home),
+            fix_by="agent", next=pip(),
         ))
 
     missing = [dist for module, dist in CORE_LIBRARIES if not has_module(module)]
@@ -138,7 +141,7 @@ def collect_checks(
         checks.append(Check(
             "core-libraries", "core", "MISSING", "Core libraries",
             detail="Missing: " + ", ".join(missing),
-            fix_by="agent", next=_pip(home),
+            fix_by="agent", next=pip(),
         ))
     else:
         checks.append(Check(
@@ -193,7 +196,7 @@ def collect_checks(
         checks.append(Check(
             "browser", "optional", "MISSING", "Browser fallback (Playwright)",
             detail="For pages behind a login (WeChat, Xiaohongshu, some X posts). The user logs in once with `x-reader login <platform>`.",
-            fix_by="agent", next=_pip(home, "browser") + f" && {_python(home)} -m playwright install chromium",
+            fix_by="agent", next=pip("browser") + f" && {_python(home)} -m playwright install chromium",
         ))
 
     tg_ready = has_module("telethon")
@@ -204,7 +207,7 @@ def collect_checks(
         gaps, steps, owners = [], [], []
         if not tg_ready:
             gaps.append("telethon not installed")
-            steps.append(_pip(home, "telegram"))
+            steps.append(pip("telegram"))
             owners.append("agent")
         if not tg_creds:
             gaps.append("TG_API_ID / TG_API_HASH not set")
@@ -223,7 +226,7 @@ def collect_checks(
         checks.append(Check(
             "mcp", "optional", "MISSING", "MCP server support",
             detail="Only needed to run x-reader as an MCP server.",
-            fix_by="agent", next=_pip(home, "mcp"),
+            fix_by="agent", next=pip("mcp"),
         ))
 
     # ── Agent skill ──────────────────────────────────────
