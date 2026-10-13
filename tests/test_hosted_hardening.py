@@ -547,6 +547,18 @@ class GenericReadTest(unittest.TestCase):
                 f"<html><head><title>T</title></head><body>{long_main}{template}</body></html>")
             self.assertEqual(receipt["status"], "PASS", template)
 
+    def test_unclosed_elements_end_with_their_parent(self):
+        main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
+        # navigation drawers often leave <nav> open inside an <aside>
+        drawer = "<aside class='drawer'><nav><a href='/'>Home</a><nav><a href='/blog'>Blog</a></aside>"
+        page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{drawer}{main}</body></html>")
+        self.assertIn("careful argument", page["content"])
+        self.assertEqual(receipt["status"], "PASS")
+        # a paragraph's end tag is optional, so its hidden attribute does not hide what follows
+        sloppy = f"<html><head><title>T</title></head><body>{main}<p hidden>Template<div>Subscribe to continue reading.</div></body></html>"
+        _page, receipt = self._page_receipt(sloppy)
+        self.assertEqual(receipt["status"], "PARTIAL")
+
     def test_frame_size_comes_from_inline_css_first(self):
         main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
         for frame, counted in (("<iframe width='1' style='width:600px;height:400px' src='https://p.example/v'>", 1),

@@ -66,6 +66,10 @@ _VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
     "source", "track", "wbr",
 }
+_OPTIONAL_END_TAGS = {
+    "p", "li", "dt", "dd", "option", "optgroup", "tr", "td", "th", "thead", "tbody", "tfoot",
+    "colgroup", "caption", "rb", "rt", "rtc", "rp",
+}
 
 
 _IMPORTANT = re.compile(r"!\s*important\s*$", re.IGNORECASE)
@@ -206,27 +210,39 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
     from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars
 
     class _PageParser(HTMLParser):
+        """Tracks open elements on a stack, so closing an element also closes
+        everything left open inside it (as browsers do with sloppy markup)."""
+
         def __init__(self):
             super().__init__()
-            self.skip_depth = self.boiler_depth = 0
-            self.main_depth = self.article_depth = 0
-            self.hidden_tag, self.hidden_nest = None, 0
+            self.stack = []  # (tag, kinds) of open elements
+            self.depth = {"skip": 0, "boiler": 0, "main": 0, "article": 0, "hidden": 0}
             self.in_head = self.in_title = False
             self.title_parts, self.body_parts, self.gate_parts = [], [], []
             self.main_parts, self.article_parts = [], []
             self.embeds = 0
 
         def _append(self, chunk):
-            if self.hidden_tag:
+            if self.depth["hidden"]:
                 return
             self.gate_parts.append(chunk)
-            if self.boiler_depth:
+            if self.depth["boiler"]:
                 return
             self.body_parts.append(chunk)
-            if self.main_depth:
+            if self.depth["main"]:
                 self.main_parts.append(chunk)
-            if self.article_depth:
+            if self.depth["article"]:
                 self.article_parts.append(chunk)
+
+        def _close(self, tag) -> bool:
+            for index in range(len(self.stack) - 1, -1, -1):
+                if self.stack[index][0] == tag:
+                    for _tag, kinds in self.stack[index:]:
+                        for kind in kinds:
+                            self.depth[kind] -= 1
+                    del self.stack[index:]
+                    return True
+            return False  # a stray end tag closes nothing
 
         def handle_starttag(self, tag, attrs):
             tag = tag.lower()
@@ -239,23 +255,29 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
             if tag == "title":
                 self.in_title = True
                 return
-            if tag in _SKIP_TAGS:
-                self.skip_depth += 1
-                return
-            if self.hidden_tag is None:
-                if tag not in _VOID_TAGS and _is_hidden_element(values):
-                    self.hidden_tag, self.hidden_nest = tag, 1
-            elif tag == self.hidden_tag:
-                self.hidden_nest += 1
-            if tag in _BOILERPLATE_TAGS:
-                self.boiler_depth += 1
-            if tag == "main":
-                self.main_depth += 1
-            elif tag == "article":
-                self.article_depth += 1
-            if (tag in _EMBED_TAGS and not self.skip_depth and not self.hidden_tag
+            if (tag in _EMBED_TAGS and not self.depth["skip"] and not self.depth["hidden"]
                     and not _is_hidden_embed(values)):
                 self.embeds += 1
+            if tag in _VOID_TAGS:
+                if not self.in_head and tag in _BLOCK_TAGS:
+                    self._append("\n")
+                return
+            if tag in ("p", "li") and tag in (open_tag for open_tag, _kinds in self.stack[-1:]):
+                self._close(tag)  # a new paragraph or item ends the open one
+            kinds = []
+            if tag in _SKIP_TAGS:
+                kinds.append("skip")
+            if tag in _BOILERPLATE_TAGS:
+                kinds.append("boiler")
+            if tag in ("main", "article"):
+                kinds.append(tag)
+            # Elements whose end tag may be left out end where a browser decides,
+            # so their hidden attribute or style is not trusted.
+            if tag not in _OPTIONAL_END_TAGS and _is_hidden_element(values):
+                kinds.append("hidden")
+            for kind in kinds:
+                self.depth[kind] += 1
+            self.stack.append((tag, kinds))
             if not self.in_head and tag in _BLOCK_TAGS:
                 self._append("\n")
 
@@ -267,25 +289,13 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
             if tag == "head":
                 self.in_head = False
                 return
-            if tag in _SKIP_TAGS:
-                self.skip_depth = max(0, self.skip_depth - 1)
-                return
             if not self.in_head and tag in _BLOCK_TAGS:
                 self._append("\n")
-            if tag in _BOILERPLATE_TAGS and self.boiler_depth:
-                self.boiler_depth -= 1
-            if tag == "main" and self.main_depth:
-                self.main_depth -= 1
-            elif tag == "article" and self.article_depth:
-                self.article_depth -= 1
-            if self.hidden_tag is not None and tag == self.hidden_tag:
-                self.hidden_nest -= 1
-                if self.hidden_nest == 0:
-                    self.hidden_tag = None
+            self._close(tag)
 
         def handle_data(self, data):
             text = data.strip()
-            if self.skip_depth or not text:
+            if self.depth["skip"] or not text:
                 return
             if self.in_title:
                 self.title_parts.append(text)

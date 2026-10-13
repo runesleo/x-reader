@@ -204,7 +204,7 @@ _AUTH_START = re.compile("|".join((
     rf"(?:please )?{_SIGN_IN} (?:to|into) (?:your|an?) (?:\w+ )?account {_GATE_ACTION}",
     rf"please {_SIGN_IN}(?: (?:first|again|now|below|here))?{_END}",
     rf"{_MUST_SIGN_IN}(?: {_GATE_ACTION}|{_END})",
-    rf"(?:{_SIGN_IN}|authentication|registration) (?:is )?required{_END}",
+    rf"(?:{_SIGN_IN}|authentication) (?:is )?required{_END}",
     _ZH_SIGN_IN,
 )))
 # The same prompts inside a sentence: they keep a page from passing, nothing more.
@@ -242,7 +242,7 @@ _CHALLENGE_START = re.compile("|".join((
     r"press (?:&|and) hold\b",
     r"(?:we(?:'ve| have) )?detected unusual (?:activity|traffic)\b",
     r"our systems have detected unusual traffic\b",
-    rf"(?:just a moment|attention required|please wait){_END}",
+    rf"(?:just a moment|attention required){_END}",
     r"访问被拒绝|请(?:完成|进行)(?:安全|人机)?验证|检测到(?:您的)?(?:网络)?(?:异常|可疑)(?:流量|访问|请求|行为)",
 )))
 _CHALLENGE_ANY = re.compile("|".join((
@@ -353,11 +353,14 @@ def gate_signals(title: str, text: str) -> list:
     title_n = _normalize(title)
     segments = _title_segments(title_n)
     lines = [line for line in (title_n, *(_normalize(raw) for raw in visible_text(text).splitlines())) if line]
-    heads = [_LEAD.sub("", line, count=1) for line in (*lines, *segments)]
-    later = [
-        _LEAD.sub("", part, count=1)
-        for line in lines for part in _SENTENCE_BREAK.split(line)[1:] if part
-    ]
+    starts = (*lines, *segments)
+    heads = [_LEAD.sub("", line, count=1) for line in starts]
+    # A bracketed line is an annotation ("(registration required)." after a
+    # citation), not a login or block notice; "(HTTP 404)" still marks a missing page.
+    notice_heads = [head for line, head in zip(starts, heads) if not line.startswith(("(", "["))]
+    later_parts = [part for line in lines for part in _SENTENCE_BREAK.split(line)[1:] if part]
+    later = [_LEAD.sub("", part, count=1) for part in later_parts]
+    later_notices = [head for part, head in zip(later_parts, later) if not part.startswith(("(", "["))]
     everything = "\n".join(lines)
     signals = set()
 
@@ -366,15 +369,15 @@ def gate_signals(title: str, text: str) -> list:
 
     if segments & _AUTH_TITLES:
         signals.add("auth_title")
-    if opens(_AUTH_START, heads):
+    if opens(_AUTH_START, notice_heads):
         signals.add("auth_required")
-    elif opens(_AUTH_START, later) or _AUTH_ANY.search(everything):
+    elif opens(_AUTH_START, later_notices) or _AUTH_ANY.search(everything):
         signals.add("auth_hint")
     if segments & _CHALLENGE_TITLES:
         signals.add("challenge_title")
-    if opens(_CHALLENGE_START, heads):
+    if opens(_CHALLENGE_START, notice_heads):
         signals.add("challenge_or_error")
-    elif opens(_CHALLENGE_START, later) or _CHALLENGE_ANY.search(everything):
+    elif opens(_CHALLENGE_START, later_notices) or _CHALLENGE_ANY.search(everything):
         signals.add("challenge_hint")
     if opens(_MISSING_START, heads) or any(_MISSING_TITLE.fullmatch(segment) for segment in segments):
         signals.add("missing_page")
