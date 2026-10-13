@@ -24,7 +24,7 @@ Prefer an existing `x-reader` executable. If it is unavailable, install the veri
 The default bootstrap is pinned to the immutable first-success commit. Do not replace it with a moving branch unless the user explicitly asks to test another revision.
 
 ```bash
-XR_CLI_COMMIT="224d17cf538c5c8e23891ef98e5c514300940177"
+XR_CLI_COMMIT="8e94baa835d0f3d4f771924953b18873b862af96"
 XR_VENV="${XDG_CACHE_HOME:-$HOME/.cache}/x-reader/venv-${XR_CLI_COMMIT:0:12}"
 if [ ! -x "$XR_VENV/bin/x-reader" ]; then
   python3 -m venv "$XR_VENV"

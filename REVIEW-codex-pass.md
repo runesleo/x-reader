@@ -9,10 +9,10 @@ Reviewer: independent Codex pass, prompted to evaluate from scratch. Verdict: SH
 | # | Finding | Status |
 |---|---|---|
 | 1 | `x-reader doctor` imported third-party modules before dispatch, so it crashed on an install with missing dependencies | Fixed: CLI import guard; doctor runs and reports the missing libraries; other commands explain the missing dependency (verified in a `--no-deps` venv) |
-| 2 | Skill bootstrap pins a commit without `doctor`, and a cached venv was never upgraded | Partly fixed: the cache venv is now named after the pinned commit. **Open (release gate):** bump `XR_CLI_COMMIT` to the merged release commit |
+| 2 | Skill bootstrap pins a commit without `doctor`, and a cached venv was never upgraded | Fixed: the cache venv is named after the pinned commit, and `XR_CLI_COMMIT` now pins the merged commit `8e94baa` |
 | 3 | `XR_BIN` does not survive fresh shells used by agent tools | Fixed: install.md and SKILL.md tell agents to reuse the full path or run steps in one shell |
 | 4 | Landing page said cookies and keys stay on the computer, but transcription sends the key and audio to Groq after opt-in | Fixed in the landing branch: credentials go only to a provider the user explicitly enables |
-| 5 | Receipt said "exactly as written" while the CLI came from the release candidate | Wording fixed. **Open (release gate):** rerun the clean install against the public pinned commit before deploying the landing pages |
+| 5 | Receipt said "exactly as written" while the CLI came from the release candidate | Fixed: wording corrected, and the clean install was rerun against the public pinned commit (see `docs/FIRST_SUCCESS.md`) |
 
 ## Warnings
 

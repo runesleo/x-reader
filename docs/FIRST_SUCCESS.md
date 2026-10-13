@@ -158,4 +158,11 @@ https://example.com
 
 Found and fixed during the run: skill locations under a symlinked home (`/tmp` → `/private/tmp`) were listed twice; install hints now target the interpreter x-reader runs from.
 
-Still to verify after release: the same run against the public release commit once the skill bootstrap pin includes `doctor`.
+### Public pinned path (2026-10-13, after merge)
+
+The skill bootstrap now pins `8e94baa835d0f3d4f771924953b18873b862af96`. Running its bootstrap block unchanged installed `x-reader @ git+https://github.com/runesleo/x-reader.git@8e94baa…` into `~/.cache/x-reader/venv-8e94baa835d0`.
+
+| Environment | Total time | doctor | X post | example.com |
+|---|---|---|---|---|
+| macOS, empty temporary `HOME` | 173 s | ready, exit 0 | `oembed`, `media_status=present` | `direct_html_pinned` |
+| Debian bookworm container, after installing `python3`, `python3-venv`, `git` | 119 s | ready, exit 0 | `oembed`, `media_status=present` | `direct_html_pinned` |
