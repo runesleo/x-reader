@@ -14,6 +14,7 @@ import json
 import hashlib
 import math
 import re
+import unicodedata
 
 
 PASS = "PASS"
@@ -130,12 +131,6 @@ _PAYWALL_PHRASES = (
     "订阅后阅读", "订阅后查看", "付费阅读", "付费后阅读", "会员专享", "开通会员后",
     "登录后查看全文", "登录后阅读全文", "解锁全文", "购买后阅读",
 )
-_UNAVAILABLE_PHRASES = (
-    "page not found", "404 not found", "this page doesn't exist", "this page does not exist",
-    "this page isn't available", "this page is no longer available",
-    "content is no longer available", "this content has been removed",
-    "页面不存在", "页面不见了", "内容已删除", "该内容已被删除", "内容不存在",
-)
 _CONSENT_PHRASES = (
     "we value your privacy", "accept all cookies", "manage cookie preferences",
     "cookie consent", "we use cookies", "this site uses cookies", "uses cookies to",
@@ -147,14 +142,6 @@ _CONSENT_WEAK_PHRASES = (
     "cookie settings", "cookie policy",
 )
 _CONSENT_TITLES = ("before you continue", "cookie", "consent", "privacy choices", "your privacy")
-_TEASER_TAIL = (
-    "continue reading", "keep reading", "read the full story", "read the full article",
-    "read the rest of", "继续阅读", "阅读全文", "展开全文", "查看全文", "阅读原文",
-)
-_TEASER_LINE = re.compile(
-    r"^(?:点击)?(?:continue reading|keep reading|read the full (?:story|article|post)|read the rest"
-    r"|继续阅读(?:全文)?|阅读全文|展开全文|查看全文|阅读原文)[\s→»›>…\.:!！。-]*$"
-)
 # Pages whose substance is audio/video x-reader does not read on the generic path.
 _MEDIA_PAGE_HOSTS = (
     "vimeo.com", "tiktok.com", "instagram.com", "soundcloud.com", "open.spotify.com",
@@ -178,77 +165,229 @@ def _host_in(url: str, domains: tuple) -> bool:
     return any(host == domain or host.endswith("." + domain) for domain in domains)
 
 
-_APOLOGY = re.compile(r"^(?:oops|sorry|uh[- ]oh|抱歉|对不起|哎呀)[\s!,.:;—–-]*")
-_NOTICES = set(_UNAVAILABLE_PHRASES) | {
-    "404", "not found", "error 404", "404 error", "404 not found", "404 page not found",
-    "error 404 page not found", "page not found 404", "error page not found",
+_QUOTES = str.maketrans({"‘": "'", "’": "'", "ʼ": "'", "′": "'",
+                         "“": '"', "”": '"', " ": " "})
+
+
+def _normalize(text: str) -> str:
+    """The form wall rules match on: NFKC, casefolded, plain quotes, hyphenated
+    words split ("Sign-in" -> "sign in"), whitespace collapsed."""
+    text = unicodedata.normalize("NFKC", text).casefold().translate(_QUOTES)
+    return " ".join(re.sub(r"(?<=\w)-(?=\w)", " ", text).split())
+
+
+# What a notice may open with before its words: punctuation, bullets, arrows,
+# emoji, "Oops!", "Sorry, but", "Error:", "Notice:".
+_LEAD = re.compile(
+    r"^[\W_]*(?:(?:oops|whoops|sorry|uh oh|oh no|hmm+|error|we're sorry|we are sorry|but|unfortunately"
+    r"|apologies|notice|alert|warning)\b[\W_]*|(?:抱歉|对不起|哎呀|错误|提示)[\W_]*)*"
+)
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?…:;])\s+|(?<=[。！？：；])")
+_END = r"(?=\s*(?:$|[.!?…:;,|)\]]))"  # the phrase is a whole statement, not the start of a longer one
+
+# Login walls: prompts about reaching the content. Prompts to comment, vote or
+# open one's own account ("Sign in to view your account") are not walls.
+_SIGN_IN = r"(?:sign ?in|log ?in)"
+_GATE_ACTION = (
+    r"to (?:continue|proceed|read|view|access|see|watch|listen|download|unlock|keep reading"
+    r"|finish reading|get (?:full )?access)\b(?! (?:your|my|our)\b)"
+)
+_SIGN_IN_OR_JOIN = rf"(?:please )?{_SIGN_IN}(?: or (?:register|sign up|subscribe|create an? (?:free )?account))?"
+_INTERACTION = (
+    r"(?:comment|reply|respond|post|vote|like|follow|save|bookmark|leave|write|add|join|chat|rate"
+    r"|review|report|share|edit|upload|submit|contribute|participate|message)"
+)
+_MUST_SIGN_IN = r"you (?:must|need to|have to|will need to|'ll need to) (?:be )?(?:signed|logged|sign|log) ?in"
+_ZH_SIGN_IN = r"(?:(?:请|您需要|需要)(?:先)?登录(?:后)?|登录后)(?:才能|即可|方可|可)?(?:查看|阅读|继续|浏览|观看|下载)"
+_AUTH_START = re.compile("|".join((
+    rf"{_SIGN_IN_OR_JOIN} {_GATE_ACTION}",
+    rf"(?:please )?{_SIGN_IN} (?:to|into) (?:your|an?) (?:\w+ )?account {_GATE_ACTION}",
+    rf"please {_SIGN_IN}(?: (?:first|again|now|below|here))?{_END}",
+    rf"{_MUST_SIGN_IN}(?: {_GATE_ACTION}|{_END})",
+    rf"(?:{_SIGN_IN}|authentication|registration) (?:is )?required{_END}",
+    _ZH_SIGN_IN,
+)))
+# The same prompts inside a sentence: they keep a page from passing, nothing more.
+_AUTH_ANY = re.compile("|".join((
+    rf"\b{_SIGN_IN_OR_JOIN} {_GATE_ACTION}",
+    rf"\b{_SIGN_IN} (?:to|into) (?:your|an?) (?:\w+ )?account {_GATE_ACTION}",
+    rf"\bplease {_SIGN_IN}\b(?! to {_INTERACTION}\b)",
+    rf"\b{_MUST_SIGN_IN} {_GATE_ACTION}",
+    _ZH_SIGN_IN,
+)))
+_AUTH_TITLES = {
+    "sign in", "log in", "login", "signin", "sign in to continue", "log in to continue",
+    "login to continue", "sign in or sign up", "sign in or register", "log in or sign up",
+    "login or sign up", "authentication required", "login required", "please log in",
+    "please sign in", "account login", "member login", "user login", "log in to your account",
+    "sign in to your account", "登录", "用户登录", "会员登录", "请登录", "账号登录",
 }
 
+# Bot checks and blocks. Server-error status lines are only hints: articles list them too.
+_CHALLENGE_START = re.compile("|".join((
+    r"checking (?:your browser|if the site connection is secure|the site connection)\b",
+    r"(?:please )?(?:verify|confirm|verifying) (?:that )?you(?:'re| are) (?:a )?(?:human|not a (?:robot|bot))\b",
+    r"(?:please )?(?:enable|turn on|allow) (?:javascript and cookies|cookies and javascript|javascript|js|cookies)"
+    r"(?: in your browser)? to (?:continue|proceed|view|access|see)\b",
+    r"you(?:'ve| have) been blocked\b",
+    r"your (?:request|access|ip(?: address)?|connection|computer|browser|network) (?:has been|was|is|appears to be"
+    r"|may be|might be) (?:blocked|denied|rejected|flagged|making automated requests)\b",
+    rf"(?:the |this |your )?request (?:was |has been |is )?(?:blocked|rejected|denied){_END}",
+    rf"access (?:to (?:this|the requested) (?:page|site|website|resource|url) )?(?:has been |is |was )?denied{_END}",
+    r"(?:please )?complete (?:the|this) (?:security check|captcha|challenge|verification)\b",
+    rf"one more step{_END}",
+    r"(?:ddos protection|performance (?:&|and) security) by\b",
+    r"this (?:website|site) is using a security service\b",
+    r"are you a (?:robot|human)(?=\s*(?:$|[?.!]))",
+    r"press (?:&|and) hold\b",
+    r"(?:we(?:'ve| have) )?detected unusual (?:activity|traffic)\b",
+    r"our systems have detected unusual traffic\b",
+    rf"(?:just a moment|attention required|please wait){_END}",
+    r"访问被拒绝|请(?:完成|进行)(?:安全|人机)?验证|检测到(?:您的)?(?:网络)?(?:异常|可疑)(?:流量|访问|请求|行为)",
+)))
+_CHALLENGE_ANY = re.compile("|".join((
+    r"checking your browser", r"checking if the site connection is secure",
+    r"verify (?:that )?you(?:'re| are) (?:a )?human", r"verify you(?:'re| are) not a (?:robot|bot)",
+    r"unusual traffic from your (?:computer|network)", r"you(?:'ve| have) been blocked",
+    r"enable javascript and cookies to continue", r"complete the security check",
+    r"review the security of your connection", r"ddos protection by",
+    r"performance (?:&|and) security by cloudflare", r"cloudflare ray id",
+    r"\b(?:403 forbidden|429 too many requests|500 internal server error|502 bad gateway"
+    r"|503 service (?:temporarily )?unavailable|504 gateway time ?out)\b",
+    r"请完成安全验证", r"访问被拒绝",
+)))
+_CHALLENGE_TITLES = {
+    "just a moment", "attention required", "access denied", "access to this page has been denied",
+    "forbidden", "403", "403 forbidden", "error 403", "403 error", "error 403 forbidden",
+    "request blocked", "request rejected", "the request is blocked", "security check",
+    "security checkpoint", "one more step", "please wait", "are you a robot", "are you human",
+    "human verification", "verify you are human", "verification required", "captcha", "ddos guard",
+    "too many requests", "429 too many requests", "error 429", "you have been blocked",
+    "pardon our interruption", "robot check", "bot verification", "checking your browser",
+    "please verify you are a human", "access blocked", "bad gateway", "502 bad gateway",
+    "service unavailable", "503 service unavailable", "500 internal server error",
+    "internal server error", "504 gateway timeout", "gateway timeout", "error", "site maintenance",
+    "under maintenance", "temporarily unavailable", "安全验证", "访问被拒绝", "验证码", "人机验证", "访问受限",
+}
 
-_SEGMENT_SPLIT = re.compile(r"\s[|·—–-]\s|[|·]|:\s|[.!?。！？]\s")
-_STATUS_CODE = re.compile(r"[\(\[]\s*(?:error\s*)?\d{3}\s*[\)\]]")
-_AUTH_TITLES = {"sign in", "log in", "login", "authentication required"}
-_AUTH_PHRASES = (
-    "sign in to continue", "please sign in", "please log in", "login required",
-    "authentication required",
+# Missing pages ("soft 404s" answer HTTP 200).
+_SUBJECT = r"(?:the |this |that )?(?:page|url|link|content|article|post|story|resource|file|document)"
+_SOUGHT = (
+    r"(?: you(?:'re| are| were)? (?:looking for|trying to (?:reach|access|view|find|open))"
+    r"| (?:that )?you(?:'ve)? requested| requested)?"
 )
-_ERROR_TITLES = {"access denied", "forbidden", "403", "403 forbidden", "error 403", "just a moment...",
-                 "attention required!", "attention required! | cloudflare"}
-_CHALLENGE_PHRASES = (
-    "checking your browser before accessing", "enable javascript and cookies to continue",
-    "captcha challenge", "request blocked",
+_MISSING_START = re.compile("|".join((
+    r"(?:http |error )?(?:404|410)(?:\s*[.!)\]]*\s*$|\s*[:|.!(\[-]?\s*(?:error|not found|page not found|file not found"
+    r"|gone|that's an error|oops|sorry|page|the page|this page|we can't|we couldn't|looks like|nothing)\b)",
+    r"(?:page|file|document|content|article|post|story|resource|url|video|product|item)s? not found\b",
+    rf"not found{_END}",
+    rf"{_SUBJECT}{_SOUGHT} (?:could not|cannot|can't|couldn't|was not|wasn't|is not|isn't|may not|might not"
+    r"|can no longer) (?:be )?(?:found|located|reached|displayed)\b",
+    rf"{_SUBJECT}{_SOUGHT} (?:does not|doesn't|did not|didn't|no longer) exists?\b",
+    rf"{_SUBJECT}{_SOUGHT} (?:is|was|has been|appears to (?:be|have been)|may have been|might have been)"
+    r" (?:no longer available|unavailable|not available|removed|deleted|moved|taken down|expired)\b",
+    rf"{_SUBJECT}{_SOUGHT} isn't (?:available|here)\b",
+    r"we (?:can't|cannot|couldn't|could not|were unable to|are unable to) (?:find|locate)"
+    r" (?:the|that|this|your|any) (?:page|url|content|article|post)\b",
+    r"we (?:can't|cannot|couldn't|could not) find what you(?:'re| are) looking for\b",
+    r"(?:there's|there is) nothing (?:here|at this (?:address|url|location))\b",
+    rf"nothing (?:was )?found{_END}",
+    r"looks like (?:this|the|that) page (?:doesn't|does not|can't|cannot|no longer|isn't|is not)\b",
+    r"the requested (?:url|page|resource|document)\b.{0,200}?\b(?:was not|could not be|cannot be|can't be) found\b",
+    r"页面不存在|页面不见了|页面未找到|页面找不到|找不到(?:该|此|您要的|您要访问的|您访问的)?页面"
+    r"|您(?:所)?(?:访问|要找|查找|请求)的页面(?:不存在|已删除|已被删除|找不到)|(?:该|此)?(?:内容|文章|页面)(?:已被?删除|不存在)",
+)))
+_MISSING_TITLE = re.compile(
+    r"(?:error |http )?(?:404|410)(?: (?:error|not found|page not found|file not found|gone))?"
+    r"|(?:page |file )?not found|page (?:does not|doesn't) exist|page unavailable"
+)
+# Notice wording inside a sentence. "Page not found" and "404 error" are left
+# out: articles about those errors say them all the time.
+_MISSING_ANY = re.compile("|".join((
+    r"\bpage you(?:'re| are| were)? looking for\b", r"\bpage you(?:'ve)? requested\b",
+    r"\brequested url was not found\b", r"\bthis page (?:doesn't|does not|no longer) exists?\b",
+    r"\bthis page (?:is no longer|isn't|is not) available\b",
+    r"\bthis content (?:is no longer available|has been removed)\b",
+    r"页面不存在", r"页面不见了", r"内容已删除", r"该内容已被删除", r"内容不存在",
+)))
+
+# A cut-off article: a call to read the rest elsewhere, opening or closing a block.
+_TEASER_START = re.compile("|".join((
+    r"(?:点击)?(?:continue|keep) reading(?=\s*(?:$|[.!?…:;,|)\]→»›>])| (?:this|the) (?:article|story|post|piece"
+    r"|report)\b| (?:on|at|in) \S| here\b)",
+    r"read (?:the )?(?:rest|remainder)\b",
+    r"read (?:the )?(?:full|whole|entire|complete) (?:article|story|post|piece|report|text|interview|review|essay"
+    r"|column|thread)\b",
+    r"read (?:the )?original (?:article|story|post)\b",
+    r"(?:view|see|show) (?:the )?(?:full|whole|entire|complete) (?:article|story|post|text|content)\b",
+    r"(?:full|whole) (?:article|story)(?=\s*(?:$|[→»›>:…]))",
+    r"read more (?:of|from|in) (?:this|the) (?:article|story|post)\b",
+    r"(?:(?:this|the) (?:article|story|post) (?:continues|is continued)|story continues) (?:on|at|in)\b",
+    r"(?:点击)?(?:继续阅读|阅读全文|展开全文|查看全文|阅读原文|展开阅读|查看完整(?:内容|文章|版)|阅读完整(?:内容|文章|版))",
+)))
+_TEASER_END = re.compile(
+    r"(?:(?:continue|keep) reading(?: (?:this|the) (?:article|story|post))?"
+    r"|read (?:the )?(?:rest|full (?:article|story|post))(?: of (?:this|the) (?:article|story|post))?"
+    r"|继续阅读|阅读全文|展开全文|查看全文)[\s→»›>….:!]*$"
 )
 
 
-def _is_notice(text: str) -> bool:
-    """True when a short heading, line or title segment is a missing-page notice.
-
-    Segments around ": ", " | ", " - " are tried one by one, so "Page not found:
-    /old-slug" and "Error: This page does not exist" match while "How to fix Page
-    Not Found errors" does not.
-    """
-    for segment in _SEGMENT_SPLIT.split(_STATUS_CODE.sub(" ", text)):
-        segment = _APOLOGY.sub("", segment.strip().lower())
-        segment = re.sub(r"[\s|·:—–-]+", " ", segment).strip(" !.。！?？")
-        if segment in _NOTICES:
-            return True
-    return False
+def _title_segments(title: str) -> set:
+    """A normalized title split at its separators ("Just a moment... | Example")."""
+    parts = re.split(r"\s+[|·•—–-]\s+|\s*[|·•]\s*", title)
+    return {re.sub(r"^[\W_]+|[\W_]+$", "", part) for part in parts} - {""}
 
 
 def gate_signals(title: str, text: str) -> list:
     """Walls a page announces, wherever they appear: login, challenge, consent,
-    missing page, paywall or teaser. Every line is checked (no first-N cut-off);
-    the fetcher runs this over every visible block of the page, nav and footer
-    included, so a notice outside the extracted article still counts."""
-    body = visible_text(text)
-    lowered = body.lower()
-    title_l = title.strip().lower()
+    missing page, paywall or teaser.
+
+    Rules run on normalized text, over every line of any length. A login,
+    challenge or missing-page notice is a line (or title part) that opens with
+    one; a wall title (auth_title, challenge_title) names the page itself. The
+    same wording opening a later sentence, or a prompt inside one, is a hint
+    (auth_hint, challenge_hint, missing_hint): it keeps a page from passing and
+    nothing more. The fetcher runs this over every visible block of the page,
+    nav and footer included.
+    """
+    title_n = _normalize(title)
+    segments = _title_segments(title_n)
+    lines = [line for line in (title_n, *(_normalize(raw) for raw in visible_text(text).splitlines())) if line]
+    heads = [_LEAD.sub("", line, count=1) for line in (*lines, *segments)]
+    later = [
+        _LEAD.sub("", part, count=1)
+        for line in lines for part in _SENTENCE_BREAK.split(line)[1:] if part
+    ]
+    everything = "\n".join(lines)
     signals = set()
-    title_segments = {segment.strip() for segment in _SEGMENT_SPLIT.split(title_l)}
-    lines = [line.strip() for line in body.splitlines() if line.strip()]
-    # Notices are short lines that open with the phrase ("Please sign in to
-    # continue."), not articles about them ("Troubleshooting authentication ...").
-    notices = [_APOLOGY.sub("", line.lower()) for line in lines if len(line) <= 120]
-    if title_l in _AUTH_TITLES or any(
-        line.startswith(_AUTH_PHRASES) for line in (*notices, title_l)
-    ):
+
+    def opens(pattern: re.Pattern, starts: list) -> bool:
+        return any(pattern.match(head) for head in starts)
+
+    if segments & _AUTH_TITLES:
+        signals.add("auth_title")
+    if opens(_AUTH_START, heads):
         signals.add("auth_required")
-    if (title_segments & _ERROR_TITLES or title_l in _ERROR_TITLES
-            or any(line.startswith(_CHALLENGE_PHRASES) for line in notices)):
+    elif opens(_AUTH_START, later) or _AUTH_ANY.search(everything):
+        signals.add("auth_hint")
+    if segments & _CHALLENGE_TITLES:
+        signals.add("challenge_title")
+    if opens(_CHALLENGE_START, heads):
         signals.add("challenge_or_error")
-    strong = sum(phrase in lowered for phrase in _CONSENT_PHRASES)
-    weak = sum(phrase in lowered for phrase in _CONSENT_WEAK_PHRASES)
+    elif opens(_CHALLENGE_START, later) or _CHALLENGE_ANY.search(everything):
+        signals.add("challenge_hint")
+    if opens(_MISSING_START, heads) or any(_MISSING_TITLE.fullmatch(segment) for segment in segments):
+        signals.add("missing_page")
+    elif opens(_MISSING_START, later) or _MISSING_ANY.search(everything):
+        signals.add("missing_hint")
+    strong = sum(phrase in everything for phrase in _CONSENT_PHRASES)
+    weak = sum(phrase in everything for phrase in _CONSENT_WEAK_PHRASES)
     if strong or strong + weak >= 3:
         signals.add("consent")
-        if any(marker in title_l for marker in _CONSENT_TITLES):
+        if any(marker in title_n for marker in _CONSENT_TITLES):
             signals.add("consent_title")
-    if _is_notice(title) or any(len(line) <= 80 and _is_notice(line) for line in lines):
-        signals.add("missing_page")
-    if any(phrase in lowered or phrase in title_l for phrase in _PAYWALL_PHRASES):
-        signals.add("paywall")
-    # A line that is only a teaser link or button ("Continue reading →"), not a
-    # link that happens to start with the words ("Continue reading our research").
-    if any(_TEASER_LINE.match(line.lower()) for line in lines):
+    if (any(phrase in everything for phrase in _PAYWALL_PHRASES)
+            or opens(_TEASER_START, heads) or any(_TEASER_END.search(line) for line in lines)):
         signals.add("paywall")
     return sorted(signals)
 
@@ -503,16 +642,19 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
     signals = set(gate_signals(title, content))
     if isinstance(page_signals, list):
         signals.update(str(item) for item in page_signals)
-    if "auth_required" in signals:
+    # A wall title names the page itself. A notice line fails a page with little
+    # else on it; with substantial prose beside it, it may be a wall over the
+    # content or a quoted message, so the page cannot pass or fail on it.
+    thin_shell = prose < 600
+    if "auth_title" in signals or ("auth_required" in signals and thin_shell):
         return {
             "status": FAIL,
             "reason_code": "auth_required",
             "evidence": "generic reader returned a login/authentication shell",
             "components": {"text_body": FAIL},
         }
-    if "challenge_or_error" in signals or (
-        "consent" in signals and (prose < 600 or "consent_title" in signals)
-    ):
+    if ("challenge_title" in signals or ("challenge_or_error" in signals and thin_shell)
+            or ("consent" in signals and (thin_shell or "consent_title" in signals))):
         return {
             "status": FAIL,
             "reason_code": "challenge_or_error",
@@ -522,7 +664,7 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
     # A page that announces it is missing never passes, however much help text
     # follows (soft 404s answer HTTP 200); thin ones fail outright.
     if "missing_page" in signals:
-        if prose < 600:
+        if thin_shell:
             return {
                 "status": FAIL,
                 "reason_code": "source_unavailable",
@@ -535,6 +677,28 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "the page announces a missing page, so its text may not be the requested content",
             "components": {"text_body": UNKNOWN},
         }
+    if "auth_required" in signals or "challenge_or_error" in signals:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "possible_access_wall",
+            "evidence": "the page shows a login, bot-check or block notice beside its text, so it may not show the content",
+            "components": {"text_body": UNKNOWN},
+        }
+    # Nothing below may claim any text was read from the page unless x-reader
+    # loaded the page itself and the text shown matches it.
+    media = extra.get("embedded_media")
+    media_count = media if isinstance(media, int) and not isinstance(media, bool) else None
+    if (extra.get("redirects_verified") is not True or extra.get("body_verified") is not True
+            or media_count is None or not isinstance(page_signals, list)):
+        return {
+            "status": UNKNOWN,
+            "reason_code": "page_unverified",
+            "evidence": (
+                "page text was read, but x-reader could not load the page itself to check "
+                "where it leads, what it embeds, whether it shows a wall and that the text shown is the page's"
+            ),
+            "components": {"text_body": UNKNOWN},
+        }
     # Cookie wording in long text: a consent wall and an article carrying a
     # banner look alike from here, so the page cannot pass.
     if "consent" in signals:
@@ -544,6 +708,22 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "the page includes cookie/consent wording, so it may be a consent wall rather than the content",
             "components": {"text_body": UNKNOWN},
         }
+    # Wall wording that is not a notice of its own (inside a sentence, or an
+    # article title about the error) still keeps the page from passing.
+    if "missing_hint" in signals:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "possibly_missing_page",
+            "evidence": "the page mentions a missing page, so its text may not be the requested content",
+            "components": {"text_body": UNKNOWN},
+        }
+    if "auth_hint" in signals or "challenge_hint" in signals:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "possible_access_wall",
+            "evidence": "the page mentions a login, bot check or block, so it may not show the content",
+            "components": {"text_body": UNKNOWN},
+        }
     if "paywall" in signals:
         return {
             "status": PARTIAL,
@@ -551,10 +731,8 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "some page text was read, but the page gates or cuts off the rest",
             "components": {"text_body": PARTIAL},
         }
-    media = extra.get("embedded_media")
-    media_count = media if isinstance(media, int) and not isinstance(media, bool) else None
     page_url = str(payload.get("url") or "")
-    if (media_count or 0) > 0 or _host_in(page_url, _MEDIA_PAGE_HOSTS):
+    if media_count > 0 or _host_in(page_url, _MEDIA_PAGE_HOSTS):
         return {
             "status": PARTIAL,
             "reason_code": "embedded_media_unread",
@@ -566,17 +744,6 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "status": UNKNOWN,
             "reason_code": "thin_generic_body",
             "evidence": "generic reader returned text, but it is too thin to prove source coverage",
-            "components": {"text_body": UNKNOWN},
-        }
-    if (extra.get("redirects_verified") is not True or extra.get("body_verified") is not True
-            or media_count != 0 or not isinstance(page_signals, list)):
-        return {
-            "status": UNKNOWN,
-            "reason_code": "page_unverified",
-            "evidence": (
-                "page text was read, but x-reader could not load the page itself to check "
-                "where it leads, what it embeds and whether it shows a wall"
-            ),
             "components": {"text_body": UNKNOWN},
         }
     return {
@@ -668,47 +835,53 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     if source == "youtube" and media_type == "video":
+        # Page metadata and transcript are rated on their own evidence: a
+        # transcript never vouches for a page that is not the video's.
         page_state = extra.get("page_state")
-        if page_state == "unavailable" and not extra.get("has_transcript"):
+        video_id = str(extra.get("video_id") or "")
+        # Only a single-video URL has a video to tie the page or transcript to.
+        metadata = {"ok": PASS, "unavailable": FAIL}.get(page_state, UNKNOWN) if video_id else UNKNOWN
+        if not (extra.get("has_transcript") is True and video_id):
+            if metadata == FAIL:
+                return {
+                    "status": FAIL,
+                    "reason_code": "source_unavailable",
+                    "evidence": "YouTube returned an unavailable, private, removed or restricted-video page",
+                    "components": {"page_metadata": FAIL, "spoken_media": UNKNOWN, "visual_media": UNKNOWN},
+                }
+            if metadata == UNKNOWN:
+                return {
+                    "status": UNKNOWN,
+                    "reason_code": "video_unidentified",
+                    "evidence": "the YouTube page text could not be tied to the requested video",
+                    "components": {"page_metadata": UNKNOWN, "spoken_media": UNKNOWN, "visual_media": UNKNOWN},
+                }
             return {
-                "status": FAIL,
-                "reason_code": "source_unavailable",
-                "evidence": "YouTube returned an unavailable, private, removed or restricted-video page",
-                "components": {"page_metadata": FAIL, "spoken_media": UNKNOWN, "visual_media": UNKNOWN},
+                "status": PARTIAL,
+                "reason_code": "spoken_media_unread",
+                "evidence": "YouTube page metadata/description was read; spoken and visual media were not",
+                "components": {"page_metadata": PASS, "spoken_media": PARTIAL, "visual_media": PARTIAL},
             }
-        if page_state != "ok" and not extra.get("has_transcript"):
-            return {
-                "status": UNKNOWN,
-                "reason_code": "video_unidentified",
-                "evidence": "the YouTube page text could not be tied to the requested video",
-                "components": {"page_metadata": UNKNOWN, "spoken_media": UNKNOWN, "visual_media": UNKNOWN},
-            }
+        page_note = "" if metadata == PASS else "; the page itself could not be confirmed as the video's"
         # x-reader reads speech, never pictures: a video is at most PARTIAL.
-        if extra.get("has_transcript") and _subtitle_coverage_proven(extra):
+        if extra.get("transcript_video_id") == video_id and _subtitle_coverage_proven(extra):
             return {
                 "status": PARTIAL,
                 "reason_code": "visual_media_unread",
                 "evidence": (
-                    "subtitle cues cover the whole spoken timeline (no uncaptioned stretch over "
-                    f"{int(MAX_TRANSCRIPT_GAP_SECONDS)}s); the video's visual content was not analyzed"
+                    "subtitle cues for this video cover the whole spoken timeline (no uncaptioned stretch over "
+                    f"{int(MAX_TRANSCRIPT_GAP_SECONDS)}s); the video's visual content was not analyzed{page_note}"
                 ),
-                "components": {"page_metadata": PASS, "spoken_media": PASS, "visual_media": PARTIAL},
-            }
-        if extra.get("has_transcript"):
-            return {
-                "status": PARTIAL,
-                "reason_code": "transcript_coverage_unproven",
-                "evidence": (
-                    "a transcript was read, but it could not be shown to cover the whole video; "
-                    "visual content was not analyzed"
-                ),
-                "components": {"page_metadata": PASS, "spoken_media": PARTIAL, "visual_media": PARTIAL},
+                "components": {"page_metadata": metadata, "spoken_media": PASS, "visual_media": PARTIAL},
             }
         return {
             "status": PARTIAL,
-            "reason_code": "spoken_media_unread",
-            "evidence": "YouTube page metadata/description was read; spoken and visual media were not",
-            "components": {"page_metadata": PASS, "spoken_media": PARTIAL, "visual_media": PARTIAL},
+            "reason_code": "transcript_coverage_unproven",
+            "evidence": (
+                "a transcript was read, but it could not be shown to cover the whole video; "
+                f"visual content was not analyzed{page_note}"
+            ),
+            "components": {"page_metadata": metadata, "spoken_media": PARTIAL, "visual_media": PARTIAL},
         }
 
     if source == "podcast" and media_type == "audio":

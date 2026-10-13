@@ -57,16 +57,35 @@ _UNAVAILABLE_VIDEO = (
 )
 
 
-def _page_state(title: str, content: str) -> str:
-    """"unavailable" for YouTube's error pages, "unidentified" when the page names
-    no video (a bare "YouTube" title), else "ok"."""
-    head = f"{title}\n{content[:3000]}".lower()
-    if any(marker in head for marker in _UNAVAILABLE_VIDEO):
-        return "unavailable"
-    bare = re.sub(r"[\s\-–—|]+", " ", title).strip().lower()
-    if not bare or bare == "youtube":
+# Titles of pages that are not a video: YouTube's own, consent and sign-in pages.
+_NOT_A_VIDEO_TITLE = re.compile(r"^(?:|youtube|sign in|consent|before you continue\b.*)$", re.IGNORECASE)
+_CONSENT_PAGE = ("before you continue to youtube", "consent.youtube.com")
+
+
+def _page_state(video_id: str, title: str, content: str, source_url: str = "") -> str:
+    """How the page Jina read relates to the requested video.
+
+    "ok": a single-video URL whose page (Jina's "URL Source", when given) is that
+    video's and carries a video title. "unavailable": YouTube's bare "YouTube"
+    page saying the video is gone, private or restricted. "unidentified":
+    anything else (channel, playlist, consent or sign-in pages, other videos).
+    A title merely mentioning "Video unavailable" is a video title.
+    """
+    if not video_id:
         return "unidentified"
-    return "ok"
+    if source_url and _extract_video_id(source_url) != video_id:
+        return "unidentified"
+    if any(marker in content[:3000].lower() for marker in _CONSENT_PAGE):
+        return "unidentified"  # a consent interstitial, whatever its title or language
+    name = re.sub(r"[\s\-–—|]+", " ", title).strip()
+    name = re.sub(r"\s+youtube$", "", name, flags=re.IGNORECASE).strip()
+    if not _NOT_A_VIDEO_TITLE.search(name):
+        return "ok"
+    if name.lower() in ("", "youtube"):
+        head = content[:3000].lower()
+        if any(marker in head for marker in _UNAVAILABLE_VIDEO):
+            return "unavailable"
+    return "unidentified"
 
 
 def _extract_video_id(url: str) -> str:
@@ -131,7 +150,10 @@ def _get_subtitles_via_ytdlp(video_url: str, lang: str = "en") -> dict:
             logger.warning("yt-dlp produced more output than allowed")
             return empty
 
-        duration = _read_duration(output_path + ".info.json")
+        duration, info_id = _read_info(output_path + ".info.json")
+        if info_id and info_id != _extract_video_id(video_url):
+            logger.warning("yt-dlp metadata names another video; ignoring its subtitles")
+            return empty
         for ext in [f".{lang}.srt", f".{lang}.vtt"]:
             sub_file = output_path + ext
             if os.path.exists(sub_file):
@@ -139,23 +161,29 @@ def _get_subtitles_via_ytdlp(video_url: str, lang: str = "en") -> dict:
                     logger.warning("Subtitle file exceeds the size limit; ignoring it")
                     return {**empty, "duration": duration}
                 text, cues = _parse_srt(sub_file)
-                return {"text": text, "cues": cues, "duration": duration}
+                return {"text": text, "cues": cues, "duration": duration, "video_id": info_id}
 
     return {**empty}
 
 
-def _read_duration(info_path: str):
-    """Video duration in seconds from yt-dlp's info JSON, or None."""
+def _read_info(info_path: str) -> tuple:
+    """(duration in seconds or None, video id or "") from yt-dlp's info JSON."""
     import json
     try:
         if os.path.getsize(info_path) > MAX_INFO_JSON_BYTES:
-            return None
+            return None, ""
         with open(info_path, "r", encoding="utf-8") as f:
-            value = json.load(f).get("duration")
-        value = float(value)
-        return value if value > 0 and value == value else None
-    except (OSError, ValueError, TypeError, AttributeError):
-        return None
+            info = json.load(f)
+    except (OSError, ValueError):
+        return None, ""
+    if not isinstance(info, dict):
+        return None, ""
+    video_id = info.get("id") if isinstance(info.get("id"), str) else ""
+    try:
+        value = float(info.get("duration"))
+    except (TypeError, ValueError, OverflowError):
+        return None, video_id
+    return (value if value > 0 and value == value and value != float("inf") else None), video_id
 
 
 def _cue_seconds(match: tuple) -> float:
@@ -336,7 +364,7 @@ async def fetch_youtube(url: str, sub_lang: str = "en") -> Dict[str, Any]:
     # Step 1: Get metadata via Jina (fast, always works)
     jina_data = fetch_via_jina(video_url or url)
     title = jina_data["title"]
-    page_state = _page_state(title, jina_data.get("content", ""))
+    page_state = _page_state(video_id, title, jina_data.get("content", ""), jina_data.get("source_url", ""))
 
     # Step 2: Try yt-dlp subtitles (with timing, so coverage can be proven).
     # The hosted surface runs no external tools: a hosted read is one process.
@@ -381,4 +409,6 @@ async def fetch_youtube(url: str, sub_lang: str = "en") -> Dict[str, Any]:
     }
     if transcript_source == "subtitles":
         result.update(cue_coverage(subs["cues"]))
+        # yt-dlp's own metadata for the subtitles names the video they belong to.
+        result["transcript_video_id"] = subs.get("video_id", "")
     return result

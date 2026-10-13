@@ -411,6 +411,18 @@ class GenericReadTest(unittest.TestCase):
         self.assertIs(content.extra["body_verified"], True)
         self.assertEqual(content.extra["embedded_media"], 1)
 
+    def test_local_jina_text_must_carry_the_whole_page(self):
+        paragraphs = [f"Paragraph {i} explains a separate step of the method in plain words for readers." for i in range(20)]
+        page = dict(self.PAGE, content="\n".join(paragraphs))
+        for jina_text in ("\n".join(paragraphs[:6]), "Completely different text from another page. " * 30):
+            with patch("x_reader.fetchers.jina.fetch_html_page", return_value=page), \
+                    patch("x_reader.reader.fetch_via_jina", return_value=dict(self.JINA, content=jina_text)):
+                content = self._read("https://e.com/a")
+            # the direct read is shown instead, so what is shown is what was checked
+            self.assertEqual(content.extra["fetch_method"], "direct_html_pinned")
+            self.assertEqual(content.content, page["content"])
+            self.assertIs(content.extra["body_verified"], True)
+
     def test_local_jina_text_needs_a_matching_direct_read(self):
         for direct in (dict(self.PAGE, content=""), dict(self.PAGE, content="Loading, please wait.")):
             with patch("x_reader.fetchers.jina.fetch_html_page", return_value=direct), \
@@ -477,8 +489,9 @@ class GenericReadTest(unittest.TestCase):
 
     def test_walls_beside_the_main_content_still_count(self):
         main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
+        # beside a substantial main, a login notice may be a wall or a quote: not PASS, not FAIL
         for notice, status in (("<div>Subscribe to continue reading this story.</div>", "PARTIAL"),
-                               ("<div>Please sign in to continue.</div>", "FAIL"),
+                               ("<div>Please sign in to continue.</div>", "UNKNOWN"),
                                ("<div><h1>Page not found</h1></div>", "UNKNOWN")):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{notice}{main}</body></html>")
             self.assertEqual(receipt["status"], status, notice)
@@ -495,12 +508,14 @@ class GenericReadTest(unittest.TestCase):
             return f"<html><head><title>{title}</title></head><body>{before}{long_main}{after}</body></html>"
 
         cases = (
-            (page(after="<div>Please sign in to continue.</div>"), "FAIL"),
-            (page(after="<div>Checking your browser before accessing the site.</div>"), "FAIL"),
+            (page(after="<div>Please sign in to continue.</div>"), "UNKNOWN"),
+            (page(after="<div>Checking your browser before accessing the site.</div>"), "UNKNOWN"),
+            (page(title="Just a moment..."), "FAIL"),
+            (page(title="Sign in | Example"), "FAIL"),
             (page(after="<h2>Page not found</h2>"), "UNKNOWN"),
             (page(after="<p><a href='/full'>Continue reading</a></p>"), "PARTIAL"),
             (page(after="<footer>Subscribe to continue reading.</footer>"), "PARTIAL"),
-            (page(before="<nav>Please sign in to continue</nav>"), "FAIL"),
+            (page(before="<nav>Please sign in to continue</nav>"), "UNKNOWN"),
             (page(title="Subscribe to continue | Example"), "PARTIAL"),
             (page(title="Page not found: /old-slug"), "UNKNOWN"),
             (page(before="<h1>Error: This page does not exist</h1>"), "UNKNOWN"),
@@ -514,7 +529,12 @@ class GenericReadTest(unittest.TestCase):
         for notice in ("<div style='display:none; display:block'>Subscribe to continue reading.</div>",
                        "<div hidden style='display: flex'>Subscribe to continue reading.</div>",
                        "<div style='visibility:hidden'><p style='visibility:visible'>Subscribe to continue reading.</p></div>",
-                       "<div style='display:block !important; display:none'>Subscribe to continue reading.</div>"):
+                       "<div style='display:block !important; display:none'>Subscribe to continue reading.</div>",
+                       "<div style='display:none;/**/display:block'>Subscribe to continue reading.</div>",
+                       "<div style='display:none!important;display:block ! important'>Subscribe to continue reading.</div>",
+                       """<div style='display:block;--label:"x; display:none ;"'>Subscribe to continue reading.</div>""",
+                       "<div style='display:none;dis\\play:block'>Subscribe to continue reading.</div>",
+                       "<div style='display:block' style='display:none'>Subscribe to continue reading.</div>"):
             _page, receipt = self._page_receipt(
                 f"<html><head><title>T</title></head><body>{long_main}{notice}</body></html>")
             self.assertEqual(receipt["status"], "PARTIAL", notice)
@@ -526,6 +546,17 @@ class GenericReadTest(unittest.TestCase):
             _page, receipt = self._page_receipt(
                 f"<html><head><title>T</title></head><body>{long_main}{template}</body></html>")
             self.assertEqual(receipt["status"], "PASS", template)
+
+    def test_frame_size_comes_from_inline_css_first(self):
+        main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
+        for frame, counted in (("<iframe width='1' style='width:600px;height:400px' src='https://p.example/v'>", 1),
+                               ("<iframe width='1' height='1' style='transform:scale(400)' src='https://p.example/v'>", 1),
+                               ("<iframe width='1' src='https://p.example/v'>", 1),
+                               ("<iframe width='0' height='0' style='border:0' src='https://t.example/p'>", 0),
+                               ("<iframe style='width:0;height:0;border:none' src='https://t.example/p'>", 0)):
+            page, _receipt = self._page_receipt(
+                f"<html><head><title>T</title></head><body>{main}{frame}</iframe></body></html>")
+            self.assertEqual(page["embedded_media"], counted, frame)
 
     def test_aria_hidden_frames_are_still_visible_embeds(self):
         main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
@@ -574,9 +605,34 @@ class YoutubeTest(unittest.TestCase):
     def test_youtube_error_pages_are_recognised(self):
         from x_reader.fetchers import youtube
 
-        self.assertEqual(youtube._page_state("YouTube", "Video unavailable. This video is private."), "unavailable")
-        self.assertEqual(youtube._page_state("- YouTube", "Something"), "unidentified")
-        self.assertEqual(youtube._page_state("Rick Astley - Never Gonna Give You Up", "Official video"), "ok")
+        vid = "abcdefghijk"
+        watch = f"https://www.youtube.com/watch?v={vid}"
+        state = youtube._page_state
+        self.assertEqual(state(vid, "YouTube", "This video isn't available anymore\nVideo unavailable"), "unavailable")
+        self.assertEqual(state(vid, "- YouTube", "Something"), "unidentified")
+        self.assertEqual(state(vid, "Rick Astley - Never Gonna Give You Up", "Official video", watch), "ok")
+        self.assertEqual(state(vid, "YouTube Rewind 2018", "Official video"), "ok")
+        # a title discussing the error is still a video title
+        self.assertEqual(state(vid, "How to fix 'Video unavailable' errors", "Video unavailable explained"), "ok")
+        for title in ("Before you continue to YouTube", "Sign in - YouTube", "Consent", ""):
+            self.assertEqual(state(vid, title, "Before you continue"), "unidentified", title)
+        self.assertEqual(state(vid, "Bevor Sie zu YouTube weitergehen", "[Accept](https://consent.youtube.com/s)"),
+                         "unidentified")
+        # no single video, or Jina read another page
+        self.assertEqual(state("", "Some channel", "Videos"), "unidentified")
+        self.assertEqual(state(vid, "A video", "x", "https://consent.youtube.com/m?continue=x"), "unidentified")
+        self.assertEqual(state(vid, "A video", "x", "https://www.youtube.com/watch?v=zzzzzzzzzzz"), "unidentified")
+
+    def test_jina_envelope_is_parsed(self):
+        from x_reader.fetchers.jina import _parse_jina_text
+
+        text = ("Title: YouTube\n\nURL Source: https://www.youtube.com/watch?v=abcdefghijk\n\n"
+                "Warning: Target URL returned error 401: Unauthorized\n\nMarkdown Content:\nVideo unavailable\n")
+        title, content, headers = _parse_jina_text(text)
+        self.assertEqual(title, "YouTube")
+        self.assertEqual(content, "Video unavailable")
+        self.assertEqual(headers["url source"], ["https://www.youtube.com/watch?v=abcdefghijk"])
+        self.assertEqual(_parse_jina_text("# Plain\n\nBody text")[:2], ("Plain", "Body text"))
 
     def test_non_video_urls_never_reach_yt_dlp(self):
         from x_reader.fetchers import youtube
@@ -608,10 +664,12 @@ class YoutubeTest(unittest.TestCase):
             self.assertEqual(coverage["transcript_covered_seconds"], 15.25)
             self.assertEqual(coverage["transcript_max_gap_seconds"], 582.0)
             info = Path(tmp) / "s.info.json"
-            info.write_text(json.dumps({"duration": 600}))
-            self.assertEqual(youtube._read_duration(str(info)), 600.0)
+            info.write_text(json.dumps({"duration": 600, "id": "abcdefghijk"}))
+            self.assertEqual(youtube._read_info(str(info)), (600.0, "abcdefghijk"))
             info.write_text(json.dumps({"duration": "NaN"}))
-            self.assertIsNone(youtube._read_duration(str(info)))
+            self.assertEqual(youtube._read_info(str(info)), (None, ""))
+            info.write_text("[1, 2]")
+            self.assertEqual(youtube._read_info(str(info)), (None, ""))
 
     def test_yt_dlp_calls_are_pinned_to_youtube_and_bounded(self):
         from x_reader.fetchers import youtube

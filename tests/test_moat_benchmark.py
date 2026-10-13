@@ -134,7 +134,8 @@ class MoatBenchmarkTest(unittest.TestCase):
         cases = (
             # a transcript flag alone used to count as MEDIA_COMPLETE
             ({"source_type": "youtube", "media_type": "video", "title": "V", "content": "transcript " * 40,
-              "extra": {"has_transcript": True, "transcript_source": "subtitles", "duration": 600}},
+              "extra": {"has_transcript": True, "transcript_source": "subtitles", "duration": 600,
+                        "video_id": "abcdefghijk", "page_state": "ok"}},
              "PARTIAL", "PARTIAL_MEDIA"),
             # media_status=unknown used to default to PASS
             ({"source_type": "twitter", "media_type": "text", "title": "X", "content": "post text " * 30,

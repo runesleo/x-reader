@@ -68,40 +68,110 @@ _VOID_TAGS = {
 }
 
 
-def _inline_display(style: str) -> str | None:
-    """The display value an inline style ends up with (declaration order and
-    !important respected), or None when the style does not set display."""
-    winner, winner_important = None, False
-    for declaration in style.split(";"):
-        name, _, value = declaration.partition(":")
-        if name.strip().lower() != "display":
+_IMPORTANT = re.compile(r"!\s*important\s*$", re.IGNORECASE)
+
+
+def _inline_declarations(style: str) -> list | None:
+    """Parse an inline style into (property, value, important) declarations.
+
+    Comments, quoted strings and parentheses are honoured, so a ";" or
+    "display:none" inside them is not a declaration. None when the style cannot
+    be parsed with confidence (escapes, unterminated comment or string).
+    """
+    if "\\" in style:
+        return None  # CSS escapes can spell any property ("dis\\play")
+    declarations, current, quote, depth, i = [], [], "", 0, 0
+    while i < len(style):
+        char = style[i]
+        if quote:
+            current.append(char)
+            if char == quote:
+                quote = ""
+        elif style.startswith("/*", i):
+            end = style.find("*/", i + 2)
+            if end == -1:
+                return None
+            i = end + 2
             continue
-        value = value.strip().lower()
-        important = value.endswith("!important")
-        value = value.replace("!important", "").strip()
-        if important or not winner_important:
-            winner, winner_important = value, important or winner_important
+        elif char in "\"'":
+            quote = char
+            current.append(char)
+        elif char == "(":
+            depth += 1
+            current.append(char)
+        elif char == ")":
+            depth = max(0, depth - 1)
+            current.append(char)
+        elif char == ";" and not depth:
+            declarations.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+        i += 1
+    if quote:
+        return None
+    declarations.append("".join(current))
+    parsed = []
+    for declaration in declarations:
+        name, colon, value = declaration.partition(":")
+        if not colon:
+            continue
+        value = value.strip()
+        important = bool(_IMPORTANT.search(value))
+        parsed.append((name.strip().lower(), _IMPORTANT.sub("", value).strip().lower(), important))
+    return parsed
+
+
+def _effective(declarations: list, prop: str) -> str | None:
+    """The value a property ends up with: the last !important one, else the last one."""
+    winner, winner_important = None, False
+    for name, value, important in declarations:
+        if name == prop and (important or not winner_important):
+            winner, winner_important = value, important
     return winner
 
 
 def _is_hidden_element(attrs: dict) -> bool:
     """Provably not rendered: an effective inline display:none, or the hidden
     attribute with no inline display overriding it. Anything else counts as
-    visible: visibility can be undone by children, external CSS is unknown and
-    aria-hidden only hides from assistive technology."""
-    display = _inline_display(attrs.get("style") or "")
+    visible: a style that cannot be parsed, visibility (children can undo it),
+    external CSS and aria-hidden (assistive technology only)."""
+    declarations = _inline_declarations(attrs.get("style") or "")
+    if declarations is None:
+        return False
+    display = _effective(declarations, "display")
     if display is not None:
         return display == "none"
     return "hidden" in attrs
 
 
+_TINY = {"0", "1", "0px", "1px"}
+# Inline properties that cannot make a 0/1-pixel frame show its content.
+_SIZE_NEUTRAL = {
+    "display", "visibility", "border", "position", "top", "left", "right", "bottom", "margin",
+    "padding", "opacity", "overflow", "clip", "clip-path", "z-index", "pointer-events", "float",
+    "width", "height",
+}
+
+
 def _is_hidden_embed(attrs: dict) -> bool:
-    """Hidden or zero-size frames (tracking pixels, tag managers) carry no content."""
-    return (
-        _is_hidden_element(attrs)
-        or (attrs.get("width") or "").strip() in ("0", "1")
-        or (attrs.get("height") or "").strip() in ("0", "1")
-    )
+    """Hidden frames, or frames whose effective size is 0/1 pixel each way
+    (tracking pixels). Inline width/height override the attributes; any other
+    inline property that could enlarge the frame (transform, zoom, min-height,
+    ...) makes it count as visible."""
+    if _is_hidden_element(attrs):
+        return True
+    declarations = _inline_declarations(attrs.get("style") or "")
+    if declarations is None:
+        return False
+    for name, _value, _important in declarations:
+        if name not in _SIZE_NEUTRAL and not name.startswith(("border-", "margin-", "padding-")):
+            return False
+    width = _effective(declarations, "width")
+    height = _effective(declarations, "height")
+    width = attrs.get("width") or "" if width is None else width
+    height = attrs.get("height") or "" if height is None else height
+    return width.strip().lower() in _TINY and height.strip().lower() in _TINY
 
 
 def _join_text(parts: list) -> str:
@@ -160,7 +230,9 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
 
         def handle_starttag(self, tag, attrs):
             tag = tag.lower()
-            values = dict(attrs)
+            values = {}
+            for name, value in attrs:
+                values.setdefault(name, value)  # browsers keep the first of repeated attributes
             if tag == "head":
                 self.in_head = True
                 return
@@ -603,6 +675,41 @@ def _download_html(url: str, max_redirects: int = 5, hop_guard=None) -> tuple[st
     raise requests.TooManyRedirects(f"Too many redirects while fetching: {url}")
 
 
+_JINA_HEADER = re.compile(r"^(Title|URL Source|Published Time|Warning|Description|Number of Pages):[ \t]?(.*)$")
+
+
+def _parse_jina_text(text: str) -> tuple:
+    """Split a Jina Reader response into (title, content, header fields).
+
+    Responses open with "Title: ...", "URL Source: ..." (the page Jina read) and
+    optional "Published Time:" / "Warning:" lines, then "Markdown Content:".
+    Anything else is a first-line title followed by the content.
+    """
+    lines = text.strip().split("\n")
+    if not lines or not lines[0].startswith("Title:"):
+        title, content_lines = "", []
+        for line in lines:
+            if not title and line.strip():
+                title = line.lstrip("#").strip()
+            else:
+                content_lines.append(line)
+        return title, "\n".join(content_lines).strip(), {}
+    headers: dict = {}
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.strip() == "Markdown Content:":
+            index += 1
+            break
+        match = _JINA_HEADER.match(line)
+        if match:
+            headers.setdefault(match.group(1).lower(), []).append(match.group(2).strip())
+        elif line.strip():
+            break
+        index += 1
+    return (headers.get("title") or [""])[0], "\n".join(lines[index:]).strip(), headers
+
+
 def fetch_via_jina(url: str) -> dict:
     """
     Fetch a target URL via r.jina.ai using the same pinned-IP network boundary.
@@ -645,16 +752,7 @@ def fetch_via_jina(url: str) -> dict:
         )
         text = body.decode(encoding, errors="replace")
 
-        lines = text.strip().split("\n")
-        title = ""
-        content_lines = []
-        for line in lines:
-            if not title and line.strip():
-                title = line.lstrip("#").strip()
-            else:
-                content_lines.append(line)
-
-        content = "\n".join(content_lines).strip()
+        title, content, headers = _parse_jina_text(text)
         if len(content) < 20:
             raise ValueError("Jina returned too little readable content")
 
@@ -662,6 +760,7 @@ def fetch_via_jina(url: str) -> dict:
             "title": title[:200],
             "content": content,
             "url": url,
+            "source_url": (headers.get("url source") or [""])[0],
             "author": "",
             "fetch_method": "jina_pinned",
         }

@@ -2,6 +2,8 @@ import unittest
 
 from x_reader.evidence import build_receipt, classify_payload
 
+VERIFIED = {"redirects_verified": True, "embedded_media": 0, "page_signals": [], "body_verified": True}
+
 ARTICLE = (
     "Readers of this long-form article will find a careful argument here.\n"
     "Each paragraph adds context, evidence and a clear conclusion for them.\n"
@@ -24,7 +26,7 @@ def _youtube(**extra):
     return classify_payload({
         "source_type": "youtube", "content": "spoken transcript", "media_type": "video",
         "extra": {"has_transcript": True, "transcript_source": "subtitles", "duration": 600,
-                  "page_state": "ok", **extra},
+                  "page_state": "ok", "video_id": "abcdefghijk", "transcript_video_id": "abcdefghijk", **extra},
     })
 
 
@@ -116,15 +118,36 @@ class EvidenceContractTest(unittest.TestCase):
             self.assertEqual(result["components"]["spoken_media"], "PARTIAL", extra)
         whisper = classify_payload({"source_type": "youtube", "content": "t", "media_type": "video",
                                     "extra": {"has_transcript": True, "transcript_source": "whisper",
-                                              "duration": 600}})
+                                              "duration": 600, "video_id": "abcdefghijk", "page_state": "ok"}})
         self.assertEqual(whisper["reason_code"], "transcript_coverage_unproven")
+
+    def test_youtube_transcript_and_page_are_rated_on_their_own(self):
+        full = {"transcript_start_seconds": 0.5, "transcript_end_seconds": 592,
+                "transcript_covered_seconds": 560, "transcript_max_gap_seconds": 4}
+        # subtitles yt-dlp did not attribute to this video prove nothing about its speech
+        for other in ("", "zzzzzzzzzzz"):
+            result = _youtube(transcript_video_id=other, **full)
+            self.assertEqual(result["reason_code"], "transcript_coverage_unproven", other)
+            self.assertEqual(result["components"]["spoken_media"], "PARTIAL", other)
+        # a transcript never upgrades a page that is unavailable or not the video's
+        for state, metadata in (("unavailable", "FAIL"), ("unidentified", "UNKNOWN"), ("", "UNKNOWN")):
+            result = _youtube(page_state=state, **full)
+            self.assertEqual(result["status"], "PARTIAL", state)
+            self.assertEqual(result["components"]["page_metadata"], metadata, state)
+            self.assertEqual(result["components"]["spoken_media"], "PASS", state)
+        # no single video: nothing is tied to a video, transcript flag or not
+        for extra in ({"has_transcript": True, "page_state": "ok", "video_id": ""},
+                      {"has_transcript": False, "page_state": "unidentified", "video_id": ""}):
+            result = classify_payload({"source_type": "youtube", "content": "page", "media_type": "video",
+                                       "extra": extra})
+            self.assertEqual(result["status"], "UNKNOWN", extra)
 
     def test_youtube_description_only_is_partial(self):
         result = classify_payload({
             "source_type": "youtube",
             "content": "page description",
             "media_type": "video",
-            "extra": {"has_transcript": False, "page_state": "ok"},
+            "extra": {"has_transcript": False, "page_state": "ok", "video_id": "abcdefghijk"},
         })
         self.assertEqual(result["status"], "PARTIAL")
         self.assertEqual(result["reason_code"], "spoken_media_unread")
@@ -134,20 +157,49 @@ class EvidenceContractTest(unittest.TestCase):
                                       ("unidentified", "UNKNOWN", "video_unidentified"),
                                       ("", "UNKNOWN", "video_unidentified")):
             result = classify_payload({"source_type": "youtube", "content": "Video unavailable", "media_type": "video",
-                                       "extra": {"has_transcript": False, "page_state": state}})
+                                       "extra": {"has_transcript": False, "page_state": state,
+                                                 "video_id": "abcdefghijk"}})
             self.assertEqual((result["status"], result["reason_code"]), (status, reason), state)
 
-    def test_wall_notices_are_anchored_to_short_lines(self):
-        verified = {"redirects_verified": True, "embedded_media": 0, "page_signals": [], "body_verified": True}
+    def test_wall_notices_open_a_line_of_any_length(self):
+        long_prompt = "Please sign in to continue. " + "Lorem ipsum dolor sit amet, consectetur adipiscing. " * 10
         for title, body, status in (
             ("Troubleshooting authentication required errors", ARTICLE * 2, "PASS"),
+            ("Authentication required errors: causes and fixes", ARTICLE * 2, "PASS"),
+            ("Request blocked errors explained", "Request blocked errors follow a firewall match.\n" + ARTICLE * 2,
+             "PASS"),
+            ("403. What It Means for Your API", ARTICLE * 2, "PASS"),
+            ("404. A History of the Web", ARTICLE * 2, "PASS"),
             ("Research notes", ARTICLE * 2 + "\nContinue reading our latest research", "PASS"),
+            ("Blog", ARTICLE * 2 + "\nYou must be logged in to post a comment.", "PASS"),
+            ("Blog", ARTICLE * 2 + "\nSign in to view your account", "PASS"),
+            ("Blog", ARTICLE * 2 + "\nAdvertisement - Continue Reading Below\n" + ARTICLE, "PASS"),
             ("Example", "Page not found (404)\n" + ARTICLE * 3, "UNKNOWN"),
             ("Example", "Page not found. Try searching our site.\n" + ARTICLE * 3, "UNKNOWN"),
-            ("Example", ARTICLE * 2 + "\nPlease sign in to continue.", "FAIL"),
+            ("Example", long_prompt, "FAIL"),
+            ("Just a moment... | Example", ARTICLE * 2, "FAIL"),
+            ("Attention Required! | Example", ARTICLE * 2, "FAIL"),
+            # beside substantial prose a notice may be a wall or a quote: neither pass nor fail
+            ("Example", ARTICLE * 2 + "\nPlease sign in to continue.", "UNKNOWN"),
+            ("Example", ARTICLE * 2 + "\nAccess denied.", "UNKNOWN"),
+            # prompts inside a sentence are hints
+            ("Blog", ARTICLE * 2 + "\nTo read this story, please sign in.", "UNKNOWN"),
+            ("Blog", ARTICLE * 2 + "\nThis content is for members. Login required.", "UNKNOWN"),
+            ("Blog", ARTICLE * 2 + "\nIf you see this, verify you are human to proceed.", "UNKNOWN"),
         ):
-            result = classify_payload({"source_type": "manual", "title": title, "content": body, "extra": verified})
-            self.assertEqual(result["status"], status, (title, body[:30]))
+            result = classify_payload({"source_type": "manual", "title": title, "content": body, "extra": VERIFIED})
+            self.assertEqual(result["status"], status, (title, body[-40:]))
+
+    def test_known_missing_page_wording_never_passes(self):
+        for opening in ("Page not found (Error 404)", "Page not found [ERROR 404]", "Page not found (HTTP 404)",
+                        "Page not found, try searching our site.", "[ERROR 404]", "(HTTP 404)", "404 - Page not found",
+                        "Page not found. " + "We looked everywhere for the page you wanted, but it has wandered off.",
+                        "We're sorry, but the page you requested could not be found.",
+                        "Error: This page does not exist", "The page you are looking for might have been removed.",
+                        "PAGE NOT FOUND", "Page Not Found: /old-slug"):
+            result = classify_payload({"source_type": "manual", "title": "Example", "content": opening + "\n" + ARTICLE * 3,
+                                       "extra": VERIFIED})
+            self.assertEqual(result["reason_code"], "possibly_missing_page", opening)
 
     def test_generic_pass_needs_the_shown_body_verified(self):
         result = classify_payload({"source_type": "manual", "title": "A", "content": ARTICLE * 2,
@@ -172,16 +224,21 @@ class EvidenceContractTest(unittest.TestCase):
 
     def test_generic_page_with_embedded_audio_or_video_is_partial(self):
         result = classify_payload({"source_type": "manual", "title": "A", "content": ARTICLE,
-                                   "extra": {"redirects_verified": True, "embedded_media": 2}})
+                                   "extra": dict(VERIFIED, embedded_media=2)})
         self.assertEqual(result["status"], "PARTIAL")
         self.assertEqual(result["reason_code"], "embedded_media_unread")
+        # no component may pass before the shown body is verified
+        unverified = classify_payload({"source_type": "manual", "title": "A", "content": ARTICLE,
+                                       "extra": dict(VERIFIED, embedded_media=1, body_verified=False)})
+        self.assertEqual(unverified["status"], "UNKNOWN")
+        self.assertEqual(unverified["components"], {"text_body": "UNKNOWN"})
 
     def test_generic_length_alone_does_not_pass(self):
         nav = "\n".join(["Home", "About us", "Pricing", "Blog", "Careers", "Contact sales"] * 20)
         links = "\n".join(f"[Item {i}](https://example.com/{'a' * 60}/{i})" for i in range(20))
         headlines = "\n".join(f"How one team rebuilt its whole data platform in week {i}" for i in range(20))
         for body in ("Home About Contact", "x" * 400, nav, links, headlines):
-            result = classify_payload({"source_type": "manual", "title": "Example", "content": body})
+            result = classify_payload({"source_type": "manual", "title": "Example", "content": body, "extra": VERIFIED})
             self.assertEqual(result["status"], "UNKNOWN", body[:30])
             self.assertEqual(result["reason_code"], "thin_generic_body", body[:30])
 
@@ -192,8 +249,13 @@ class EvidenceContractTest(unittest.TestCase):
             ARTICLE + "\n本文为会员专享内容，开通会员后阅读全文。",
             ARTICLE + "\n点击继续阅读全文",
             ARTICLE + "\nContinue reading",
+            ARTICLE + "\nContinue reading this article",
+            ARTICLE + "\nRead the rest of this article",
+            ARTICLE + "\nContinue reading on the publisher website →",
+            ARTICLE + "\nThe market fell 3% on Monday. Continue reading →",
+            ARTICLE + "\nKEEP READING…",
         ):
-            result = classify_payload({"source_type": "manual", "title": "Story", "content": body})
+            result = classify_payload({"source_type": "manual", "title": "Story", "content": body, "extra": VERIFIED})
             self.assertEqual(result["status"], "PARTIAL", body[-40:])
             self.assertEqual(result["reason_code"], "paywall_or_teaser", body[-40:])
 
@@ -250,11 +312,12 @@ class EvidenceContractTest(unittest.TestCase):
         self.assertEqual(branded["reason_code"], "possibly_missing_page")
 
     def test_page_wide_signals_are_honoured(self):
-        for signal, status in (("paywall", "PARTIAL"), ("auth_required", "FAIL"), ("missing_page", "UNKNOWN"),
-                               ("consent", "UNKNOWN")):
+        for signal, status in (("paywall", "PARTIAL"), ("auth_title", "FAIL"), ("challenge_title", "FAIL"),
+                               ("auth_required", "UNKNOWN"), ("challenge_or_error", "UNKNOWN"),
+                               ("missing_page", "UNKNOWN"), ("consent", "UNKNOWN"), ("auth_hint", "UNKNOWN"),
+                               ("challenge_hint", "UNKNOWN"), ("missing_hint", "UNKNOWN")):
             result = classify_payload({"source_type": "manual", "title": "A", "content": ARTICLE * 2,
-                                       "extra": {"redirects_verified": True, "embedded_media": 0,
-                                                 "page_signals": [signal]}})
+                                       "extra": dict(VERIFIED, page_signals=[signal])})
             self.assertEqual(result["status"], status, signal)
 
     def test_walls_mentioned_later_in_an_article_do_not_count(self):

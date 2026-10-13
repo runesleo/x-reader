@@ -20,13 +20,24 @@ from x_reader.routing import allowed_platforms, detect_platform, hosted_mode
 from x_reader.utils.url_validator import validate_url
 
 
+# Jina's text stands in for the page only when it carries it: most of what it
+# shows is on the page, and it shows nearly all of the page's main text
+# (counted in overlapping word runs, both ways).
+SHOWN_ON_PAGE_SHARE = 0.7
+PAGE_IN_SHOWN_SHARE = 0.8
+
+
 def _same_text(shown: str, read_directly: str) -> bool:
-    """Most of the shown text's word runs appear in the directly read page."""
+    """The shown text and the directly read page carry the same text."""
     from x_reader.evidence import visible_text
     from x_reader.utils.textmatch import overlap
 
     shares = overlap(visible_text(shown), visible_text(read_directly))
-    return shares is not None and shares[0] >= 0.5
+    return (
+        shares is not None
+        and shares[0] >= SHOWN_ON_PAGE_SHARE
+        and shares[1] >= PAGE_IN_SHOWN_SHARE
+    )
 
 
 class UniversalReader:
@@ -162,8 +173,8 @@ class UniversalReader:
         where the URL leads and shows embedded players and frames. Jina follows
         redirects on its own side and may be sent elsewhere, so the hosted surface
         never uses it: there the reader returns only text this process fetched over
-        checked hops. Locally Jina's cleaner text is preferred, with the direct read
-        as evidence.
+        checked hops. Locally Jina's cleaner text is shown when it matches the
+        direct read both ways; otherwise the direct read itself is shown.
         """
         from x_reader.fetchers.jina import BlockedDestination, CrossPlatformRedirect, fetch_html_page
 
@@ -193,16 +204,21 @@ class UniversalReader:
                 raise ValueError("The page returned too little readable text")
             data, body_verified = page, True  # the text shown is the text that was checked
         else:
+            jina = None
             try:
-                data = await asyncio.to_thread(fetch_via_jina, target_url)
-                # Jina's text counts as checked only when it matches what x-reader
-                # itself read on the page.
-                body_verified = bool(page) and _same_text(data["content"], page["content"])
+                jina = await asyncio.to_thread(fetch_via_jina, target_url)
             except Exception as exc:
                 if not page_usable:
                     raise
                 logger.warning(f"Jina read failed ({type(exc).__name__}); using the direct read")
+            if jina is not None and page_usable and _same_text(jina["content"], page["content"]):
+                data, body_verified = jina, True
+            elif page_usable:
+                if jina is not None:
+                    logger.warning("Jina's text does not match the page; using the direct read")
                 data, body_verified = page, True
+            else:
+                data, body_verified = jina, False  # nothing x-reader read itself to check it against
 
         return UnifiedContent(
             source_type=SourceType.MANUAL,
