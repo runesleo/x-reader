@@ -16,6 +16,7 @@ from x_reader.schema import (
     from_xiaohongshu, from_youtube, from_rss, from_telegram, from_podcast,
 )
 from x_reader.fetchers.jina import fetch_via_jina
+from x_reader.routing import allowed_platforms, detect_platform, hosted_mode
 from x_reader.utils.url_validator import validate_url
 
 
@@ -39,28 +40,8 @@ class UniversalReader:
         self.full_long_audio = full_long_audio
 
     def _detect_platform(self, url: str) -> str:
-        """Detect platform from URL."""
-        domain = urlparse(url).netloc.lower()
-
-        if "mp.weixin.qq.com" in domain:
-            return "wechat"
-        if "x.com" in domain or "twitter.com" in domain:
-            return "twitter"
-        if "youtube.com" in domain or "youtu.be" in domain:
-            return "youtube"
-        if "xiaohongshu.com" in domain or "xhslink.com" in domain:
-            return "xhs"
-        if "bilibili.com" in domain or "b23.tv" in domain:
-            return "bilibili"
-        if "xiaoyuzhoufm.com" in domain:
-            return "podcast"
-        if "podcasts.apple.com" in domain:
-            return "podcast"
-        if "t.me" in domain or "telegram.org" in domain:
-            return "telegram"
-        if url.endswith(".xml") or "/rss" in url or "/feed" in url or "/atom" in url:
-            return "rss"
-        return "generic"
+        """Detect platform from URL (shared with the hosted surface)."""
+        return detect_platform(url)
 
     async def read(self, url: str) -> UnifiedContent:
         """
@@ -75,12 +56,18 @@ class UniversalReader:
         await asyncio.to_thread(validate_url, url)
 
         platform = self._detect_platform(url)
+        allowed = allowed_platforms()
+        if allowed is not None and platform not in allowed:
+            raise ValueError(f"Platform '{platform}' is not allowed in this environment")
         if (self.full_short_audio or self.full_long_audio) and platform != "podcast":
             raise ValueError("Full-audio mode supports podcast episodes only")
         logger.info(f"[{platform}] {url[:60]}...")
 
         try:
             content = await self._fetch(platform, url)
+
+            if hosted_mode():
+                return content  # hosted requests never persist anything
 
             if self.inbox:
                 if self.inbox.add(content):
@@ -143,9 +130,14 @@ class UniversalReader:
 
         if platform == "telegram":
             from x_reader.fetchers.telegram import fetch_telegram
-            path = urlparse(url).path.strip("/").split("/")[0]
-            channel = path if path else url
-            messages = await fetch_telegram(channel, limit=1)
+            parts = [p for p in urlparse(url).path.split("/") if p]
+            if parts and parts[0] == "s":  # t.me/s/<channel>/<id> web preview
+                parts = parts[1:]
+            if not parts:
+                raise ValueError(f"Telegram URL has no channel: {url}")
+            channel = parts[0]
+            message_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+            messages = await fetch_telegram(channel, limit=1, message_id=message_id)
             if messages:
                 return from_telegram(messages[0], channel, channel)
             raise ValueError(f"No messages from Telegram channel: {url}")

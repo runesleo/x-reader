@@ -22,6 +22,8 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from x_reader.evidence import build_receipt, failure_receipt
+from x_reader.routing import ALLOWED_PLATFORMS_ENV, HOSTED_ENV, detect_platform, host_matches
+from x_reader.utils.proc import run_bounded
 
 
 MAX_BODY_BYTES = 4096
@@ -30,35 +32,18 @@ MAX_PREVIEW_CHARS = 1200
 REQUEST_TIMEOUT_SECONDS = 75
 REQUEST_SLOTS = threading.BoundedSemaphore(4)
 ALLOWED_PLATFORMS = {"twitter", "youtube", "generic"}
+SOCKET_TIMEOUT_SECONDS = 15
+MAX_CONNECTION_THREADS = 32
+MAX_CLI_OUTPUT_BYTES = 8 * 1024 * 1024
 
 
 class HostedPolicyError(ValueError):
     """The URL is valid input but outside the public hosted MVP policy."""
 
 
-def _host_matches(host: str, domain: str) -> bool:
-    host = host.lower().rstrip(".")
-    domain = domain.lower().rstrip(".")
-    return host == domain or host.endswith("." + domain)
-
-
-def detect_platform(url: str) -> str:
-    host = (urlparse(url).hostname or "").lower()
-    if _host_matches(host, "x.com") or _host_matches(host, "twitter.com"):
-        return "twitter"
-    if _host_matches(host, "youtube.com") or _host_matches(host, "youtu.be"):
-        return "youtube"
-    if _host_matches(host, "t.me") or _host_matches(host, "telegram.org"):
-        return "telegram"
-    if _host_matches(host, "mp.weixin.qq.com"):
-        return "wechat"
-    if _host_matches(host, "xiaohongshu.com") or _host_matches(host, "xhslink.com"):
-        return "xhs"
-    if _host_matches(host, "bilibili.com") or _host_matches(host, "b23.tv"):
-        return "bilibili"
-    if _host_matches(host, "xiaoyuzhoufm.com") or _host_matches(host, "podcasts.apple.com"):
-        return "podcast"
-    return "generic"
+# Routing is shared with the CLI reader (x_reader.routing), so the policy check
+# below and the reader that actually fetches can never disagree about a URL.
+_host_matches = host_matches
 
 
 def normalize_input_url(raw_url: str) -> str:
@@ -85,16 +70,19 @@ def validate_public_url(url: str) -> str:
 
 
 def _minimal_child_env(home: Path, inbox_file: Path) -> dict[str, str]:
-    """Pass only non-secret process settings needed by the public reader."""
+    """Pass only non-secret process settings needed by the public reader.
+
+    Proxies are not inherited: a proxy would fetch on the server's behalf and
+    bypass the pinned, per-hop validated connections. X_READER_HOSTED makes the
+    child skip .env loading and all persistence; the platform allowlist makes the
+    reader refuse anything the hosted policy did not approve.
+    """
     allow = (
         "PATH",
         "LANG",
         "LC_ALL",
         "SSL_CERT_FILE",
         "REQUESTS_CA_BUNDLE",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "NO_PROXY",
         "SYSTEMROOT",
     )
     env = {key: os.environ[key] for key in allow if os.environ.get(key)}
@@ -103,6 +91,8 @@ def _minimal_child_env(home: Path, inbox_file: Path) -> dict[str, str]:
     env["TMPDIR"] = str(home / "tmp")
     env["INBOX_FILE"] = str(inbox_file)
     env["X_READER_ALLOW_EXTERNAL_SESSION_COOKIES"] = "0"
+    env[HOSTED_ENV] = "1"
+    env[ALLOWED_PLATFORMS_ENV] = ",".join(sorted(ALLOWED_PLATFORMS))
     return env
 
 
@@ -112,12 +102,12 @@ def run_cli(url: str) -> subprocess.CompletedProcess[str]:
         home = Path(tmp)
         (home / "tmp").mkdir(parents=True, exist_ok=True)
         env = _minimal_child_env(home, home / "inbox.json")
-        return subprocess.run(
+        # Own process group: a timeout also ends yt-dlp / browser grandchildren.
+        return run_bounded(
             [sys.executable, "-m", "x_reader.cli", url, "--json"],
-            capture_output=True,
-            text=True,
             timeout=REQUEST_TIMEOUT_SECONDS,
             env=env,
+            max_output_bytes=MAX_CLI_OUTPUT_BYTES,
         )
 
 
@@ -126,15 +116,15 @@ def _parse_cli_failure(
     url: str,
     platform: str,
 ) -> dict[str, Any]:
+    # Only a stable reason code is public; raw exception text stays server-side.
     reason = "source_fetch_failed"
     evidence = "x-reader could not fetch the public source reliably"
     try:
         payload = json.loads(proc.stdout)
         if isinstance(payload, dict) and payload.get("error"):
-            error_type = str(payload.get("error_type") or "")
+            error_type = "".join(ch for ch in str(payload.get("error_type") or "") if ch.isalnum())
             if error_type:
-                reason = "source_fetch_failed_" + error_type.lower()
-            evidence = str(payload.get("error"))[:500]
+                reason = "source_fetch_failed_" + error_type.lower()[:40]
     except (json.JSONDecodeError, TypeError):
         pass
     return failure_receipt(url, reason, evidence, source_type=platform)
@@ -158,6 +148,14 @@ def read_public_url(
 
     try:
         proc = (runner or run_cli)(url)
+    except ValueError:  # CLI output exceeded the byte budget
+        receipt = failure_receipt(
+            url,
+            "output_too_large",
+            "x-reader returned more data than the hosted surface accepts",
+            source_type=platform,
+        )
+        return _response_from_receipt(receipt, None)
     except subprocess.TimeoutExpired:
         receipt = failure_receipt(
             url,
@@ -230,6 +228,8 @@ def _asset_html(name: str = "index.html") -> bytes:
 
 class EvidenceRequestHandler(BaseHTTPRequestHandler):
     server_version = "x-reader-evidence/0.1"
+    # Socket deadline for request line, headers and body: slow clients cannot pin a thread.
+    timeout = SOCKET_TIMEOUT_SECONDS
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return
@@ -244,7 +244,8 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",
+            "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; "
+            "base-uri 'none'; object-src 'none'; form-action 'self'",
         )
         self.end_headers()
 
@@ -280,6 +281,11 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
             self._json(404, {"ok": False, "error": "not_found"})
             return
 
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._json(415, {"ok": False, "error": "json_content_type_required"})
+            return
+
         try:
             length = int(self.headers.get("Content-Length") or "0")
         except ValueError:
@@ -307,8 +313,12 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
             except HostedPolicyError as exc:
                 self._json(422, {"ok": False, "error": "policy_rejected", "detail": str(exc)})
                 return
-            except ValueError as exc:
-                self._json(422, {"ok": False, "error": "unsafe_or_invalid_url", "detail": str(exc)})
+            except ValueError:
+                self._json(422, {
+                    "ok": False,
+                    "error": "unsafe_or_invalid_url",
+                    "detail": "Use a public http(s) URL; private, local and special addresses are not allowed.",
+                })
                 return
             except Exception:
                 self._json(500, {"ok": False, "error": "internal_error"})
@@ -318,13 +328,44 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
             REQUEST_SLOTS.release()
 
 
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with a hard cap on concurrent connection threads."""
+
+    daemon_threads = True
+
+    def __init__(self, *args: Any, max_threads: int = MAX_CONNECTION_THREADS, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._thread_slots = threading.BoundedSemaphore(max_threads)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._thread_slots.acquire(blocking=False):
+            try:
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        thread = threading.Thread(
+            target=self._process_and_release, args=(request, client_address), daemon=True,
+        )
+        thread.start()
+
+    def _process_and_release(self, request: Any, client_address: Any) -> None:
+        try:
+            self.process_request_thread(request, client_address)
+        finally:
+            self._thread_slots.release()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local x-reader Evidence Receipt MVP")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
     args = parser.parse_args()
 
-    server = ThreadingHTTPServer((args.host, args.port), EvidenceRequestHandler)
+    server = BoundedThreadingHTTPServer((args.host, args.port), EvidenceRequestHandler)
     print(f"x-reader Evidence Receipt: http://{args.host}:{args.port}")
     try:
         server.serve_forever()

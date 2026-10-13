@@ -290,9 +290,10 @@ def format_report(checks: list[Check]) -> str:
 
 def run_doctor(json_output: bool = False, stream=None) -> int:
     """Print the report and return the exit code (0 = core ready)."""
-    try:  # Match the CLI, which reads .env; optional so this stays stdlib-only.
+    try:  # Match the CLI, which reads .env (except in hosted mode); optional so this stays stdlib-only.
         from dotenv import load_dotenv
-        load_dotenv()
+        if os.environ.get("X_READER_HOSTED") != "1":
+            load_dotenv()
     except Exception:  # a missing library or an unreadable .env must not break the report
         pass
     stream = sys.stdout if stream is None else stream

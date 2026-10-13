@@ -8,6 +8,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 
 ## [Unreleased]
 
+### Added
+
+- Hosted Evidence Receipt web reader (`x-reader-web`, live at xreader.leolabs.me): public X, YouTube and generic web URLs, with a PASS / PARTIAL / FAIL / UNKNOWN receipt for each read.
+- Podcast episodes (Xiaoyuzhou, Apple Podcasts): show notes by default, plus opt-in local ASR in the CLI: `--media-preview-seconds N` (≤30 s sample, always `PARTIAL`), `--media-full-short` (≤120 s / ≤2 MiB, verified full transcript) and `--media-full-long` (≤90 min / ≤64 MiB, resumable, verified chunks). Needs `x-reader[media]` and ffmpeg.
+- Bilibili, Xiaohongshu and browser-fallback fixes from the Evidence Receipt work.
+
+### Changed
+
+- **Podcast URLs now return `source_type=podcast` and `media_type=audio`** (before: read as generic pages, `manual` / `text`). Consumers that branch on `source_type` should handle `podcast`.
+- URL routing is shared by the CLI and the hosted reader and matches hosts exactly: `dropbox.com` is no longer treated as X, a `/feedback` path is no longer a feed; fxtwitter / vxtwitter / fixupx links go to the X reader.
+- Evidence status is stricter: YouTube needs a subtitle track covering at least 85% of the video for `PASS`; generic pages under 280 characters are `UNKNOWN`; RSS teasers, Xiaohongshu notes with unverified media and Telegram posts with attachments are `PARTIAL`.
+- Telegram message URLs (`t.me/<channel>/<id>`, `t.me/s/...`) read that exact message instead of the channel's latest post.
+
+### Security
+
+- RSS feeds are downloaded with the pinned, per-hop validated fetcher and parsed from bytes, so feed reads can no longer be redirected to private addresses.
+- Hosted reads: one shared router plus a child-side platform allowlist; the child skips `.env`, writes no inbox or Markdown, and inherits no proxies; timeouts kill the whole process group; CLI output is size-capped; the server has a socket deadline, a connection cap, JSON-only POSTs, stable public error codes and a stricter CSP.
+- yt-dlp calls skip playlists, cap audio downloads at 25 MB and bound subtitle / metadata files; short-audio decoding stops at the PCM budget and long-audio decoding has an idle watchdog.
+
 ## [0.4.0] - 2026-10-13
 
 ### Added

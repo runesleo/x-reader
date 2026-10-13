@@ -1,6 +1,6 @@
 # Evidence Receipt public-beta gate
 
-The current Evidence Receipt code is a verified local/CI product candidate. This checklist is required before calling an internet-facing deployment a public beta.
+Status (2026-10-13): the hosted beta is live for public X, YouTube and generic web URLs. This page records what was verified for it and what remains open.
 
 ## Already proven
 
@@ -10,6 +10,11 @@ The current Evidence Receipt code is a verified local/CI product candidate. This
 - request child processes receive a minimal environment;
 - saved browser sessions, Telegram credentials, Groq keys, output paths, and persistent inboxes are not inherited;
 - each read uses a temporary HOME/inbox;
+- the hosted policy and the CLI reader share one URL router, and the child process refuses platforms outside the hosted allowlist;
+- hosted child processes skip `.env` loading and never write inbox or Markdown output;
+- request timeouts end the whole child process group (yt-dlp, browsers), and CLI output is size-capped;
+- the server has a per-socket deadline, a connection-thread cap, JSON-only POSTs and stable public error codes;
+- outbound connections from the service account to loopback, private, tailnet and metadata addresses are blocked at the host;
 - response content preview is bounded;
 - request concurrency is bounded in-process;
 - Linux canary has exercised repository tests, a live generic page, a live mixed-media X URL, and CLI/HTTP receipt parity.

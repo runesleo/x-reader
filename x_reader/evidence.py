@@ -19,6 +19,34 @@ PARTIAL = "PARTIAL"
 FAIL = "FAIL"
 UNKNOWN = "UNKNOWN"
 
+# A subtitle track proves spoken coverage only when its last cue reaches this
+# share of the video's duration.
+TRANSCRIPT_COVERAGE_RATIO = 0.85
+# Shorter generic bodies are too thin to show they are the page's full text
+# rather than navigation, a cookie wall or an error shell.
+MIN_GENERIC_BODY_CHARS = 280
+
+
+def _finite_positive(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")) or number <= 0:
+        return None
+    return number
+
+
+def _subtitle_coverage(extra: dict) -> float | None:
+    """Share of the video covered by the subtitle track, or None when unprovable."""
+    if extra.get("transcript_source") != "subtitles":
+        return None
+    duration = _finite_positive(extra.get("duration"))
+    end = _finite_positive(extra.get("transcript_end_seconds"))
+    if duration is None or end is None or end > duration * 1.05:
+        return None
+    return min(1.0, end / duration)
+
 
 def _generic_shell_state(title: str, content: str) -> str | None:
     title_l = title.strip().lower()
@@ -287,11 +315,24 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if source == "youtube" and media_type == "video":
         has_transcript = bool(extra.get("has_transcript"))
         if has_transcript:
+            coverage = _subtitle_coverage(extra)
+            if coverage is not None and coverage >= TRANSCRIPT_COVERAGE_RATIO:
+                return {
+                    "status": PASS,
+                    "reason_code": "spoken_media_read",
+                    "evidence": (
+                        f"subtitle track covers {round(coverage * 100)}% of the video's spoken timeline; "
+                        "visual content was not analyzed"
+                    ),
+                    "components": {"page_metadata": PASS, "spoken_media": PASS},
+                }
             return {
-                "status": PASS,
-                "reason_code": "spoken_media_read",
-                "evidence": "YouTube source returned spoken-content transcript evidence",
-                "components": {"page_metadata": PASS, "spoken_media": PASS},
+                "status": PARTIAL,
+                "reason_code": "transcript_coverage_unproven",
+                "evidence": (
+                    "a transcript was read, but it could not be shown to cover the whole video"
+                ),
+                "components": {"page_metadata": PASS, "spoken_media": PARTIAL},
             }
         return {
             "status": PARTIAL,
@@ -356,11 +397,49 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "components": {"page_metadata": PASS, "spoken_media": PARTIAL},
         }
 
-    if source in {"wechat", "xhs", "telegram", "rss"} and content:
+    if source == "rss" and content:
+        if extra.get("rss_content") == "full" and len(content) >= MIN_GENERIC_BODY_CHARS:
+            return {
+                "status": PASS,
+                "reason_code": "text_body_read",
+                "evidence": "full article body carried by the feed",
+                "components": {"text_body": PASS},
+            }
+        return {
+            "status": PARTIAL,
+            "reason_code": "feed_summary_only",
+            "evidence": "the feed carried only a summary or teaser; the full article was not retrieved",
+            "components": {"text_body": PARTIAL},
+        }
+
+    if source in {"xhs", "telegram"} and content:
+        media_status = str(extra.get("media_status") or "unknown")
+        if media_status == "none":
+            return {
+                "status": PASS,
+                "reason_code": "text_body_read",
+                "evidence": f"{source} text retrieved; no attached media reported",
+                "components": {"text_body": PASS},
+            }
+        if media_status == "present":
+            return {
+                "status": PARTIAL,
+                "reason_code": "attached_media_unread",
+                "evidence": f"{source} text retrieved; attached media present but not retrieved",
+                "components": {"text_body": PASS, "attached_media": PARTIAL},
+            }
+        return {
+            "status": PARTIAL,
+            "reason_code": "media_presence_unknown",
+            "evidence": f"{source} text retrieved; images or video in the post could not be verified",
+            "components": {"text_body": PASS, "attached_media": UNKNOWN},
+        }
+
+    if source == "wechat" and content:
         return {
             "status": PASS,
             "reason_code": "text_body_read",
-            "evidence": f"{source} text body retrieved",
+            "evidence": "wechat text body retrieved",
             "components": {"text_body": PASS},
         }
 
@@ -380,7 +459,7 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "evidence": "generic reader returned an error/challenge shell",
                 "components": {"text_body": FAIL},
             }
-        if len(content) >= 40:
+        if len(content) >= MIN_GENERIC_BODY_CHARS:
             return {
                 "status": PASS,
                 "reason_code": "text_body_read",

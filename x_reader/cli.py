@@ -17,8 +17,10 @@ import json
 from pathlib import Path
 
 try:
+    import os as _os
     from dotenv import load_dotenv
-    load_dotenv()
+    if _os.environ.get("X_READER_HOSTED") != "1":  # hosted reads must not pick up local secrets
+        load_dotenv()
 
     from x_reader.reader import UniversalReader
     from x_reader.schema import UnifiedInbox, SourceType
@@ -40,7 +42,8 @@ def cmd_fetch(urls: list[str], json_output: bool = False, media_preview_seconds:
     When json_output is True, stdout is machine-readable JSON containing the
     complete UnifiedContent payload instead of the human preview.
     """
-    inbox = UnifiedInbox(get_inbox_path())
+    import os
+    inbox = None if os.environ.get("X_READER_HOSTED") == "1" else UnifiedInbox(get_inbox_path())
     reader = UniversalReader(
         inbox=inbox, media_preview_seconds=media_preview_seconds,
         full_short_audio=full_short_audio, full_long_audio=full_long_audio,

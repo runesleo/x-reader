@@ -126,7 +126,7 @@ npx skills add runesleo/x-reader --skill x-reader
 | 小红书 | Jina → Playwright | 部分页面需一次性本地登录 |
 | Telegram | Telethon | 需要 Telegram 凭证 |
 | RSS | feedparser | — |
-| 小宇宙 / Apple Podcasts | 按普通网页读取（页面文字和元数据） | 不下载音频；要声称读过口头内容，需先在本地转录 |
+| 小宇宙 / Apple Podcasts | 节目页和节目简介 | 只有显式开启下面的本地转录参数才读音频；只读简介时保持 `PARTIAL` |
 
 平台规则会变化。x-reader 的承诺不是“永远全覆盖”，而是**覆盖不到时不装作覆盖到了**。
 
@@ -237,11 +237,8 @@ x-reader 现将播客 URL 作为 `source_type=podcast` 处理。只读到节目�
 本地可显式开启**前 12 秒音频预览转录**，不使用付费 API；仍然属于 `PARTIAL`，不是完整 transcript：
 
 ```bash
-# 目前只在产品开发分支，main / PyPI 的旧版本尚不包含本功能。
-git clone https://github.com/runesleo/x-reader.git
-cd x-reader
-git switch product/evidence-receipt-mvp-20261007
-python -m pip install -e '.[media]'
+# 仅本地命令行可用（网页版没有），实验功能。
+python -m pip install "x-reader[media] @ git+https://github.com/runesleo/x-reader.git"
 # 还需在 PATH 中安装 ffmpeg 和 yt-dlp
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6abb9b69195d838e2aeb9c2b' --media-preview-seconds 12 --json
 ```
@@ -254,10 +251,10 @@ x-reader 'https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445' --media
 
 短音频模式要求严格 HTTP 206、完整源文件字节、SHA-256、音频解码与转录处理时长一致。超过短音频限额时，这个模式继续标记 `PARTIAL`。
 
-**实验性长音频断点续传**已经在同一个开发分支加入：仅对**单条公开小宇宙播客**显式启用，源文件限 **64 MiB**、时长限 **90 分钟**。通过 1 MiB 的 HTTP 206 字节块、强 ETag 来源版本、SHA-256、60 秒 PCM/ASR 时间段和本地私有检查点核验完整来源：
+**实验性长音频断点续传**（本地命令行）：仅对**单条公开小宇宙播客**显式启用，源文件限 **64 MiB**、时长限 **90 分钟**。通过 1 MiB 的 HTTP 206 字节块、强 ETag 来源版本、SHA-256、60 秒 PCM/ASR 时间段和本地私有检查点核验完整来源：
 
 ```bash
-# 仅产品开发分支提供；main / Hosted Web 尚未上线。
+# 仅本地命令行；网页版没有这个功能。
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6aab4896051af796b9e966c5' --media-full-long --json
 ```
 

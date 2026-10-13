@@ -125,7 +125,12 @@ def from_telegram(msg: dict, channel_name: str, channel_username: str) -> Unifie
         title=msg.get('text', '')[:100],
         content=msg.get('text', ''),
         url=msg.get('url', f"https://t.me/{channel_username}"),
-        extra={"views": msg.get('views', 0), "channel_username": channel_username},
+        extra={
+            "views": msg.get('views', 0),
+            "channel_username": channel_username,
+            "message_id": msg.get('message_id'),
+            "media_status": msg.get('media_status', 'unknown'),
+        },
     )
 
 
@@ -140,6 +145,9 @@ def from_rss(article: dict) -> UnifiedContent:
         category=article.get('category', ''),
         title_cn=article.get('title_cn'),
         content_cn=article.get('summary_cn'),
+        # "full" only when the feed itself carried the article body; a summary
+        # or teaser must not be reported as the complete source.
+        extra={"rss_content": article.get('content_kind', 'summary')},
     )
 
 
@@ -226,6 +234,8 @@ def from_youtube(video: dict) -> UnifiedContent:
             # Evidence Receipts can distinguish transcript coverage from a
             # page-description fallback.
             "has_transcript": bool(video.get('has_transcript', False)),
+            "transcript_source": video.get('transcript_source', ''),
+            "transcript_end_seconds": video.get('transcript_end_seconds'),
             "video_id": video.get('video_id', ''),
         },
     )

@@ -26,22 +26,33 @@ def _extract_video_id(url: str) -> str:
     return match.group(1) if match else ""
 
 
-def _get_subtitles_via_ytdlp(url: str, lang: str = "en") -> str:
-    """
-    Download auto-generated subtitles using yt-dlp.
-    Returns subtitle text, or empty string if unavailable.
-    """
-    # Security: Validate URL before passing to subprocess
-    from x_reader.utils.url_validator import validate_url
-    validate_url(url)
+MAX_SUBTITLE_BYTES = 5 * 1024 * 1024
+MAX_INFO_JSON_BYTES = 2 * 1024 * 1024
+_CUE_TIME = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{3})")
 
+
+def _get_subtitles_via_ytdlp(url: str, lang: str = "en") -> dict:
+    """
+    Download subtitles (and the video's info JSON) using yt-dlp.
+
+    Returns {"text", "end_seconds", "duration"}; text is empty when unavailable.
+    end_seconds is the last cue's end time and duration comes from yt-dlp's
+    metadata, so callers can prove how much of the video the transcript covers.
+    """
+    from x_reader.utils.proc import run_bounded
+    from x_reader.utils.url_validator import validate_url
+    validate_url(url)  # Security: validate before passing to a subprocess
+
+    empty = {"text": "", "end_seconds": None, "duration": None}
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = os.path.join(tmpdir, "sub")
 
         cmd = [
             "yt-dlp",
+            "--no-playlist",
             "--write-auto-sub",
             "--write-sub",
+            "--write-info-json",
             "--sub-lang", lang,
             "--sub-format", "srt",
             "--skip-download",
@@ -50,33 +61,62 @@ def _get_subtitles_via_ytdlp(url: str, lang: str = "en") -> str:
         ]
 
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            run_bounded(cmd, timeout=60)
         except FileNotFoundError:
             logger.warning("yt-dlp not found. Install with: brew install yt-dlp")
-            return ""
+            return empty
         except subprocess.TimeoutExpired:
             logger.warning("yt-dlp subtitle download timed out")
-            return ""
+            return empty
+        except ValueError:
+            logger.warning("yt-dlp produced more output than allowed")
+            return empty
 
+        duration = _read_duration(output_path + ".info.json")
         for ext in [f".{lang}.srt", f".{lang}.vtt"]:
             sub_file = output_path + ext
             if os.path.exists(sub_file):
-                return _parse_srt(sub_file)
+                if os.path.getsize(sub_file) > MAX_SUBTITLE_BYTES:
+                    logger.warning("Subtitle file exceeds the size limit; ignoring it")
+                    return {**empty, "duration": duration}
+                text, end_seconds = _parse_srt(sub_file)
+                return {"text": text, "end_seconds": end_seconds, "duration": duration}
 
-    return ""
+    return {**empty}
 
 
-def _parse_srt(filepath: str) -> str:
-    """Parse SRT file into clean text (strip timestamps and sequence numbers)."""
-    with open(filepath, 'r', encoding='utf-8') as f:
+def _read_duration(info_path: str):
+    """Video duration in seconds from yt-dlp's info JSON, or None."""
+    import json
+    try:
+        if os.path.getsize(info_path) > MAX_INFO_JSON_BYTES:
+            return None
+        with open(info_path, "r", encoding="utf-8") as f:
+            value = json.load(f).get("duration")
+        value = float(value)
+        return value if value > 0 and value == value else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _parse_srt(filepath: str) -> tuple:
+    """Parse SRT/VTT into clean text plus the last cue's end time (seconds or None)."""
+    with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
         lines = f.readlines()
 
     text_lines = []
     seen = set()
+    end_seconds = None
 
     for line in lines:
         line = line.strip()
-        if not line or line.isdigit() or '-->' in line:
+        if '-->' in line:
+            times = _CUE_TIME.findall(line)
+            if len(times) >= 2:
+                h, m, s, ms = (int(x) for x in times[1])
+                end_seconds = max(end_seconds or 0.0, h * 3600 + m * 60 + s + ms / 1000)
+            continue
+        if not line or line.isdigit():
             continue
         if line.startswith('[') and line.endswith(']'):
             continue
@@ -84,7 +124,7 @@ def _parse_srt(filepath: str) -> str:
             seen.add(line)
             text_lines.append(line)
 
-    return " ".join(text_lines)
+    return " ".join(text_lines), end_seconds
 
 
 def _transcribe_via_whisper(url: str) -> str:
@@ -112,18 +152,23 @@ def _transcribe_via_whisper(url: str) -> str:
             "-x",
             "--audio-format", "m4a",
             "--audio-quality", "5",
+            "--max-filesize", "25M",
             "-o", output_template,
             "--no-playlist",
             url,
         ]
 
+        from x_reader.utils.proc import run_bounded
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            run_bounded(cmd, timeout=180)
         except FileNotFoundError:
             logger.warning("yt-dlp not found for audio download")
             return ""
         except subprocess.TimeoutExpired:
             logger.warning("yt-dlp audio download timed out")
+            return ""
+        except ValueError:
+            logger.warning("yt-dlp produced more output than allowed")
             return ""
 
         # Find the downloaded audio file
@@ -190,14 +235,17 @@ async def fetch_youtube(url: str, sub_lang: str = "en") -> Dict[str, Any]:
     jina_data = fetch_via_jina(url)
     title = jina_data["title"]
 
-    # Step 2: Try yt-dlp auto-subtitles
+    # Step 2: Try yt-dlp subtitles (with timing, so coverage can be proven)
     logger.info(f"Extracting subtitles ({sub_lang})...")
-    transcript = _get_subtitles_via_ytdlp(url, lang=sub_lang)
+    subs = _get_subtitles_via_ytdlp(url, lang=sub_lang)
+    transcript = subs["text"]
+    transcript_source = "subtitles" if transcript else ""
 
     # Step 3: No subtitles? Try Whisper transcription
     if not transcript:
         logger.info("No subtitles available, trying Whisper transcription...")
         transcript = _transcribe_via_whisper(url)
+        transcript_source = "whisper" if transcript else ""
 
     if transcript:
         logger.info(f"Got transcript: {len(transcript)} chars")
@@ -215,5 +263,8 @@ async def fetch_youtube(url: str, sub_lang: str = "en") -> Dict[str, Any]:
         "url": url,
         "video_id": video_id,
         "has_transcript": has_transcript,
+        "transcript_source": transcript_source,
+        "transcript_end_seconds": subs["end_seconds"] if transcript_source == "subtitles" else None,
+        "duration": subs["duration"],
         "platform": "youtube",
     }

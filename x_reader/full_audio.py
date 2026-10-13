@@ -156,11 +156,15 @@ def _decode_entire_file(source: Path, target: Path, home: str, duration: float) 
     """Decode the complete local file, with no -t trim or remote protocol."""
     import wave
 
+    max_wav_bytes = int(2 * SAMPLE_RATE * (MAX_FULL_AUDIO_SECONDS + 2)) + 4096
     cmd = [
         "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror",
         "-protocol_whitelist", "file",
         "-i", str(source), "-map", "0:a:0", "-vn", "-sn", "-dn",
         "-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le",
+        # -fs stops writing at the PCM budget, so a hostile file cannot fill the disk
+        # before the post-decode checks run; a cut-short decode then fails coverage.
+        "-fs", str(max_wav_bytes),
         "-f", "wav", "-y", str(target),
     ]
     result = subprocess.run(

@@ -1,46 +1,54 @@
 # -*- coding: utf-8 -*-
-"""RSS feed fetcher — uses feedparser."""
+"""RSS/Atom feed fetcher.
+
+The feed is downloaded with the pinned, per-hop validated public fetcher and
+only then parsed by feedparser, so feedparser never opens network connections
+or follows redirects itself.
+"""
+
+import asyncio
+from typing import Any, Dict, List
 
 import feedparser
 from loguru import logger
-from typing import Dict, Any, List
 
-# Note: feedparser already handles XXE safely by default (uses xml.sax with entity expansion limits)
-# Additional protection: resolve_relative_uris=False disables relative URL resolution
+from x_reader.fetchers.jina import fetch_public_bytes
+
+FEED_TYPES = {
+    "application/rss+xml", "application/atom+xml", "application/rdf+xml",
+    "application/xml", "text/xml", "application/x-rss+xml",
+    "application/feed+json", "application/json",
+}
 
 
 async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:
-    """
-    Fetch and parse an RSS/Atom feed.
+    """Fetch and parse an RSS/Atom feed.
 
-    Args:
-        url: RSS feed URL
-        limit: Max number of entries to return
-
-    Returns:
-        List of article dicts with: title, summary, url, source, published
+    Returns a list of article dicts with: title, summary, url, source, published,
+    content_kind ("full" when the feed carries the article body, else "summary").
     """
     logger.info(f"Fetching RSS: {url}")
-
-    # Use safe parsing: disable external entities
-    feed = feedparser.parse(url, resolve_relative_uris=False)
+    body, content_type, final_url = await asyncio.to_thread(fetch_public_bytes, url, FEED_TYPES)
+    feed = feedparser.parse(
+        body,
+        resolve_relative_uris=False,
+        response_headers={"content-type": content_type, "content-location": final_url},
+    )
 
     if feed.bozo and not feed.entries:
-        raise ValueError(f"Failed to parse RSS feed: {feed.bozo_exception}")
+        raise ValueError(f"Failed to parse RSS feed: {type(feed.bozo_exception).__name__}")
 
-    source_name = feed.feed.get("title", url)
+    source_name = feed.feed.get("title", final_url)
     articles = []
-
     for entry in feed.entries[:limit]:
-        summary = ""
-        if hasattr(entry, "summary"):
-            summary = entry.summary
-        elif hasattr(entry, "content"):
-            summary = entry.content[0].get("value", "")
-
+        full = ""
+        if getattr(entry, "content", None):
+            full = entry.content[0].get("value", "") or ""
+        summary = getattr(entry, "summary", "") or ""
         articles.append({
             "title": entry.get("title", ""),
-            "summary": summary,
+            "summary": full or summary,
+            "content_kind": "full" if full else "summary",
             "url": entry.get("link", ""),
             "source": source_name,
             "published": entry.get("published", ""),

@@ -231,6 +231,48 @@ def _read_bounded(
     return b"".join(chunks), raw_content_type
 
 
+def fetch_public_bytes(
+    url: str,
+    allowed_types: set[str],
+    max_redirects: int = 5,
+    total_timeout: float | None = None,
+    headers: dict | None = None,
+) -> tuple[bytes, str, str]:
+    """GET a public URL with the same SSRF defenses as the direct HTML fallback.
+
+    Every hop is re-resolved, validated against private/special addresses and
+    pinned to the validated IP; bodies are size- and deadline-bounded.
+    Returns (body, raw_content_type, final_url).
+    """
+    current = url
+    deadline = time.monotonic() + (DIRECT_TOTAL_TIMEOUT if total_timeout is None else total_timeout)
+    for _ in range(max_redirects + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Fetch exceeded total time limit")
+        pool = None
+        response = None
+        try:
+            pool, response, _pinned_ip = _request_pinned(current, remaining, headers=headers or DIRECT_HEADERS)
+            status = response.status
+            if status in _REDIRECT_STATUSES:
+                location = response.headers.get("Location")
+                if not location:
+                    raise ValueError(f"Redirect status {status} without Location")
+                current = urljoin(current, location)
+                continue
+            if not 200 <= status < 300:
+                raise ValueError(f"HTTP status {status}")
+            body, raw_content_type = _read_bounded(response, deadline, allowed_types)
+            return body, raw_content_type, current
+        finally:
+            if response is not None:
+                response.close()
+            if pool is not None:
+                pool.close()
+    raise requests.TooManyRedirects(f"Too many redirects while fetching: {url}")
+
+
 def fetch_direct_html(url: str, max_redirects: int = 5) -> dict:
     """Direct public HTML fallback with pinned-IP SSRF defense and bounded reads."""
     current = url

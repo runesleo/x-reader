@@ -124,7 +124,7 @@ x-reader makes these distinctions explicit:
 | Xiaohongshu | Jina → Playwright | One-time local login may be required |
 | Telegram | Telethon | Telegram credentials required |
 | RSS | feedparser | — |
-| Xiaoyuzhou / Apple Podcasts | Generic web read (page text and metadata) | Audio is not fetched; transcribe it locally before claiming spoken content |
+| Xiaoyuzhou / Apple Podcasts | Episode page and show notes | Spoken audio only with the opt-in local ASR flags below; notes alone stay `PARTIAL` |
 
 Platform behavior changes over time. x-reader's contract is to expose the gap rather than overclaim coverage.
 
@@ -246,16 +246,13 @@ Podcast episode show notes are **not** an audio transcript. x-reader classifies 
 For a local, explicitly requested and bounded 12-second sample using free on-device Whisper (still **PARTIAL**, never a full episode):
 
 ```bash
-# Experimental product branch only; not released on main/PyPI.
-git clone https://github.com/runesleo/x-reader.git
-cd x-reader
-git switch product/evidence-receipt-mvp-20261007
-python -m pip install -e '.[media]'
+# Local CLI only (not on the hosted web reader); experimental.
+python -m pip install "x-reader[media] @ git+https://github.com/runesleo/x-reader.git"
 # Also install ffmpeg and yt-dlp to PATH
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6abb9b69195d838e2aeb9c2b' --media-preview-seconds 12 --json
 ```
 
-For an **explicit complete short-audio read** (public Xiaoyuzhou only, **≤2 MiB encoded / ≤120 seconds**) on the same experimental branch:
+For an **explicit complete short-audio read** (public Xiaoyuzhou only, **≤2 MiB encoded / ≤120 seconds**) (experimental, local CLI only):
 
 ```bash
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445' --media-full-short --json
@@ -263,10 +260,10 @@ x-reader 'https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445' --media
 
 Short mode returns **PASS** only after exact HTTP 206 source bytes, SHA-256, audio/PCM durations and full-input local ASR processing are verified. Episodes exceeding the short-mode limits remain **PARTIAL** in that mode.
 
-**Experimental resumable long audio:** The same development branch now supports a separately opted-in, **single public Xiaoyuzhou episode** up to **64 MiB encoded and 90 minutes**. It uses verified 1-MiB HTTP 206 chunks, strong-ETag source versioning, local 60-second PCM/ASR segments, temporal coverage checks, and private on-disk checkpoints:
+**Experimental resumable long audio:** The local CLI supports a separately opted-in, **single public Xiaoyuzhou episode** up to **64 MiB encoded and 90 minutes**. It uses verified 1-MiB HTTP 206 chunks, strong-ETag source versioning, local 60-second PCM/ASR segments, temporal coverage checks, and private on-disk checkpoints:
 
 ```bash
-# This is the experimental development branch, not main / Hosted Web.
+# Local CLI only; not available on the hosted web reader.
 x-reader 'https://www.xiaoyuzhoufm.com/episode/6aab4896051af796b9e966c5' --media-full-long --json
 ```
 

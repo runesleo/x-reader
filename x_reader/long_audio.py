@@ -18,6 +18,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import wave
 
@@ -346,6 +347,49 @@ def _probe_long_duration(source: Path, home: str) -> float:
     return duration
 
 
+READ_IDLE_SECONDS = 120
+
+
+class _ReadWatchdog:
+    """Kill the decoder's process group if a single pipe read stalls too long.
+
+    Time spent by the caller between reads (ASR on the previous segment) does not
+    count; only a read that is blocked waiting for ffmpeg does.
+    """
+
+    def __init__(self, process: subprocess.Popen, idle_seconds: float):
+        self.process = process
+        self.idle_seconds = idle_seconds
+        self.fired = False
+        self._started: float | None = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+
+    def read(self, size: int) -> bytes:
+        with self._lock:
+            self._started = time.monotonic()
+        try:
+            return self.process.stdout.read(size)
+        finally:
+            with self._lock:
+                self._started = None
+
+    def _watch(self) -> None:
+        from x_reader.utils.proc import kill_group
+        while not self._stop.wait(1.0):
+            with self._lock:
+                started = self._started
+            if started is not None and time.monotonic() - started > self.idle_seconds:
+                self.fired = True
+                kill_group(self.process)
+                return
+
+    def close(self) -> None:
+        self._stop.set()
+
+
 def _decode_segments(source: Path, home: str, duration: float):
     """Yield contiguous WAV segments while streaming the whole local audio.
 
@@ -360,10 +404,11 @@ def _decode_segments(source: Path, home: str, duration: float):
     ]
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        env=_tool_env(home),
+        env=_tool_env(home), start_new_session=True,
     )
     if process.stdout is None:
         raise RuntimeError("Unable to open local decoded audio stream")
+    watchdog = _ReadWatchdog(process, READ_IDLE_SECONDS)
     bytes_per_frame = 2
     segment_frames = PCM_SEGMENT_SECONDS * SAMPLE_RATE
     total_frames = 0
@@ -384,8 +429,10 @@ def _decode_segments(source: Path, home: str, duration: float):
                     wav.setframerate(SAMPLE_RATE)
                     while copied < segment_frames:
                         requested = min(65536, (segment_frames - copied) * bytes_per_frame)
-                        part = process.stdout.read(requested)
+                        part = watchdog.read(requested)
                         if not part:
+                            if watchdog.fired:
+                                raise RuntimeError("Long-audio decode stalled and was stopped")
                             break
                         if len(part) % bytes_per_frame:
                             raise RuntimeError("Unaligned audio PCM byte stream")
@@ -421,6 +468,7 @@ def _decode_segments(source: Path, home: str, duration: float):
         if abs(decoded_seconds - duration) > max(0.75, duration * 0.01):
             raise RuntimeError("Long-audio decoded timeline does not match source duration")
     finally:
+        watchdog.close()
         if process.poll() is None:
             process.kill()
             process.wait(timeout=5)
