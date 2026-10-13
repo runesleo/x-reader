@@ -205,6 +205,15 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         self.assertEqual(data["media_status"], "present")
         self.assertEqual(data["structure_status"], "verified")
 
+    def test_status_paths_must_match_whole(self):
+        self.assertEqual(twitter._extract_status_id("https://x.com/alice/status/123"), "123")
+        self.assertEqual(twitter._extract_status_id("https://twitter.com/alice/status/123/photo/1?s=20"), "123")
+        self.assertEqual(twitter._extract_status_id("https://x.com/i/web/status/123"), "123")
+        for url in ("https://x.com/alice/status/123garbage", "https://x.com/alice/status/123/extra/path",
+                    "https://evilx.com/alice/status/123", "https://x.com/alice/status/"):
+            self.assertIsNone(twitter._extract_status_id(url), url)
+            self.assertFalse(twitter._is_tweet_url(url), url)
+
     def test_answers_for_another_post_are_not_used(self):
         from unittest.mock import MagicMock, patch
 

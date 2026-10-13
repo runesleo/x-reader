@@ -36,24 +36,32 @@ def _normalize_x_url(url: str) -> str:
         url = f"https://{url}"
     parsed = urlparse(url)
     netloc = parsed.netloc.lower().replace("www.", "")
-    if netloc in ("twitter.com", "mobile.twitter.com"):
+    if netloc in ("twitter.com", "mobile.twitter.com", "mobile.x.com", "fxtwitter.com", "vxtwitter.com",
+                  "fixupx.com", "fixvx.com"):
         netloc = "x.com"
     return urlunparse((parsed.scheme or "https", netloc, parsed.path, "", "", ""))
 
 
+# The whole path must be a status or article path (optionally a media,
+# analytics or engagement view of it); "/status/123garbage" is not post 123.
+_STATUS_PATH = re.compile(
+    r"/(?:(?P<user>[A-Za-z0-9_]{1,15})/status(?:es)?|i/web/status|i/status)/(?P<id>\d{1,20})"
+    r"(?:/(?:photo|video)/\d{1,2}|/analytics|/quotes|/retweets(?:/with_comments)?|/likes|/history)?/?"
+)
+_ARTICLE_PATH = re.compile(r"/(?:i|[A-Za-z0-9_]{1,15})/article/(?P<id>\d{1,20})/?")
+
+
+def _x_path(url: str, pattern: re.Pattern):
+    parsed = urlparse(_normalize_x_url(url))
+    if (parsed.hostname or "") != "x.com":
+        return None
+    return pattern.fullmatch(parsed.path)
+
+
 def _extract_status_id(url: str) -> Optional[str]:
-    """Extract tweet/article id from common X URL shapes."""
-    patterns = (
-        r'x\.com/[^/]+/status/(\d+)',
-        r'x\.com/i/web/status/(\d+)',
-        r'x\.com/i/article/(\d+)',
-        r'x\.com/[^/]+/article/(\d+)',
-    )
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
+    """The post/article id of an X status or article URL, or None."""
+    match = _x_path(url, _STATUS_PATH) or _x_path(url, _ARTICLE_PATH)
+    return match.group("id") if match else None
 
 
 def _extract_author(url: str) -> str:
@@ -64,18 +72,12 @@ def _extract_author(url: str) -> str:
 
 def _is_tweet_url(url: str) -> bool:
     """Check if this is a direct tweet/status URL (vs profile or other X page)."""
-    return bool(
-        re.search(r'x\.com/[A-Za-z0-9_]+/status/\d+', url)
-        or re.search(r'x\.com/i/web/status/\d+', url)
-    )
+    return _x_path(url, _STATUS_PATH) is not None
 
 
 def _is_article_url(url: str) -> bool:
-    """Check if this is an X Article URL or status URL known to carry an article."""
-    return bool(
-        re.search(r'x\.com/i/article/\d+', url)
-        or re.search(r'x\.com/[A-Za-z0-9_]+/article/\d+', url)
-    )
+    """Check if this is an X Article URL."""
+    return _x_path(url, _ARTICLE_PATH) is not None
 
 
 def _article_url_from_status(url: str) -> Optional[str]:
@@ -164,11 +166,11 @@ def _fetch_via_fxtwitter(url: str, timeout: float = 10) -> Dict[str, Any]:
     Fetch full tweet text via FxTwitter API.
     Free, no auth, returns complete text (no truncation).
     """
-    match = re.search(r'x\.com/([A-Za-z0-9_]+)/status/(\d+)', url)
+    match = _x_path(url, _STATUS_PATH)
     if not match:
         raise ValueError(f"Cannot parse tweet URL: {url}")
 
-    username, status_id = match.group(1), match.group(2)
+    username, status_id = match.group("user") or "i", match.group("id")
     api_url = f"{FXTWITTER_API}/{username}/status/{status_id}"
 
     resp = requests.get(api_url, timeout=timeout)
@@ -389,17 +391,24 @@ async def _fetch_via_playwright(url: str) -> Dict[str, Any]:
             except Exception:
                 pass  # May not appear if login required
 
-            # A status URL must render the post itself; a login or "this post was
-            # deleted" shell has no tweetText element and is not a post read.
-            extracted = await page.evaluate("""() => {
-                const tweetEl = document.querySelector('[data-testid="tweetText"]');
-                if (tweetEl) return {text: tweetEl.innerText, kind: 'tweet'};
+            # A status URL must render the post itself: the text of the article
+            # whose timestamp permalink is the requested status (a reply page
+            # shows ancestor posts first). A login or "this post was deleted"
+            # shell has no such article and is not a post read.
+            extracted = await page.evaluate("""(statusId) => {
+                const own = new RegExp('/status/' + statusId + '(?:$|[/?#])');
+                for (const article of document.querySelectorAll('article')) {
+                    const permalink = Array.from(article.querySelectorAll('a[href]'))
+                        .some(a => a.querySelector('time') && own.test(a.getAttribute('href') || ''));
+                    const tweetEl = permalink && article.querySelector('[data-testid="tweetText"]');
+                    if (tweetEl) return {text: tweetEl.innerText, kind: 'tweet', bound: true};
+                }
                 const article = document.querySelector('article');
                 if (article) return {text: article.innerText, kind: 'page'};
                 const main = document.querySelector('main');
                 if (main) return {text: main.innerText, kind: 'page'};
                 return {text: '', kind: 'page'};
-            }""")
+            }""", _extract_status_id(url) or "-")
 
             title = await page.title()
 
@@ -408,6 +417,7 @@ async def _fetch_via_playwright(url: str) -> Dict[str, Any]:
                 "kind": extracted.get("kind") or "page",
                 "title": (title or "").strip()[:200],
                 "final_url": page.url,
+                "bound": extracted.get("bound") is True,
             }
         finally:
             await context.close()
@@ -558,7 +568,8 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                 "platform": "twitter",
                 # Only a rendered tweetText element counts as the post itself.
                 "fetch_method": "playwright" if is_post else "playwright_page",
-                "post_id_verified": bool(requested_id) and _extract_status_id(
+                # The text came from the article whose permalink is the requested status.
+                "post_id_verified": bool(requested_id) and data.get("bound") is True and _extract_status_id(
                     _normalize_x_url(str(data.get("final_url") or ""))) == requested_id,
                 "media_status": "unknown",
                 "structure_status": "unknown",

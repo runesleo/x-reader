@@ -54,6 +54,8 @@ _UNAVAILABLE_VIDEO = (
     "video unavailable", "this video isn't available", "this video is not available",
     "this video is unavailable", "this video is private", "this video has been removed",
     "not available in your country", "sign in to confirm your age", "this video is age-restricted",
+    "the uploader has not made this video available", "this video is no longer available",
+    "this video may be inappropriate", "age-restricted video",
 )
 
 
@@ -62,6 +64,7 @@ _NOT_A_VIDEO_TITLE = re.compile(
     r"^(?:|youtube|consent|before you continue\b.*|sign in(?: to (?:youtube|continue)\b.*)?)$", re.IGNORECASE
 )
 _CONSENT_PAGE = ("before you continue to youtube", "consent.youtube.com")
+_PLAIN_QUOTES = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'})
 # Titles YouTube gives pages for videos that cannot be watched.
 _UNAVAILABLE_TITLES = {
     "video unavailable", "this video is unavailable", "this video isn't available anymore",
@@ -87,7 +90,8 @@ def _page_state(video_id: str, title: str, content: str, source_url: str = "") -
     name = re.sub(r"[\s\-–—|]+", " ", title).strip()
     name = re.sub(r"\s+youtube$", "", name, flags=re.IGNORECASE).strip()
     name = re.sub(r"[\s.!?…:;,]+$", "", name)
-    if name.lower() in _UNAVAILABLE_TITLES:
+    plain = name.lower().translate(_PLAIN_QUOTES)
+    if plain in _UNAVAILABLE_TITLES or plain.startswith(_UNAVAILABLE_VIDEO):
         return "unavailable"
     if not _NOT_A_VIDEO_TITLE.search(name):
         return "ok"

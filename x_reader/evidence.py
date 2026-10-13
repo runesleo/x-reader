@@ -206,7 +206,11 @@ _GATE_ACTION = (
     r"|you (?:can )?(?:continue|proceed|read|view)))\b"
     rf"(?!(?: (?:the|all|any|more|and|to|with|in|on|this|these|leaving|posting|writing))* {_NOT_CONTENT}\b)"
 )
-_SIGN_IN_OR_JOIN = rf"(?:please )?{_SIGN_IN}(?: or (?:register|sign up|subscribe|create an? (?:free )?account))?"
+_JOIN = r"(?:register|sign up|create (?:an? )?(?:free )?account|authenticate|verify your (?:email|account))"
+_SIGN_IN_OR_JOIN = (
+    rf"(?:please )?(?:{_SIGN_IN}|{_JOIN})(?: or (?:{_SIGN_IN}|{_JOIN}|subscribe))?"
+    r"(?: (?:now|first|today|here|again|below|for free))?"
+)
 _MUST_SIGN_IN = r"you (?:must|need to|have to|will need to|'ll need to) (?:be )?(?:signed|logged|sign|log) ?in"
 _ZH_SIGN_IN = r"(?:(?:请|您需要|需要)(?:先)?登录(?:后)?|登录后)(?:才能|即可|方可|可)?(?:查看|阅读|继续|浏览|观看|下载)"
 _AUTH_START = re.compile("|".join((
@@ -784,6 +788,13 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "status": UNKNOWN,
             "reason_code": "page_too_large_to_check",
             "evidence": "the page is too large for x-reader to check for walls, so it cannot pass",
+            "components": {"text_body": UNKNOWN},
+        }
+    if "template_markup" in signals:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "page_structure_unverified",
+            "evidence": "the page uses <template> markup, which x-reader's parser does not model, so where its text sits cannot be confirmed",
             "components": {"text_body": UNKNOWN},
         }
     if "client_redirect" in signals:

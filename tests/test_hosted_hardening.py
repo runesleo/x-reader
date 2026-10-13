@@ -549,7 +549,8 @@ class GenericReadTest(unittest.TestCase):
         long_main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 3).splitlines()) + "</main>"
         for template, status in (("<div hidden>Subscribe to continue reading.</div>", "PARTIAL"),
                                  ("<div style='display: none'>Please sign in to continue.</div>", "UNKNOWN"),
-                                 ("<template><div>Subscribe to continue reading.</div></template>", "PASS")):
+                                 # html5lib does not model templates: a page with one cannot pass
+                                 ("<template><div>Subscribe to continue reading.</div></template>", "UNKNOWN")):
             _page, receipt = self._page_receipt(
                 f"<html><head><title>T</title></head><body>{long_main}{template}</body></html>")
             self.assertEqual(receipt["status"], status, template)
@@ -619,6 +620,40 @@ class GenericReadTest(unittest.TestCase):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{body}</body></html>")
             self.assertNotEqual(receipt["status"], "PASS", body[-120:])
 
+    def test_only_visibly_shown_css_vouches_for_text(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        for opening in ("<main hidden style='display:block inline'>", "<main style='opacity:calc(0)'>",
+                        "<main style='opacity:0e0'>", "<main style='font-size:calc(0px)'>", "<main style='color:#0000'>",
+                        "<main style='text-indent:calc(-9999px)'>", "<main style='font: 0/0 a'>",
+                        "<main style='position:relative;left:-9999px'>", "<main style='margin-left:-9999px'>",
+                        "<main style='overflow:hidden;max-height:3em'>"):
+            _page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{opening}{article}</main></body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", opening)
+        for opening in ("<main style='color:rgb(0,0,0)'>", "<main style='color:rgb(255, 0, 0)'>",
+                        "<main style='color:#333;font-size:18px'>", "<main style='color:rgba(0,0,0,.87)'>",
+                        "<main style='display:block;margin:0 auto;max-width:720px'>"):
+            _page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{opening}{article}</main></body></html>")
+            self.assertEqual(receipt["status"], "PASS", opening)
+
+    def test_templates_and_shadow_roots_cannot_vouch_for_text(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        for body in (f"<p hidden><template></p><div>{article}</div></template>",
+                     f"<div><template shadowrootmode=open><p>Shadow</p></template><main>{article}</main></div>",
+                     f"<div><template shadowrootmode=banana><iframe src='https://p.example/v'></iframe></template><main>{article}</main></div>"):
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{body}</body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", body[:60])
+        page, _receipt = self._page_receipt(
+            f"<html><head><title>T</title></head><body><template shadowrootmode=banana><iframe src='https://p.example/v'></iframe></template><main>{article}</main></body></html>")
+        self.assertEqual(page["embedded_media"], 0)
+
+    def test_redirect_targets_use_the_canonical_hostname(self):
+        from x_reader.fetchers import jina
+
+        self.assertEqual(jina._next_hop("https://a.example/x", "https://fa\u00df.de/p"), "https://xn--fa-hia.de/p")
+        self.assertEqual(jina._next_hop("https://a.example/x", "/y?z=1"), "https://a.example/y?z=1")
+        with self.assertRaises(jina.BlockedDestination):
+            jina._request_pinned("https://fa\u00df.de/", 5)
+
     def test_collapsed_controls_and_redirects(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
 
@@ -649,7 +684,13 @@ class GenericReadTest(unittest.TestCase):
         self.assertTrue(jina._extract_html_page(deep)["too_complex"])
         many = "<br>" * (jina.MAX_PARSE_TAGS + 10)
         self.assertTrue(jina._extract_html_page(many)["too_complex"])
-        # unclosed paragraphs do not nest, and scripts are not markup
+        # formatting elements a parser re-opens for every block would multiply the tree
+        amplified = "<p>" + "".join(f"<b class=c{i}>" for i in range(60)) + "</p>" + "<p>x</p>" * 3000
+        self.assertTrue(jina._extract_html_page(amplified)["too_complex"])
+        # stray end tags under a deep stack cost scope checks
+        scoped = "<span>" * 1400 + "</p>" * 100000
+        self.assertTrue(jina._extract_html_page(scoped)["too_complex"])
+        # unclosed paragraphs do not nest, and script text is not markup
         ok = "<p>x" * 5000 + "<script>" + "<div>" * 5000 + "</script>"
         self.assertFalse(jina._extract_html_page(ok)["too_complex"])
         with patch("x_reader.fetchers.jina._download_html", return_value=(deep, "https://e.com/a")):
@@ -739,7 +780,9 @@ class YoutubeTest(unittest.TestCase):
         # a title discussing the error is still a video title; YouTube's own error titles are not
         self.assertEqual(state("How to fix 'Video unavailable' errors", "Video unavailable explained"), "ok")
         for title in ("Video unavailable - YouTube", "Sign in to confirm your age - YouTube", "Private video",
-                      "Video unavailable. - YouTube"):
+                      "Video unavailable. - YouTube", "This video isn't available - YouTube",
+                      "This video isn\u2019t available anymore - YouTube",
+                      "The uploader has not made this video available in your country - YouTube"):
             self.assertEqual(state(title), "unavailable", title)
         self.assertEqual(state("Sign in to YouTube - YouTube"), "unidentified")
         for title in ("Before you continue to YouTube", "Sign in - YouTube", "Consent", ""):

@@ -79,9 +79,6 @@ _OPTIONAL_END_TAGS = {
     "p", "li", "dt", "dd", "option", "optgroup", "tr", "td", "th", "thead", "tbody", "tfoot",
     "colgroup", "caption", "rb", "rt", "rtc", "rp", "html", "head", "body",
 }
-_RAW_TEXT_TAGS = (
-    "script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "noscript", "plaintext",
-)
 
 
 _IMPORTANT = re.compile(r"!\s*important\s*$", re.IGNORECASE)
@@ -184,7 +181,7 @@ def _valid_display(value: str) -> bool:
 
 
 _CSS_LENGTH = re.compile(
-    r"([+]?(?:\d+\.?\d*|\.\d+))(px|em|rem|%|vw|vh|vmin|vmax|vi|vb|pt|pc|cm|mm|in|q|ex|ch|lh|rlh"
+    r"\+?(\d{1,6}(?:\.\d{1,6})?|\.\d{1,6})(px|em|rem|%|vw|vh|vmin|vmax|vi|vb|pt|pc|cm|mm|in|q|ex|ch|lh|rlh"
     r"|cqw|cqh|cqi|cqb|cqmin|cqmax|svh|lvh|dvh|svw|lvw|dvw)"
 )
 _CSS_SIZE_WORDS = {
@@ -208,72 +205,161 @@ def _tiny_css_size(value: str) -> bool:
 
 def _tiny_html_size(value: str) -> bool:
     """An HTML width/height attribute of 0 or 1 pixel (leading digits, as browsers parse them)."""
-    match = re.match(r"\s*(\d+)(\.\d*)?(%?)", value or "")
+    match = re.match(r"\s*(\d{1,9})(\.\d*)?(%?)", value or "")
     return bool(match) and not match.group(3) and int(match.group(1)) <= 1
 
 
-def _small_number(value: str, limit: float) -> bool:
-    match = re.fullmatch(r"([+-]?(?:\d+\.?\d*|\.\d+))(%?)", value)
-    return bool(match) and float(match.group(1)) / (100 if match.group(2) else 1) < limit
-
-
+_NUMBER = r"(?:\d{1,6}(?:\.\d{1,6})?|\.\d{1,6})"
+_PLAIN_NUMBER = re.compile(rf"\+?({_NUMBER})(%?)")
+_PLAIN_LENGTH = re.compile(rf"([+-]?)({_NUMBER})(px|pt|pc|em|rem|ex|ch|%|vw|vh|vmin|vmax|cm|mm|in|q)")
+_VISIBLE_DISPLAYS = {
+    "block", "inline", "inline-block", "flex", "inline-flex", "grid", "inline-grid", "flow-root", "table",
+    "inline-table", "list-item", "table-row", "table-cell", "table-row-group", "table-header-group",
+    "table-footer-group", "table-caption", "table-column", "table-column-group", "contents", "ruby",
+    "-webkit-box", "-webkit-inline-box", "-ms-flexbox", "-ms-inline-flexbox",
+}
+_FONT_SIZE_WORDS = {
+    "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large", "smaller", "larger",
+    "inherit", "initial", "unset", "revert", "revert-layer",
+}
+# Smallest sizes still read as text, per unit.
+_MIN_FONT = {"px": 6, "pt": 5, "pc": 0.4, "em": 0.4, "rem": 0.4, "ex": 0.8, "ch": 0.8, "%": 40,
+             "vw": 0.4, "vh": 0.4, "vmin": 0.4, "vmax": 0.4, "cm": 0.15, "mm": 1.5, "in": 0.06, "q": 6}
+_NAMED_COLOR = re.compile(r"[a-z]{3,30}")
+_HEX_COLOR = re.compile(r"#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})")
+_FUNC_COLOR = re.compile(r"(rgba?|hsla?)\(([^()]{1,80})\)")
 _ALWAYS_HIDING = {
-    "all", "clip", "clip-path", "mask", "mask-image", "-webkit-mask", "-webkit-mask-image", "transform",
-    "translate", "scale", "rotate", "filter", "-webkit-line-clamp", "line-clamp",
+    "all", "clip", "clip-path", "mask", "mask-image", "mask-size", "-webkit-mask", "-webkit-mask-image",
+    "transform", "translate", "scale", "rotate", "filter", "-webkit-line-clamp", "line-clamp", "font",
+    "content-visibility",
 }
 _SIZES = {"height", "max-height", "width", "max-width", "block-size", "inline-size", "max-block-size", "max-inline-size"}
 _OVERFLOWS = {"overflow", "overflow-x", "overflow-y", "overflow-block", "overflow-inline"}
-# A custom property in these can switch the text off; in colors, sizes and fonts
-# it is a design token, judged like external CSS.
-_UNRESOLVED_HIDING = {"visibility", "content-visibility", "opacity", "display"}
+_OFFSETS = {"top", "left", "right", "bottom", "inset", "inset-block", "inset-inline", "inset-block-start",
+            "inset-block-end", "inset-inline-start", "inset-inline-end"}
+_MARGINS = {"margin", "margin-left", "margin-right", "margin-top", "margin-bottom", "margin-inline",
+            "margin-inline-start", "margin-inline-end", "margin-block", "margin-block-start", "margin-block-end"}
+
+
+def _opaque(alpha: str) -> bool:
+    match = _PLAIN_NUMBER.fullmatch(alpha.strip())
+    return bool(match) and float(match.group(1)) / (100 if match.group(2) else 1) >= 0.1
+
+
+def _shown_color(value: str) -> bool:
+    """A color x-reader can tell is not transparent."""
+    if value in ("transparent",):
+        return False
+    if _NAMED_COLOR.fullmatch(value) or value.startswith("var("):
+        return True  # named colors and design-token colors (judged like external CSS)
+    hexcolor = _HEX_COLOR.fullmatch(value)
+    if hexcolor:
+        digits = hexcolor.group(1)
+        if len(digits) in (3, 6):
+            return True
+        alpha = digits[-1] * 2 if len(digits) == 4 else digits[-2:]
+        return int(alpha, 16) >= 26
+    func = _FUNC_COLOR.fullmatch(value)
+    if not func:
+        return False
+    body = func.group(2)
+    if "/" in body:
+        channels, _, alpha = body.partition("/")
+        return len(channels.split()) == 3 and _opaque(alpha)
+    parts = [part.strip() for part in body.split(",")] if "," in body else body.split()
+    if len(parts) == 3:
+        return True
+    return len(parts) == 4 and _opaque(parts[3])
+
+
+def _shown_font_size(value: str) -> bool:
+    if value in _FONT_SIZE_WORDS:
+        return True
+    match = _PLAIN_LENGTH.fullmatch(value)
+    return bool(match) and not match.group(1) and float(match.group(2)) >= _MIN_FONT[match.group(3)]
 
 
 def _hides_text(name: str, value: str) -> bool:
-    """An inline declaration that can hide, clip or shrink an element's text away."""
+    """True unless x-reader can tell this inline declaration leaves text visible.
+
+    Only declarations that can hide, clip, shrink, move or recolor text away are
+    judged; their values must be ones x-reader fully understands (anything else
+    -- calc(), unusual units, custom properties -- counts as hiding)."""
+    if len(value) > 120:
+        return True
     if name in _ALWAYS_HIDING:
-        return value not in ("none", "auto", "initial", "unset", "normal", "revert", "revert-layer")
-    if re.search(r"\b(?:var|env|attr)\(", value):
-        return name in _UNRESOLVED_HIDING
+        return value not in ("none", "initial", "unset", "normal", "revert", "revert-layer") or (
+            name == "content-visibility" and value not in ("visible", "auto"))
     if name == "visibility":
-        return value in ("hidden", "collapse")
-    if name == "content-visibility":
-        return value == "hidden"
-    if name == "opacity":
-        return _small_number(value, 0.1)
-    if name in ("font-size", "zoom"):
-        return value == "0" or _tiny_css_size(value) or _small_number(value, 0.1)
+        return value != "visible"
+    if name in ("opacity", "zoom"):
+        return not (value in ("normal", "reset") or _opaque(value))
+    if name == "font-size":
+        return not _shown_font_size(value)
     if name in ("color", "-webkit-text-fill-color"):
-        return value == "transparent" or bool(re.search(r"[,/]\s*0*\.?0*%?\s*\)$", value))
+        return not _shown_color(value)
     if name == "text-indent":
-        return value.startswith("-")
-    if name in _SIZES:
-        return _tiny_css_size(value)
+        match = _PLAIN_LENGTH.fullmatch(value)
+        return not (value == "0" or (match and not match.group(1)))
     if name == "position":
         return value in ("absolute", "fixed")  # with offsets it may sit off-screen
+    if name in _MARGINS:
+        # A large negative margin can push text off-screen; spacing tokens (var()) are layout.
+        if re.search(r"\b(?:calc|min|max|clamp)\(", value):
+            return "-" in value
+        return any(token.startswith("-") and not (_PLAIN_LENGTH.fullmatch(token) and
+                                                  float(_PLAIN_LENGTH.fullmatch(token).group(2)) < 200)
+                   for token in value.split() if not token.startswith("var("))
+    return False
+
+
+def _clips_text(declarations: list) -> bool:
+    """A box that clips or scrolls its text: overflow hidden/clip/scroll/auto
+    together with a size, nowrap or text-overflow, unless every size is one
+    x-reader can tell is roomy."""
+    clipping = any(name in _OVERFLOWS and value in ("hidden", "clip", "scroll", "auto")
+                   for name, value, _important in declarations)
+    if not clipping:
+        return False
+    for name, value, _important in declarations:
+        if name in ("white-space", "text-overflow") and value not in ("normal", "clip", "initial", "unset"):
+            return True
+        if name in _SIZES:
+            match = _PLAIN_LENGTH.fullmatch(value)
+            roomy = value in ("auto", "none", "max-content", "fit-content") or (
+                match and not match.group(1) and float(match.group(2)) >= (50 if match.group(3) == "%" else 100)
+                and match.group(3) in ("px", "%", "em", "rem", "vh", "vw"))
+            if not roomy:
+                return True
     return False
 
 
 def _content_visibility(attrs: dict) -> str:
     """Whether an element's own markup shows its text: "hidden" (the hidden
     attribute, or display:none as its only display declaration), "unknown" (a
-    style that cannot be parsed, or any other declaration that can hide, clip
-    or cut off text) or "visible". It decides only what counts as page text:
-    wall notices and frames count wherever they are."""
-    declarations = _inline_declarations(attrs.get("style") or "")
+    style that cannot be parsed, a display value outside the plain visible ones,
+    or any declaration that could hide, clip, shrink, move or recolor text away
+    with a value x-reader does not fully understand) or "visible". It decides
+    only what counts as page text: wall notices and frames count wherever they
+    are."""
+    style = attrs.get("style") or ""
+    if len(style) > 4000:
+        return "unknown"
+    declarations = _inline_declarations(style)
     if declarations is None:
         return "unknown"
     names = {name for name, _value, _important in declarations}
-    if any(_hides_text(name, value) for name, value, _important in declarations):
-        return "unknown"
-    if names & _SIZES and any(
-            name in _OVERFLOWS and value in ("hidden", "clip", "scroll", "auto") for name, value, _i in declarations):
-        return "unknown"  # a box that clips or scrolls its text
     displays = [value for name, value, _important in declarations if name == "display"]
+    if displays == ["none"] and "all" not in names:
+        return "hidden"  # not rendered at all, whatever else the style says
+    if displays and not all(value in _VISIBLE_DISPLAYS for value in displays):
+        return "unknown"
+    if any(_hides_text(name, value) for name, value, _important in declarations) or _clips_text(declarations):
+        return "unknown"
+    positions = [value for name, value, _important in declarations if name == "position"]
+    if names & _OFFSETS and any(value not in ("static", "sticky") for value in positions):
+        return "unknown"
     if displays:
-        if not all(_valid_display(value) for value in displays):
-            return "unknown"
-        if "none" in displays:
-            return "hidden" if len(displays) == 1 else "unknown"
         return "visible"  # an inline display overrides the hidden attribute
     return "hidden" if "hidden" in attrs else "visible"
 
@@ -328,83 +414,82 @@ def _join_text(parts: list) -> str:
     return re.sub(r"\n{3,}", "\n\n", content).strip()
 
 
-# Parse budgets: more tags or deeper nesting than this is refused before parsing.
+# Parse budgets, enforced inside the tree builder: elements and comments
+# created (clones included), open depth, scope-check steps and text copying.
 MAX_PARSE_TAGS = 150_000
+MAX_PARSE_NODES = 60_000
 MAX_PARSE_DEPTH = 1_500
 MAX_PARSE_WORK = 20_000_000
-_TAG_TOKEN = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9:-]*)")
+MAX_TEXT_COPY = 64_000_000
 
 
-def _prescan_markup(html: str) -> tuple:
-    """(too_complex, templates_unsure), in one linear pass over the tags.
+# Raw-text elements whose text x-reader never reads.
+_UNREAD_TEXT = {"script", "style", "noscript", "iframe", "noembed", "noframes", "xmp"}
 
-    too_complex: over the tag, nesting or parse-work budget. Open elements are
-    tracked the way a parser keeps them (an end tag closes its element and
-    whatever is still open inside it; stray end tags change nothing; optional
-    end tags, void elements and raw-text contents such as scripts do not
-    nest), and the work estimate adds the open depth at every tag, which is
-    what a tree builder's scope checks cost. templates_unsure: a <template>
-    whose content closes an element it did not open or leaves one open; the
-    parser does not model template contents, so such markup could reshape the
-    page around it.
-    """
-    if html.count("<") > MAX_PARSE_TAGS:
-        return True, False
-    lowered = html.lower()
-    stack: list = []  # open element names
-    open_count: dict = {}
-    templates: list = []  # per open template: {tag: open count inside it}
-    work = foreign = 0
-    unsure = False
-    position = 0
-    while True:
-        match = _TAG_TOKEN.search(html, position)
-        if not match:
-            break
-        closing, tag = bool(match.group(1)), match.group(2).lower()
-        position = match.end()
-        work += len(stack)
-        if work > MAX_PARSE_WORK:
-            return True, unsure
-        tag_end = html.find(">", position)
-        # "/>" closes an element only inside SVG/MathML; in HTML it is ignored.
-        self_closed = foreign > 0 and tag_end != -1 and html[tag_end - 1] == "/"
-        if tag in ("svg", "math") and not closing and not self_closed:
-            foreign += 1
-        elif tag in ("svg", "math") and closing:
-            foreign = max(0, foreign - 1)
-        if self_closed:
-            continue
-        if closing:
-            if templates:
-                if templates[-1].get(tag):
-                    templates[-1][tag] -= 1
-                elif tag == "template":
-                    unsure |= any(count for t, count in templates.pop().items() if t not in _OPTIONAL_END_TAGS)
-                elif tag not in _OPTIONAL_END_TAGS:
-                    unsure = True
-            if open_count.get(tag):
-                while stack:
-                    closed = stack.pop()
-                    open_count[closed] -= 1
-                    if closed == tag:
-                        break
-            continue
-        if tag == "template":
-            templates.append({})
-        elif templates and tag not in _VOID_TAGS:
-            templates[-1][tag] = templates[-1].get(tag, 0) + 1
-        if tag not in _VOID_TAGS and tag not in _OPTIONAL_END_TAGS:
-            stack.append(tag)
-            open_count[tag] = open_count.get(tag, 0) + 1
-            if len(stack) > MAX_PARSE_DEPTH:
-                return True, unsure
-        if tag in _RAW_TEXT_TAGS:
-            end = lowered.find("</" + tag, position)
-            if end == -1:
-                break
-            position = end
-    return False, unsure or bool(templates)
+
+class ParseBudgetExceeded(ValueError):
+    """The page has more markup than x-reader parses."""
+
+
+def _budgeted_tree_builder():
+    """html5lib's etree builder, counting what parsing creates and costs."""
+    import html5lib
+
+    base = html5lib.getTreeBuilder("etree")
+
+    class Builder(base):
+        def __init__(self, *args, **kwargs):
+            self.nodes = self.work = self.copied = 0
+            builder = self
+
+            def counted(cls):
+                class Counted(cls):
+                    def __init__(self, *a, **k):
+                        builder.nodes += 1
+                        if builder.nodes > MAX_PARSE_NODES:
+                            raise ParseBudgetExceeded("too many elements")
+                        super().__init__(*a, **k)
+
+                    def insertText(self, data, insertBefore=None):
+                        if self.name in _UNREAD_TEXT:
+                            return  # script/style bodies are never read; keeping them costs quadratic copies
+                        children = self._element
+                        current = (children[-1].tail if len(children) else children.text) or ""
+                        builder.copied += len(current) + len(data)
+                        if builder.copied > MAX_TEXT_COPY:
+                            raise ParseBudgetExceeded("too much text work")
+                        super().insertText(data, insertBefore)
+
+                return Counted
+
+            self.elementClass = counted(base.elementClass)
+            self.commentClass = counted(base.commentClass)
+            super().__init__(*args, **kwargs)
+
+        def _charge(self, amount: int) -> None:
+            self.work += amount
+            if self.work > MAX_PARSE_WORK:
+                raise ParseBudgetExceeded("too much parse work")
+
+        def elementInScope(self, target, variant=None):
+            self._charge(len(self.openElements))
+            return super().elementInScope(target, variant)
+
+        def reconstructActiveFormattingElements(self):
+            self._charge(len(self.activeFormattingElements) + len(self.openElements))
+            return super().reconstructActiveFormattingElements()
+
+        def insertElementNormal(self, token):
+            if len(self.openElements) >= MAX_PARSE_DEPTH:
+                raise ParseBudgetExceeded("nesting too deep")
+            return super().insertElementNormal(token)
+
+        def insertElementTable(self, token):
+            if len(self.openElements) >= MAX_PARSE_DEPTH:
+                raise ParseBudgetExceeded("nesting too deep")
+            return super().insertElementTable(token)
+
+    return Builder
 
 
 def _extract_html_page(html: str) -> dict:
@@ -412,7 +497,7 @@ def _extract_html_page(html: str) -> dict:
 
     The page is parsed with a standard HTML5 tree builder (scripting on, so
     <noscript> is raw text), so misnested or unclosed markup ends where a
-    browser ends it. content is the page text: navigation, footers, asides,
+    browser ends it; parsing stops at the node, depth, work and text budgets. content is the page text: navigation, footers, asides,
     hidden elements and foreign (SVG/MathML) text are left out; when the page
     marks its primary content (every <main>, else every <article>) and that
     region carries substantial prose, content is that region, so banners around
@@ -420,7 +505,8 @@ def _extract_html_page(html: str) -> dict:
     so wall notices count wherever they sit. embeds counts players, frames and
     plugins page-wide, except frames that are themselves hidden or 0/1-pixel.
     visibility_unknown: content includes text under markup whose visibility
-    x-reader cannot settle, or template markup that could reshape the page.
+    x-reader cannot settle. templates: the page has a <template>, whose
+    contents and any shadow root the parser does not model.
     client_redirect: a <meta http-equiv="refresh"> sends visitors to another URL.
     Closed <details> (beyond the summary) and <dialog> hide their text; menus
     and text boxes, button labels and placeholders count only as wall wording.
@@ -428,11 +514,18 @@ def _extract_html_page(html: str) -> dict:
     import html5lib
     from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars
 
-    too_complex, templates_unsure = _prescan_markup(html)
-    if too_complex:
-        return {"title": "", "content": "", "embeds": 0, "page_text": "", "primary_used": False,
-                "visibility_unknown": True, "too_complex": True, "client_redirect": False}
-    root = html5lib.parse(html, treebuilder="etree", namespaceHTMLElements=False, scripting=True)
+    refused = {"title": "", "content": "", "embeds": 0, "page_text": "", "primary_used": False,
+               "visibility_unknown": True, "templates": False, "too_complex": True, "client_redirect": False}
+    if html.count("<") > MAX_PARSE_TAGS:
+        return refused
+    try:
+        root = html5lib.HTMLParser(tree=_budgeted_tree_builder(), namespaceHTMLElements=False).parse(
+            html, scripting=True)
+    except ParseBudgetExceeded:
+        return refused
+    # html5lib does not model template contents or shadow-root attachment and
+    # slot distribution, so a page with a <template> cannot vouch for its text.
+    templates_unsure = any(True for _ in root.iter("template"))
     title_element = next(iter(root.iter("title")), None)
     title = " ".join("".join(title_element.itertext()).split()) if title_element is not None else ""
 
@@ -469,7 +562,8 @@ def _extract_html_page(html: str) -> dict:
         attrs = {str(key).rsplit("}", 1)[-1]: value for key, value in element.attrib.items()}
         if name in _EMBED_TAGS and not parent["skip"] and not _is_tracking_frame(attrs):
             embeds += 1
-        shadow_root = name == "template" and ("shadowrootmode" in attrs or "shadowroot" in attrs)
+        shadow_root = name == "template" and (
+            (attrs.get("shadowrootmode") or attrs.get("shadowroot") or "").strip().lower() in ("open", "closed"))
         visibility = "visible" if foreign else _content_visibility(attrs)
         hidden = parent["hidden"]
         if parent["collapsed"]:
@@ -528,7 +622,7 @@ def _extract_html_page(html: str) -> dict:
     return {
         "title": title[:200], "content": content, "embeds": embeds,
         "page_text": _join_text(parts["gate"]), "primary_used": primary_used,
-        "visibility_unknown": chosen in unknown_in or templates_unsure, "too_complex": False,
+        "visibility_unknown": chosen in unknown_in, "templates": templates_unsure, "too_complex": False,
         "client_redirect": client_redirect,
     }
 
@@ -615,6 +709,16 @@ def _format_host_header(hostname: str, port: int, scheme: str) -> str:
     return host if port == default_port else f"{host}:{port}"
 
 
+def _next_hop(current: str, location: str) -> str:
+    """A redirect target, in the canonical form every hop is checked and connected with."""
+    from x_reader.utils.url_validator import canonical_url
+
+    try:
+        return canonical_url(urljoin(current, location))
+    except ValueError as exc:
+        raise BlockedDestination(str(exc)) from exc
+
+
 def _request_pinned(
     url: str,
     timeout_seconds: float,
@@ -631,8 +735,16 @@ def _request_pinned(
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise BlockedDestination(f"Pinned request requires http(s) URL: {url}")
 
-    hostname = parsed.hostname
-    ascii_hostname = hostname.encode("idna").decode("ascii")
+    from x_reader.utils.url_validator import canonical_url
+
+    # DNS checks, SNI, the certificate check and Host all use one name: the
+    # UTS46 form routing and policy saw ("faß.de" is xn--fa-hia.de, never fass.de).
+    try:
+        if canonical_url(url) != url:
+            raise BlockedDestination(f"URL hostname is not in canonical form: {url}")
+    except ValueError as exc:
+        raise BlockedDestination(str(exc)) from exc
+    hostname = ascii_hostname = parsed.hostname
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
 
     remaining = max(0.1, float(timeout_seconds))
@@ -783,7 +895,7 @@ def fetch_public_bytes(
                 location = response.headers.get("Location")
                 if not location:
                     raise ValueError(f"Redirect status {status} without Location")
-                current = urljoin(current, location)
+                current = _next_hop(current, location)
                 continue
             if not 200 <= status < 300:
                 raise ValueError(f"HTTP status {status}")
@@ -842,6 +954,8 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
         signals.add("visibility_unknown")
     if page["client_redirect"]:
         signals.add("client_redirect")
+    if page["templates"]:
+        signals.add("template_markup")
     return {
         "title": title or final_url,
         "content": content,
@@ -884,7 +998,7 @@ def _download_html(url: str, max_redirects: int = 5, hop_guard=None) -> tuple[st
                     raise ValueError(
                         f"Direct fallback got redirect status {status} without Location"
                     )
-                current = urljoin(current, location)
+                current = _next_hop(current, location)
                 if hop_guard is not None:
                     hop_guard(current)
                 continue

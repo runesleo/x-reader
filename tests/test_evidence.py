@@ -224,7 +224,9 @@ class EvidenceContractTest(unittest.TestCase):
             self.assertEqual(result["status"], "FAIL", title)
         for opening in ("Please sign in before continuing.", "You need to sign in before continuing.",
                         "Registration required.", "(Authentication required to continue.)", "[One more step.]",
-                        "(Access denied.)", "Please wait while we check your browser."):
+                        "(Access denied.)", "Please wait while we check your browser.",
+                        "Register to read this article.", "Create an account to read this article.",
+                        "Sign in now to continue.", "Please authenticate to continue."):
             thin = classify_payload({"source_type": "manual", "title": "Example", "content": opening, "extra": VERIFIED})
             self.assertEqual(thin["status"], "FAIL", opening)
             long = classify_payload({"source_type": "manual", "title": "Example",
