@@ -728,6 +728,14 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main style='display:grid;grid-auto-rows:0'>{article}</main>"),
             ("<body>", f"<main style='display:grid;grid-template-columns:repeat(4,0)'>{article}</main>"),
             ("<body>", f"<main style='display:grid;grid-template:auto / 1fr'>{article}</main>"),
+            # escapes that are not name characters leave invalid values
+            ("<body>", f"<main style='color:white;color:rgb\\(0\\,0\\,0\\);background:white'>{article}</main>"),
+            ("<body>", f"<main style='color:white;color:black\\ ;background:white'>{article}</main>"),
+            ("<body>", f"<main style='color:white;color:black\\9;background:white'>{article}</main>"),
+            # text a set height cannot hold spills over what follows
+            ("<body>", f"<main><div style='height:0'><div>{article}</div></div><div>{article}</div></main>"),
+            ("<body>", f"<main style='display:grid;height:0;grid-auto-rows:minmax(0,1fr)'>{article}</main>"),
+            ("<body>", f"<main style='display:grid;grid-auto-rows:20px'>{article}</main>"),
             # var() fallbacks nested past any use
             ("<body>", "<main style='font-size:" + "var(--x," * 1100 + "16px" + ")" * 1100 + f"'>{article}</main>"),
             # hidden whatever the display; fallback content browsers do not show
@@ -824,12 +832,34 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main style='display:grid;grid-template-columns:minmax(0,1fr) 200px;grid-auto-rows:auto'>"
                        f"{article}</main>"),
             ("<body>", f"<main><xmp>shown as written</xmp>{article}</main>"),
+            ("<body>", f"<main style='height:100%'>{article}</main>"),
+            ("<body>", f"<main style='display:flex;grid-auto-rows:0'>{article}</main>"),  # grid tracks need a grid
             ("<body>", f"<main><div style='position:relative;overflow:hidden;height:200px'><img src='x.jpg' "
                        f"style='position:absolute;inset:0;width:100%;height:100%'></div>{article}</main>"),
             ("<body>", f"<main style='font-family:\\5FAE\\8F6F\\96C5\\9ED1'>{article}</main>"),
         ):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head>{head}{body}</body></html>")
             self.assertEqual(receipt["status"], "PASS", (head, body[:80]))
+
+    def test_walls_are_read_as_the_page_lays_out_its_text(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        for notice in ("<div>Sub<span>scribe</span> to continue.</div>", "<div>Sub<!--x-->scribe to continue.</div>",
+                       "<div>Subscribe\nto continue.</div>", "<div>登录后阅<span>读</span>全文</div>",
+                       "<div style='display:flex'><div>Sub</div><div>scribe to continue.</div></div>",
+                       "<div style='float:left'>Sub</div><div style='float:left'>scribe to continue.</div>",
+                       "<div style='display:inline'>Sub</div><div style='display:inline'>scribe to continue.</div>",
+                       "<div>&lt;Subscribe to continue&gt;</div>",
+                       "<xmp><notice value='Subscribe to continue.'></xmp>"):
+            page, receipt = self._page_receipt(
+                f"<html><head><title>T</title></head><body>{notice}<main>{article}</main></body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", notice)
+        page, receipt = self._page_receipt("<html><head><title>T</title></head><body><main><p>Hello <b>world</b>!</p>"
+                                           f"{article}</main></body></html>")
+        self.assertTrue(page["content"].startswith("Hello world!"))  # nothing added between inline runs
+        long_title = "Brand " * 60 + "| Sign in"
+        page, receipt = self._page_receipt(
+            f"<html><head><title>{long_title}</title></head><body><main>{article}</main></body></html>")
+        self.assertNotEqual(receipt["status"], "PASS")  # walls are looked for in the whole title, not the shown 200
 
     def test_text_box_values_and_option_labels_count_for_walls(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
@@ -875,10 +905,14 @@ class GenericReadTest(unittest.TestCase):
 
         self.assertEqual(_inline_declarations("dis\\play:none"), [("display", "none", False)])
         self.assertEqual(_inline_declarations("position:\\61 bsolute"), [("position", "absolute", False)])
-        self.assertEqual(_inline_declarations("c\\;d:e"), [("c;d", "e", False)])
+        # an escape outside a string spells only identifier characters: one that yields
+        # a delimiter, space, bracket or comma leaves a value no parser here accepts
+        self.assertEqual(_inline_declarations("c\\;d:e"), [("c\ufffdd", "e", False)])
         self.assertEqual(_inline_declarations("color\\:black"), [])  # no unescaped ":", no declaration
-        self.assertEqual(_inline_declarations("color:black\\!important"), [("color", "black!important", False)])
+        self.assertEqual(_inline_declarations("color:black\\!important"), [("color", "black\ufffdimportant", False)])
         self.assertEqual(_inline_declarations("color:red !\\69mportant"), [("color", "red", True)])
+        self.assertEqual(_inline_declarations("color:rgb\\(0\\,0\\,0\\)"), [("color", "rgb\ufffd0\ufffd0\ufffd0\ufffd", False)])
+        self.assertEqual(_inline_declarations("font-family:'\\5FAE'"), [("font-family", "'\u5fae'", False)])
         for broken in ("a:b\\", "a:\\\nb", "a:b/*", "a:(b", "a:b)", "a:'b"):
             self.assertIsNone(_inline_declarations(broken), broken)
         page, receipt = self._page_receipt(

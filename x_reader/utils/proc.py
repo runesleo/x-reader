@@ -15,7 +15,8 @@ _DRAIN_GRACE_SECONDS = 1.0
 
 # Ceilings the hosted reader process applies to itself. A hosted read runs in a
 # single process (no external tools), so these are per-request ceilings. The
-# largest pages the parse budgets accept peak around 120 MiB resident.
+# largest pages the parse budgets accept peaked at 113-132 MiB resident in local
+# runs, which is why the hosted server runs at most 3 reads at once.
 HOSTED_CPU_SECONDS = 120
 HOSTED_MAX_ADDRESS_SPACE_BYTES = 768 * 1024 * 1024
 HOSTED_MAX_FILE_BYTES = 64 * 1024 * 1024

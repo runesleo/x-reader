@@ -38,7 +38,7 @@ SOCKET_TIMEOUT_SECONDS = 15
 # Absolute budget for the request line, headers and body together: a client
 # dripping one byte at a time cannot hold a connection thread past it.
 REQUEST_READ_DEADLINE_SECONDS = 20
-# 24 connection threads + the watcher + 4 reader processes stay inside the service's 64 tasks.
+# 24 connection threads + the watcher + 3 reader processes stay inside the service's 64 tasks.
 MAX_CONNECTION_THREADS = 24
 MAX_CLI_OUTPUT_BYTES = 8 * 1024 * 1024
 

@@ -21,7 +21,7 @@ Status (v0.5.0): the hosted surface runs as a **public beta** for public X, YouT
 ### Limits
 
 - Per request (one process): 768 MiB address space, 120 CPU-seconds, 64 MiB per written file, 256 open files, 75 s deadline and 8 MiB output cap enforced while it runs; its process group is killed on exit, timeout or overflow; reader processes are the first OOM-kill candidates; hosted reads write no files besides the temporary HOME.
-- Per service: 512 MiB memory, 80 % CPU, 64 tasks, 512 open files; at most 3 concurrent reads and 24 connection threads; requests not fully read within 20 s are cut off.
+- Per service: 512 MiB memory, 80 % CPU, 64 tasks; 512 open files per process (each read process lowers its own limit to 256); at most 3 concurrent reads and 24 connection threads; requests not fully read within 20 s are cut off.
 - At the edge: 12 reads/minute and 2 concurrent reads per client IP, 8 KiB bodies, full request buffering, JSON error bodies ([deploy/nginx-xreader.conf](../deploy/nginx-xreader.conf)).
 - Responses: bounded content preview, JSON for every error, stable reason codes only (no exception text), no interpreter version in headers, strict CSP.
 

@@ -6,7 +6,7 @@ limits; these files add the service-wide and network-level ones.
 
 | File | Installed as | What it enforces |
 |---|---|---|
-| `x-reader-evidence.service` | `/etc/systemd/system/` | Unprivileged user, read-only system, private `/tmp`, no capabilities; memory 512 MiB, CPU 80 %, 64 tasks and 512 open files for all requests together |
+| `x-reader-evidence.service` | `/etc/systemd/system/` | Unprivileged user, read-only system, private `/tmp`, no capabilities; memory 512 MiB, CPU 80 % and 64 tasks for all requests together; 512 open files per process (each read lowers its own limit to 256) |
 | `xreader-egress.nft` + `xreader-egress.service` | `/etc/nftables.d/`, `/etc/systemd/system/` | Sockets owned by the service user cannot reach loopback, private, CGNAT/tailnet, link-local/metadata, multicast or class E addresses; the reader's own address check refuses the other non-public ranges |
 | `nginx-xreader.conf` | nginx site | TLS, 8 KiB bodies, 12 reads/minute and 2 concurrent reads per client IP, full request buffering, JSON error bodies |
 

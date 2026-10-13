@@ -91,11 +91,15 @@ _BARE_URL = re.compile(r"https?://\S+")
 _CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
 
-def visible_text(content: str) -> str:
-    """Text a reader would see: no markup, image links, link targets or bare URLs."""
-    text = _MD_IMAGE.sub(" ", content)
-    text = _MD_LINK.sub(r"\1", text)
-    text = html.unescape(_HTML_TAG.sub(" ", text))
+def visible_text(content: str, markup: bool = True) -> str:
+    """Text a reader would see: no markup, image links, link targets or bare
+    URLs. With markup=False the text is already what the page shows (a DOM
+    read, a text/plain page): only bare URLs go, and nothing is unescaped."""
+    text = content
+    if markup:
+        text = _MD_IMAGE.sub(" ", text)
+        text = _MD_LINK.sub(r"\1", text)
+        text = html.unescape(_HTML_TAG.sub(" ", text))
     text = _BARE_URL.sub(" ", text)
     return "\n".join(" ".join(line.split()) for line in text.splitlines()).strip()
 
@@ -388,11 +392,11 @@ _ACCESS_NOTE = re.compile(
 _HAS_SENTENCE_BREAK = re.compile(r"[.!?…:;。！？：；]")
 
 
-def _normalized_lines(title: str, text: str):
+def _normalized_lines(title: str, text: str, markup: bool = True):
     """Yield normalized lines, the title first; raise ValueError past the scan budget."""
     if len(text) > 2 * MAX_WALL_SCAN_CHARS:
         raise ValueError("page too large to check")
-    visible = visible_text(text)
+    visible = visible_text(text, markup)
     if len(visible) > MAX_WALL_SCAN_CHARS or visible.count("\n") > MAX_WALL_SCAN_LINES:
         raise ValueError("page too large to check")
     budget = 2 * MAX_WALL_SCAN_CHARS  # NFKC can expand text
@@ -411,11 +415,11 @@ def _consent_level(strong: set, weak: set) -> bool:
     return bool(strong) or len(strong) + len(weak) >= 3
 
 
-def consent_signals(title: str, text: str) -> list:
+def consent_signals(title: str, text: str, markup: bool = True) -> list:
     """Cookie/consent wording in the text: "consent", plus "consent_title" for a consent-style title."""
     found = set()
     try:
-        for line in _normalized_lines(title, text):
+        for line in _normalized_lines(title, text, markup):
             found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
     except ValueError:
         return ["scan_budget_exceeded"]
@@ -425,7 +429,7 @@ def consent_signals(title: str, text: str) -> list:
     return ["consent", "consent_title"] if any(m in title_n for m in _CONSENT_TITLES) else ["consent"]
 
 
-def gate_signals(title: str, text: str, cta_text: str | None = None) -> list:
+def gate_signals(title: str, text: str, cta_text: str | None = None, markup: bool = True) -> list:
     """Walls a page announces, wherever they appear: login, challenge, consent,
     missing page, paywall or teaser.
 
@@ -436,8 +440,9 @@ def gate_signals(title: str, text: str, cta_text: str | None = None) -> list:
     (auth_hint, challenge_hint, missing_hint): it keeps a page from passing and
     nothing more. A block that is only "Read more" counts in cta_text (the text
     shown; default text). The fetcher runs this over every visible block of the
-    page, nav and footer included. Past the scan budget the only signal is
-    scan_budget_exceeded.
+    page, nav and footer included, with markup=False: its text is already what
+    the page shows, so nothing in it is taken for a tag. Past the scan budget
+    the only signal is scan_budget_exceeded.
     """
     title_n = _normalize(title[:1000])
     segments = _title_segments(title_n)
@@ -457,7 +462,7 @@ def gate_signals(title: str, text: str, cta_text: str | None = None) -> list:
             flags["missing" + suffix] = True
 
     try:
-        for line in _normalized_lines(title, text):
+        for line in _normalized_lines(title, text, markup):
             head = _LEAD.sub("", line, count=1)
             check_start(head, bool(_ACCESS_NOTE.fullmatch(line)), strong=True)
             if _HAS_SENTENCE_BREAK.search(line):
@@ -754,10 +759,11 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
     when x-reader loaded the page itself, from the whole page (page_signals).
     """
     title = str(payload.get("title") or "")
-    prose = prose_chars(visible_text(content))
     page_signals = extra.get("page_signals")
-    # A direct read's page signals already cover the text shown (a subset of the page).
+    # A direct read's page signals already cover the text shown (a subset of the
+    # page), and its text is what the page shows: nothing in it is markup.
     direct = extra.get("fetch_method") == "direct_html_pinned" and isinstance(page_signals, list)
+    prose = prose_chars(visible_text(content, markup=not direct))
     signals = set() if direct else set(gate_signals(title, content))
     if isinstance(page_signals, list):
         signals.update(str(item) for item in page_signals)
@@ -810,7 +816,14 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "the page is too large for x-reader to check for walls, so it cannot pass",
             "components": {"text_body": UNKNOWN},
         }
-    if "template_markup" in signals or "xml_markup" in signals:
+    if "xml_markup" in signals:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "page_structure_unverified",
+            "evidence": "the page is served as XHTML, which browsers parse as XML; x-reader reads it as HTML",
+            "components": {"text_body": UNKNOWN},
+        }
+    if "template_markup" in signals:
         return {
             "status": UNKNOWN,
             "reason_code": "page_structure_unverified",

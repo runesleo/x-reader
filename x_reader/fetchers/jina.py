@@ -69,10 +69,24 @@ _BUTTON_INPUTS = {"submit", "button", "reset"}
 _NON_TEXT_INPUTS = _BUTTON_INPUTS | {"hidden", "password", "checkbox", "radio", "file", "image", "color", "range",
                                      "date", "datetime-local", "month", "time", "week"}
 _BOILERPLATE_TAGS = {"nav", "footer", "aside"}
+# Elements browsers lay out as blocks by default (a block starts a new line).
 _BLOCK_TAGS = {
-    "p", "div", "article", "section", "main", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6",
-    "blockquote", "pre", "tr",
+    "address", "article", "aside", "blockquote", "body", "caption", "center", "dd", "details", "dialog", "div",
+    "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header",
+    "hgroup", "hr", "html", "legend", "li", "listing", "main", "menu", "nav", "ol", "optgroup", "option", "p",
+    "plaintext", "pre", "search", "section", "summary", "table", "tbody", "tfoot", "thead", "tr", "ul", "xmp",
 }
+_CELL_TAGS = {"td", "th"}
+_PRE_TAGS = {"pre", "xmp", "listing", "plaintext", "textarea"}
+_BLOCK_DISPLAYS = {
+    "block", "flow-root", "list-item", "table", "flex", "grid", "table-row", "table-row-group",
+    "table-header-group", "table-footer-group", "table-caption", "-webkit-box", "-ms-flexbox",
+}
+# Containers whose children sit side by side or wherever the layout puts them:
+# their children's text runs on without a line break.
+_FLOWING_DISPLAYS = {"flex", "inline-flex", "grid", "inline-grid", "-webkit-box", "-webkit-inline-box",
+                     "-ms-flexbox", "-ms-inline-flexbox"}
+_LINE_BREAK = "\x0b"  # a line break inside a block (<br>, preformatted newlines)
 # Anything a page embeds is content x-reader does not read: players, frames, plugins.
 _EMBED_TAGS = {"video", "audio", "iframe", "embed", "object"}
 
@@ -149,14 +163,17 @@ def _style_tokens(style: str) -> list | None:
             digits, newline, char = match.group(1), match.group(2), match.group(3)
             if digits:
                 code = int(digits, 16)
-                parts.append(chr(code) if 0 < code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF else "\ufffd")
+                char = chr(code) if 0 < code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF else "\ufffd"
             elif newline:
                 if not quote:
                     return None  # an escaped newline is only valid inside a string, where it continues the line
-            elif char is not None:
-                parts.append(char)
-            else:
+                continue
+            elif char is None:
                 return None  # a backslash at the very end
+            # Outside a string an escape only ever spells part of an identifier: one
+            # that yields a space, bracket, comma or other non-name character leaves
+            # a value browsers drop, so it reads as one no CSS parser here accepts.
+            parts.append(char if quote or char.isalnum() or char in "-_" or ord(char) >= 0x80 else "\ufffd")
         elif quote:
             if token == "\n":
                 return None
@@ -280,8 +297,7 @@ _INERT_PROPERTIES = {
     "font-display", "line-break", "word-spacing-adjust", "hanging-punctuation", "ruby-position",
     "print-color-adjust", "-webkit-print-color-adjust", "shape-outside", "shape-margin", "inset-area",
     "anchor-name", "container-name", "container-type", "counter-reset", "counter-increment",
-    "height", "max-width", "max-height", "block-size", "max-block-size",
-    "max-inline-size", "top", "left", "right", "bottom", "inset", "inset-block", "inset-inline",
+    "max-width", "max-inline-size", "top", "left", "right", "bottom", "inset", "inset-block", "inset-inline",
     "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end", "overflow",
     "overflow-x", "overflow-y", "overflow-block", "overflow-inline", "overflow-anchor", "overscroll-behavior",
 }
@@ -289,6 +305,7 @@ _INERT_PROPERTIES = {
 _WIDTHS = {"width", "min-width", "inline-size", "min-inline-size", "flex", "flex-basis", "-webkit-flex",
            "-webkit-flex-basis", "-ms-flex", "grid-template-columns", "grid-auto-columns"}
 _GRID_TRACKS = {"grid-template-rows", "grid-template-columns", "grid-auto-rows", "grid-auto-columns"}
+_BOX_HEIGHTS = {"height", "max-height", "block-size", "max-block-size"}
 _OFFSETS = {"top", "left", "right", "bottom", "inset", "inset-block", "inset-inline", "inset-block-start",
             "inset-block-end", "inset-inline-start", "inset-inline-end"}
 _MARGINS = {"margin", "margin-left", "margin-right", "margin-top", "margin-bottom", "margin-inline",
@@ -898,13 +915,15 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
             "visibility": "visible", "font_px": parent["font_px"], "custom": parent["custom"],
             "color": parent["color"], "bg": parent["bg"], "line": parent["line"], "text_ok": parent["text_ok"],
             "sectioned": parent["sectioned"] or name in _SECTIONING, "cover": False, "box_shown": False,
-            "links": parent["links"], "clip_box": False,
+            "links": parent["links"], "clip_box": False, "display": None, "floated": False,
+            "pre": parent["pre"] or name in _PRE_TAGS,
         }
     context = {
         "visibility": "visible", "font_px": parent["font_px"], "custom": parent["custom"],
         "color": parent["color"], "bg": parent["bg"], "line": parent["line"], "text_ok": parent["text_ok"],
         "sectioned": parent["sectioned"] or name in _SECTIONING, "cover": False, "box_shown": False,
-        "links": parent["links"], "clip_box": False,
+        "links": parent["links"], "clip_box": False, "display": None, "floated": False,
+        "pre": parent["pre"] or name in _PRE_TAGS,
     }
     if name == "body":
         # <body link/vlink> color every link; a link may show either.
@@ -934,6 +953,12 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
     # whatever is positioned inside it cannot paint outside it.
     position = _winner(declarations, "position", lambda value: value)
     display = _winner(declarations, "display", lambda value: value)
+    context["display"] = display
+    context["floated"] = _winner(declarations, "float", lambda value: value) in ("left", "right", "inline-start",
+                                                                                "inline-end")
+    spacing = (_winner(declarations, "white-space", lambda value: value) or "").split()
+    if spacing and spacing[0] not in _WIDE_KEYWORDS:
+        context["pre"] = spacing[0] in ("pre", "pre-wrap", "pre-line", "break-spaces")
     # A clip box is a relative box that generates a box overflow applies to and
     # clips both axes with values browsers keep; it may still hide some of its
     # own text (so that text stays unsettled), but nothing inside it paints outside.
@@ -1020,14 +1045,18 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
         elif prop in _WIDTHS:
             if (uses_var and custom) or _reach(value, font, combined=prop.startswith("grid")) > _WIDE_PX:
                 return unknown()
-            if prop in _GRID_TRACKS and not _tracks_ok(value, font):
+            if prop in _GRID_TRACKS and display in ("grid", "inline-grid") and not _tracks_ok(value, font):
                 return unknown()  # tracks too small for their content: items pile on one another
         elif prop in _GRID_TRACKS:
-            if not _tracks_ok(value, font):
+            if display in ("grid", "inline-grid") and not _tracks_ok(value, font, rows="rows" in prop):
                 return unknown()
         elif prop in ("grid", "grid-template"):
-            if value not in {"none"} | _WIDE_KEYWORDS:
+            if display in ("grid", "inline-grid") and value not in {"none"} | _WIDE_KEYWORDS:
                 return unknown()  # shorthands mixing areas and tracks are not judged
+        elif prop in _BOX_HEIGHTS:
+            boxed = display not in ("inline", "contents") and (display is not None or name not in _INLINE_TAGS)
+            if boxed and not _height_open(value, custom):
+                return unknown()  # a set height its text can overrun, spilling over what follows
         elif prop.startswith(_INERT_PREFIXES) or prop in _INERT_PROPERTIES:
             continue
         elif prop in _NONE_ONLY or prop in ("all", "font"):
@@ -1191,8 +1220,9 @@ def _split_tracks(value: str) -> list:
     return tokens
 
 
-def _track_ok(token: str, font_px: float) -> bool:
-    """A grid track that can hold a line of text: flexible or content-sized, or at least 1em (5%)."""
+def _track_ok(token: str, font_px: float, rows: bool = False) -> bool:
+    """A grid track that holds its text: flexible or content-sized; a column of
+    at least 1em (5%) also does, while a fixed row height can be overrun."""
     if token in ("auto", "min-content", "max-content") or re.fullmatch(rf"{_NUMBER}fr", token):
         return True
     for function in ("repeat(", "minmax(", "fit-content("):
@@ -1201,36 +1231,66 @@ def _track_ok(token: str, font_px: float) -> bool:
             if function == "repeat(":
                 _count, comma, tracks = inner.partition(",")
                 return bool(comma) and bool(_split_tracks(tracks)) and all(
-                    _track_ok(track, font_px) for track in _split_tracks(tracks))
+                    _track_ok(track, font_px, rows) for track in _split_tracks(tracks))
             if function == "minmax(":
                 low, comma, high = inner.partition(",")
-                return bool(comma) and (_track_ok(high.strip(), font_px) or _track_ok(low.strip(), font_px))
-            return _track_ok(inner.strip(), font_px)
+                if not comma:
+                    return False
+                if rows:  # the row may end at its maximum: that must grow with the content
+                    return _track_ok(high.strip(), font_px, rows)
+                return _track_ok(high.strip(), font_px) or _track_ok(low.strip(), font_px)
+            return not rows and _track_ok(inner.strip(), font_px)
+    if rows:
+        return False
     amount = _box_px(token, font_px)
     return amount is not None and amount[0] >= (5 if amount[1] else font_px)
 
 
-def _tracks_ok(value: str, font_px: float) -> bool:
+def _tracks_ok(value: str, font_px: float, rows: bool = False) -> bool:
     if value in {"none", "subgrid", "masonry"} | _WIDE_KEYWORDS:
         return True
     tokens = _split_tracks(value)
-    return bool(tokens) and all(_track_ok(token, font_px) for token in tokens)
+    return bool(tokens) and all(_track_ok(token, font_px, rows) for token in tokens)
+
+
+def _height_open(value: str, custom: bool) -> bool:
+    """A height that leaves a box as tall as its content needs: auto, content
+    sizing, or a percentage (of a parent's height, judged on that parent); a
+    design token from the stylesheet is judged like external CSS."""
+    if value in {"auto", "none", "max-content", "min-content", "fit-content", "stretch", "-webkit-fill-available"} \
+            | _WIDE_KEYWORDS:
+        return True
+    if re.fullmatch(r"var\(\s*--[\w-]+\s*\)", value):
+        return not custom
+    return bool(re.fullmatch(rf"{_NUMBER}%", value))
 
 
 def _join_text(parts: list) -> str:
-    """Inline chunks joined by spaces, blocks separated by a blank line."""
-    blocks, current = [], []
+    """Text as browsers lay it out: inline chunks run on with nothing added and
+    whitespace runs collapse to one space; a line break (_LINE_BREAK) ends a
+    line and a block ("\n") ends a paragraph, which a blank line separates."""
+    blocks, lines, current = [], [], []
+
+    def end_line() -> None:
+        line = " ".join("".join(current).split())
+        current.clear()
+        if line:
+            lines.append(line)
+
     for chunk in parts:
         if chunk == "\n":
-            if current:
-                blocks.append(" ".join(current))
-                current = []
+            end_line()
+            if lines:
+                blocks.append("\n".join(lines))
+                lines.clear()
+        elif chunk == _LINE_BREAK:
+            end_line()
         else:
             current.append(chunk)
-    if current:
-        blocks.append(" ".join(current))
-    content = "\n".join(line.strip() for line in "\n\n".join(blocks).splitlines())
-    return re.sub(r"\n{3,}", "\n\n", content).strip()
+    end_line()
+    if lines:
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 # Parse budgets, enforced inside the parser: tokens read, attributes per tag
@@ -1541,21 +1601,27 @@ def _extract_html_page(html: str) -> dict:
     base = {"skip": False, "foreign": False, "boiler": False, "main": False, "article": False,
             "hidden": False, "unknown": False, "block": False, "control": False, "collapsed": None,
             "font_px": 16.0, "custom": False, "color": _BLACK, "bg": _WHITE, "line": ("mult", 1.2),
-            "text_ok": True, "sectioned": False, "links": _LINKS, "box": None, "in_svg": False}
+            "text_ok": True, "sectioned": False, "links": _LINKS, "box": None, "in_svg": False,
+            "flowing": False, "pre": False}
 
     def emit(text, state) -> None:
         if not text or state["skip"]:
             return
-        chunk = text if text == "\n" else text.strip()
-        if not chunk:
+        if state["pre"] and text not in ("\n", _LINE_BREAK) and "\n" in text:
+            for index, line in enumerate(text.replace("\r\n", "\n").split("\n")):
+                if index:
+                    emit(_LINE_BREAK, state)
+                emit(line, state)
             return
+        chunk = text
         parts["gate"].append(chunk)
         if state["foreign"] or state["boiler"] or state["hidden"] or state["control"]:
             return
         regions = ["body"] + [region for region in ("main", "article") if state[region]]
-        if chunk != "\n" and (state["unknown"] or not state["text_ok"] or _BIDI_OVERRIDE.search(chunk)):
+        shown = chunk not in ("\n", _LINE_BREAK) and not chunk.isspace()
+        if shown and (state["unknown"] or not state["text_ok"] or _BIDI_OVERRIDE.search(chunk)):
             unknown_in.update(regions)
-        if chunk != "\n" and state["box"] is not None:
+        if shown and state["box"] is not None:
             box_regions.setdefault(state["box"], set()).update(regions)
         for region in regions:
             parts[region].append(chunk)
@@ -1574,7 +1640,7 @@ def _extract_html_page(html: str) -> dict:
             style = {key: parent[key] for key in ("font_px", "custom", "color", "bg", "line", "text_ok", "sectioned",
                                                   "links")}
             style.update(visibility="visible", cover=_foreign_cover(tag, name, attrs, parent), box_shown=False,
-                         clip_box=False)
+                         clip_box=False, display=None, floated=False, pre=parent["pre"])
         else:
             style = _style_context(name, attrs, parent)
         if style["cover"] and not (parent["skip"] or parent["hidden"] or parent["control"]) and (
@@ -1607,7 +1673,14 @@ def _extract_html_page(html: str) -> dict:
             "article": parent["article"] or name == "article",
             "hidden": own_hidden or closed,
             "unknown": parent["unknown"] or style["visibility"] == "unknown",
-            "block": not foreign and name in _BLOCK_TAGS,
+            # a block starts a new line, unless its parent lays children out side by
+            # side (flex, grid) or it floats; cells sit on one line, a space apart
+            "block": not foreign and not parent["flowing"] and not style["floated"] and (
+                style["display"] in _BLOCK_DISPLAYS or (style["display"] is None and name in _BLOCK_TAGS)),
+            "cell": not foreign and (style["display"] == "table-cell" or (style["display"] is None and name in _CELL_TAGS)),
+            "line_break": not foreign and name == "br",
+            "flowing": not foreign and style["display"] in _FLOWING_DISPLAYS,
+            "pre": style["pre"],
             "control": parent["control"] or (not foreign and name in _CONTROL_TAGS),
             "collapsed": {"summary_seen": False, "outer_hidden": own_hidden} if closed and name == "details" else None,
             "font_px": style["font_px"], "custom": style["custom"], "color": style["color"], "bg": style["bg"],
@@ -1628,9 +1701,13 @@ def _extract_html_page(html: str) -> dict:
         state = child_state(element, parent)
         if state["block"]:
             emit("\n", state)
+        elif state["line_break"]:
+            emit(_LINE_BREAK, state)
+        elif state["cell"]:
+            emit(" ", state)
         for label in (state["button_text"], state["placeholder"], state["field_value"], state["option_label"]):
-            if label:  # visible wording that is not a text node: a wall's button or prompt
-                emit(label, dict(state, control=True))
+            if label:  # visible wording that is not a text node, in its own box: a wall's button or prompt
+                emit(f" {label} ", dict(state, control=True))
         emit(element.text, state)
         stack.append((element, state, iter(list(element)), parent))
 
@@ -1642,6 +1719,8 @@ def _extract_html_page(html: str) -> dict:
             stack.pop()
             if state["block"]:
                 emit("\n", state)
+            elif state["cell"]:
+                emit(" ", state)
             emit(element.tail, parent)
         elif not isinstance(child.tag, str):  # comment or processing instruction
             emit(child.tail, state)
@@ -1659,7 +1738,7 @@ def _extract_html_page(html: str) -> dict:
     if len(content) > MAX_CONTENT_CHARS:
         return refused  # too much text to judge, or to hand on, within the service's limits
     return {
-        "title": title[:200], "content": content, "embeds": embeds,
+        "title": title[:200], "title_scanned": title, "content": content, "embeds": embeds,
         "page_text": _join_text(parts["gate"]), "primary_used": primary_used,
         "visibility_unknown": chosen in unknown_in or layout_risk, "layout_risk": layout_risk,
         "templates": templates, "too_complex": False, "client_redirect": client_redirect,
@@ -1986,10 +2065,11 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
     # nothing from this read (the article is in the HTML), so consent wording
     # counts only inside the text. The signals cover the text shown, so the
     # receipt reuses them instead of scanning it again.
-    signals = set(gate_signals(title, page["page_text"], cta_text=content))
+    scanned = page.get("title_scanned", title)  # the whole title up to 1000 characters
+    signals = set(gate_signals(scanned, page["page_text"], cta_text=content, markup=False))
     if page["primary_used"]:
         signals -= {"consent", "consent_title"}
-        signals |= set(consent_signals(title, content))
+        signals |= set(consent_signals(scanned, content, markup=False))
     if page["visibility_unknown"]:
         signals.add("visibility_unknown")
     if page["client_redirect"]:

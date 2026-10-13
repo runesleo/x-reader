@@ -200,8 +200,8 @@ def _fetch_via_fxtwitter(url: str, timeout: float = 10) -> Dict[str, Any]:
 
 def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     """Quoted post, poll and X Article layers, which the post text alone does not carry."""
-    if not (tweet.get("id") and "text" in tweet):
-        return {"structure_status": "unknown"}
+    if not (tweet.get("id") and "text" in tweet) or _reply_state(tweet) == "unknown":
+        return {"structure_status": "unknown"}  # (a reply whose thread relation cannot be read)
     result: Dict[str, Any] = {"structure_status": "verified", "quote_status": "none",
                               "poll_status": "none", "article_status": "none",
                               "self_reply": _is_self_reply(tweet)}
@@ -211,8 +211,8 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     if isinstance(quote, dict):
         quote_text = quote.get("text").strip() if isinstance(quote.get("text"), str) else ""
         quote_author = quote.get("author")
-        if quote_author is not None and not isinstance(quote_author, dict):
-            quote_text = ""  # an author that is not an object: a damaged layer
+        if ("author" in quote and not isinstance(quote_author, dict)) or _reply_state(quote) == "unknown":
+            quote_text = ""  # an author that is not an object, or an unreadable reply relation: a damaged layer
         quote_author = str(quote_author.get("screen_name") or "") if isinstance(quote_author, dict) else ""
         quote_media = _media_status_from_fxtwitter(quote) if quote.get("id") else "unknown"
         if not quote_text or quote_media == "unknown":
@@ -249,12 +249,22 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     return result
 
 
+def _reply_state(tweet: dict) -> str:
+    """"none", "self" (a reply to the author's own post: a thread) or "other";
+    "unknown" for a reply whose author or replied-to account cannot be read."""
+    if not tweet.get("replying_to_status"):
+        return "none"
+    author = tweet.get("author")
+    screen = author.get("screen_name") if isinstance(author, dict) else None
+    replied = tweet.get("replying_to")
+    if not (isinstance(screen, str) and screen and isinstance(replied, str) and replied):
+        return "unknown"
+    return "self" if screen.lower() == replied.lower() else "other"
+
+
 def _is_self_reply(tweet: dict) -> bool:
     """A reply to the author's own post continues a thread."""
-    author = tweet.get("author") if isinstance(tweet.get("author"), dict) else {}
-    author = str(author.get("screen_name") or "").lower()
-    replied = str(tweet.get("replying_to") or "").lower()
-    return bool(tweet.get("replying_to_status")) and bool(author) and replied == author
+    return _reply_state(tweet) == "self"
 
 
 _STRUCTURE_KEYS = ("structure_status", "quote_status", "poll_status", "article_status")
