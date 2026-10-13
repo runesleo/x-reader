@@ -52,7 +52,9 @@ class BlockedDestination(ValueError):
     """A hop points at a private/special address, an unresolvable host or a non-http scheme."""
 
 
-_SKIP_TAGS = {"script", "style", "noscript", "svg", "template"}
+# Never rendered as page text. A <template> is inert unless it declares a
+# shadow root; <svg> text is skipped, but frames in its foreignObject count.
+_SKIP_TAGS = {"script", "style", "noscript", "template"}
 _BOILERPLATE_TAGS = {"nav", "footer", "aside"}
 _BLOCK_TAGS = {
     "p", "div", "article", "section", "main", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -73,46 +75,52 @@ _OPTIONAL_END_TAGS = {
 
 
 _IMPORTANT = re.compile(r"!\s*important\s*$", re.IGNORECASE)
+_CLOSERS = {"(": ")", "[": "]", "{": "}"}
 
 
 def _inline_declarations(style: str) -> list | None:
     """Parse an inline style into (property, value, important) declarations.
 
-    Comments, quoted strings and parentheses are honoured, so a ";" or
-    "display:none" inside them is not a declaration. None when the style cannot
-    be parsed with confidence (escapes, unterminated comment or string).
+    A comment ends a token (it reads as a space), and quoted strings and (), [],
+    {} blocks stay whole, so a ";" or "display:none" inside them is not a
+    declaration. None when the style cannot be parsed with confidence (escapes,
+    an unterminated comment or string, unbalanced brackets).
     """
     if "\\" in style:
         return None  # CSS escapes can spell any property ("dis\\play")
-    declarations, current, quote, depth, i = [], [], "", 0, 0
+    declarations, current, quote, open_blocks, i = [], [], "", [], 0
     while i < len(style):
         char = style[i]
         if quote:
             current.append(char)
             if char == quote:
                 quote = ""
+            elif char == "\n":
+                return None
         elif style.startswith("/*", i):
             end = style.find("*/", i + 2)
             if end == -1:
                 return None
+            current.append(" ")
             i = end + 2
             continue
         elif char in "\"'":
             quote = char
             current.append(char)
-        elif char == "(":
-            depth += 1
+        elif char in _CLOSERS:
+            open_blocks.append(_CLOSERS[char])
             current.append(char)
-        elif char == ")":
-            depth = max(0, depth - 1)
+        elif char in ")]}":
+            if not open_blocks or open_blocks.pop() != char:
+                return None
             current.append(char)
-        elif char == ";" and not depth:
+        elif char == ";" and not open_blocks:
             declarations.append("".join(current))
             current = []
         else:
             current.append(char)
         i += 1
-    if quote:
+    if quote or open_blocks:
         return None
     declarations.append("".join(current))
     parsed = []
@@ -122,34 +130,95 @@ def _inline_declarations(style: str) -> list | None:
             continue
         value = value.strip()
         important = bool(_IMPORTANT.search(value))
-        parsed.append((name.strip().lower(), _IMPORTANT.sub("", value).strip().lower(), important))
+        parsed.append((name.strip().lower(), " ".join(_IMPORTANT.sub("", value).split()).lower(), important))
     return parsed
 
 
-def _effective(declarations: list, prop: str) -> str | None:
-    """The value a property ends up with: the last !important one, else the last one."""
+_UNRESOLVED = "unresolved"  # a value only known at render time (var(), env(), attr())
+
+
+def _effective(declarations: list, prop: str, valid) -> str | None:
+    """The value a property ends up with: the last valid !important one, else
+    the last valid one. Invalid declarations are dropped, as browsers do;
+    values that need custom properties resolve to _UNRESOLVED."""
     winner, winner_important = None, False
     for name, value, important in declarations:
-        if name == prop and (important or not winner_important):
+        if name != prop:
+            continue
+        if re.search(r"\b(?:var|env|attr)\(", value):
+            value = _UNRESOLVED
+        elif not valid(value):
+            continue
+        if important or not winner_important:
             winner, winner_important = value, important
     return winner
 
 
-def _is_hidden_element(attrs: dict) -> bool:
-    """Provably not rendered: an effective inline display:none, or the hidden
-    attribute with no inline display overriding it. Anything else counts as
-    visible: a style that cannot be parsed, visibility (children can undo it),
-    external CSS and aria-hidden (assistive technology only)."""
+_DISPLAY_KEYWORDS = {
+    "none", "block", "inline", "inline-block", "flex", "inline-flex", "grid", "inline-grid",
+    "flow-root", "contents", "table", "inline-table", "table-row", "table-cell", "table-row-group",
+    "table-header-group", "table-footer-group", "table-column", "table-column-group",
+    "table-caption", "list-item", "run-in", "ruby", "ruby-base", "ruby-text", "ruby-base-container",
+    "ruby-text-container", "math", "inherit", "initial", "unset", "revert", "revert-layer",
+    "-webkit-box", "-webkit-inline-box", "-webkit-flex", "-webkit-inline-flex", "-moz-box",
+    "-moz-inline-box", "-ms-flexbox", "-ms-inline-flexbox", "-ms-grid", "-ms-inline-grid",
+}
+_DISPLAY_PARTS = {"block", "inline", "run-in", "flow", "flow-root", "table", "flex", "grid", "ruby", "list-item", "math"}
+
+
+def _valid_display(value: str) -> bool:
+    if value in _DISPLAY_KEYWORDS:
+        return True
+    parts = value.split()
+    return 1 < len(parts) <= 3 and len(set(parts)) == len(parts) and all(p in _DISPLAY_PARTS for p in parts)
+
+
+def _is_hidden_element(attrs: dict) -> bool | None:
+    """True when provably not rendered: an effective inline display:none, or the
+    hidden attribute with no inline display overriding it. None when the inline
+    style leaves it open (unparseable, or display set through a custom
+    property). False otherwise: visibility (children can undo it), external
+    CSS and aria-hidden (assistive technology only) never hide."""
     declarations = _inline_declarations(attrs.get("style") or "")
     if declarations is None:
-        return False
-    display = _effective(declarations, "display")
+        return None
+    display = _effective(declarations, "display", _valid_display)
+    if display == _UNRESOLVED:
+        return None
     if display is not None:
         return display == "none"
     return "hidden" in attrs
 
 
-_TINY = {"0", "1", "0px", "1px"}
+_CSS_LENGTH = re.compile(
+    r"([+]?(?:\d+\.?\d*|\.\d+))(px|em|rem|%|vw|vh|vmin|vmax|vi|vb|pt|pc|cm|mm|in|q|ex|ch|lh|rlh"
+    r"|cqw|cqh|cqi|cqb|cqmin|cqmax|svh|lvh|dvh|svw|lvw|dvw)"
+)
+_CSS_SIZE_WORDS = {
+    "auto", "min-content", "max-content", "fit-content", "stretch", "inherit", "initial", "unset",
+    "revert", "revert-layer",
+}
+
+
+def _valid_css_size(value: str) -> bool:
+    return (value == "0" or bool(_CSS_LENGTH.fullmatch(value)) or value in _CSS_SIZE_WORDS
+            or value.startswith(("calc(", "min(", "max(", "clamp(", "fit-content(")))
+
+
+def _tiny_css_size(value: str) -> bool:
+    """Zero in any unit, or at most one pixel."""
+    if value == "0":
+        return True
+    match = _CSS_LENGTH.fullmatch(value)
+    return bool(match) and (float(match.group(1)) == 0 or (match.group(2) == "px" and float(match.group(1)) <= 1))
+
+
+def _tiny_html_size(value: str) -> bool:
+    """An HTML width/height attribute of 0 or 1 pixel (leading digits, as browsers parse them)."""
+    match = re.match(r"\s*(\d+)(\.\d*)?(%?)", value or "")
+    return bool(match) and not match.group(3) and int(match.group(1)) <= 1
+
+
 # Inline properties that cannot make a 0/1-pixel frame show its content.
 _SIZE_NEUTRAL = {
     "display", "visibility", "border", "position", "top", "left", "right", "bottom", "margin",
@@ -160,10 +229,12 @@ _SIZE_NEUTRAL = {
 
 def _is_hidden_embed(attrs: dict) -> bool:
     """Hidden frames, or frames whose effective size is 0/1 pixel each way
-    (tracking pixels). Inline width/height override the attributes; any other
-    inline property that could enlarge the frame (transform, zoom, min-height,
-    ...) makes it count as visible."""
-    if _is_hidden_element(attrs):
+    (tracking pixels). A valid inline width/height overrides the attribute, an
+    invalid one is ignored, and without either the frame keeps its visible
+    default size. Any other inline property that could enlarge the frame
+    (transform, zoom, min-height, ...) or a style that cannot be parsed makes
+    it count as visible."""
+    if _is_hidden_element(attrs) is True:
         return True
     declarations = _inline_declarations(attrs.get("style") or "")
     if declarations is None:
@@ -171,33 +242,39 @@ def _is_hidden_embed(attrs: dict) -> bool:
     for name, _value, _important in declarations:
         if name not in _SIZE_NEUTRAL and not name.startswith(("border-", "margin-", "padding-")):
             return False
-    width = _effective(declarations, "width")
-    height = _effective(declarations, "height")
-    width = attrs.get("width") or "" if width is None else width
-    height = attrs.get("height") or "" if height is None else height
-    return width.strip().lower() in _TINY and height.strip().lower() in _TINY
+
+    def tiny(prop: str) -> bool:
+        value = _effective(declarations, prop, _valid_css_size)
+        if value is None:
+            return _tiny_html_size(attrs.get(prop) or "")
+        return value != _UNRESOLVED and _tiny_css_size(value)
+
+    return tiny("width") and tiny("height")
 
 
 def _join_text(parts: list) -> str:
-    lines = []
+    """Inline chunks joined by spaces, blocks separated by a blank line."""
+    blocks, current = [], []
     for chunk in parts:
         if chunk == "\n":
-            if lines and lines[-1] != "":
-                lines.append("")
-            continue
-        if lines and lines[-1] not in ("", "\n"):
-            lines[-1] = f"{lines[-1]} {chunk}".strip()
+            if current:
+                blocks.append(" ".join(current))
+                current = []
         else:
-            lines.append(chunk)
-    content = "\n".join(line.strip() for line in "\n".join(lines).splitlines())
-    while "\n\n\n" in content:
-        content = content.replace("\n\n\n", "\n\n")
-    return content.strip()
+            current.append(chunk)
+    if current:
+        blocks.append(" ".join(current))
+    content = "\n".join(line.strip() for line in "\n\n".join(blocks).splitlines())
+    return re.sub(r"\n{3,}", "\n\n", content).strip()
 
 
-def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
-    """Title, page text, embedded players/frames/plugins, page-wide text, and
-    whether the page text is the page's marked primary content.
+def _extract_html_page(html: str) -> dict:
+    """{title, content, embeds, page_text, primary_used, visibility_unknown}.
+
+    content is the page text, embeds the visible players/frames/plugins,
+    page_text every visible block, primary_used whether content is the page's
+    marked primary content, and visibility_unknown whether content includes
+    text under an inline style that cannot be resolved (so it may be hidden).
 
     Page text: navigation, footers, asides and explicitly hidden elements are
     dropped; when the page marks its primary content (every <main>, else every
@@ -216,7 +293,8 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
         def __init__(self):
             super().__init__()
             self.stack = []  # (tag, kinds) of open elements
-            self.depth = {"skip": 0, "boiler": 0, "main": 0, "article": 0, "hidden": 0}
+            self.depth = {"skip": 0, "svg": 0, "boiler": 0, "main": 0, "article": 0, "hidden": 0, "unknown": 0}
+            self.unknown_in = set()  # regions (body, main, article) holding text of unknown visibility
             self.in_head = self.in_title = False
             self.title_parts, self.body_parts, self.gate_parts = [], [], []
             self.main_parts, self.article_parts = [], []
@@ -228,6 +306,9 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
             self.gate_parts.append(chunk)
             if self.depth["boiler"]:
                 return
+            regions = ["body"] + [region for region in ("main", "article") if self.depth[region]]
+            if self.depth["unknown"] and chunk != "\n":
+                self.unknown_in.update(regions)
             self.body_parts.append(chunk)
             if self.depth["main"]:
                 self.main_parts.append(chunk)
@@ -252,7 +333,7 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
             if tag == "head":
                 self.in_head = True
                 return
-            if tag == "title":
+            if tag == "title" and not self.depth["svg"]:
                 self.in_title = True
                 return
             if (tag in _EMBED_TAGS and not self.depth["skip"] and not self.depth["hidden"]
@@ -265,15 +346,20 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
             if tag in ("p", "li") and tag in (open_tag for open_tag, _kinds in self.stack[-1:]):
                 self._close(tag)  # a new paragraph or item ends the open one
             kinds = []
-            if tag in _SKIP_TAGS:
+            if tag in _SKIP_TAGS and not (tag == "template" and ("shadowrootmode" in values or "shadowroot" in values)):
                 kinds.append("skip")
+            if tag == "svg":
+                kinds.append("svg")
             if tag in _BOILERPLATE_TAGS:
                 kinds.append("boiler")
             if tag in ("main", "article"):
                 kinds.append(tag)
             # Elements whose end tag may be left out end where a browser decides,
             # so their hidden attribute or style is not trusted.
-            if tag not in _OPTIONAL_END_TAGS and _is_hidden_element(values):
+            hidden = _is_hidden_element(values)
+            if hidden is None:
+                kinds.append("unknown")
+            elif hidden and tag not in _OPTIONAL_END_TAGS:
                 kinds.append("hidden")
             for kind in kinds:
                 self.depth[kind] += 1
@@ -295,7 +381,7 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
 
         def handle_data(self, data):
             text = data.strip()
-            if self.depth["skip"] or not text:
+            if self.depth["skip"] or self.depth["svg"] or not text:
                 return
             if self.in_title:
                 self.title_parts.append(text)
@@ -305,13 +391,17 @@ def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
     parser = _PageParser()
     parser.feed(html)
     title = " ".join(parser.title_parts).strip()
-    content, primary_used = _join_text(parser.body_parts), False
-    for region in (parser.main_parts, parser.article_parts):
+    content, primary_used, chosen = _join_text(parser.body_parts), False, "body"
+    for name, region in (("main", parser.main_parts), ("article", parser.article_parts)):
         primary = _join_text(region)
         if primary and prose_chars(primary) >= MIN_GENERIC_BODY_CHARS:
-            content, primary_used = primary, True
+            content, primary_used, chosen = primary, True, name
             break
-    return title[:200], content, parser.embeds, _join_text(parser.gate_parts), primary_used
+    return {
+        "title": title[:200], "content": content, "embeds": parser.embeds,
+        "page_text": _join_text(parser.gate_parts), "primary_used": primary_used,
+        "visibility_unknown": chosen in parser.unknown_in,
+    }
 
 
 def _extract_html_text(html: str) -> tuple[str, str]:
@@ -602,25 +692,31 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
     navigation/footer text, with the count of embedded audio/video players, and
     returning thin pages too (the receipt decides what thin means).
     """
-    from x_reader.evidence import gate_signals
+    from x_reader.evidence import consent_signals, gate_signals
 
     html, final_url = _download_html(url, max_redirects, hop_guard)
-    title, content, media, page_text, primary_used = _extract_html_page(html)
-    # Walls announced anywhere on the page count, not only in the extracted text.
-    # A cookie banner or consent overlay beside substantial marked main content
-    # hides nothing from this read (the article is in the HTML), so it is the
-    # one signal that only counts inside the text itself.
-    signals = gate_signals(title, page_text)
-    if primary_used:
-        signals = [s for s in signals if s not in ("consent", "consent_title")]
+    page = _extract_html_page(html)
+    title, content = page["title"], page["content"]
+    # Walls announced anywhere on the page count, not only in the extracted text;
+    # a standalone "Read more" call counts only inside the text itself. A cookie
+    # banner or consent overlay beside substantial marked main content hides
+    # nothing from this read (the article is in the HTML), so consent wording
+    # counts only inside the text. The signals cover the text shown, so the
+    # receipt reuses them instead of scanning it again.
+    signals = set(gate_signals(title, page["page_text"], cta_text=content))
+    if page["primary_used"]:
+        signals -= {"consent", "consent_title"}
+        signals |= set(consent_signals(title, content))
+    if page["visibility_unknown"]:
+        signals.add("visibility_unknown")
     return {
         "title": title or final_url,
         "content": content,
         "url": final_url,
         "author": "",
         "fetch_method": "direct_html_pinned",
-        "embedded_media": media,
-        "page_signals": signals,
+        "embedded_media": page["embeds"],
+        "page_signals": sorted(signals),
     }
 
 

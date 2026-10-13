@@ -135,6 +135,11 @@ class EvidenceContractTest(unittest.TestCase):
             self.assertEqual(result["status"], "PARTIAL", state)
             self.assertEqual(result["components"]["page_metadata"], metadata, state)
             self.assertEqual(result["components"]["spoken_media"], "PASS", state)
+        # ...and only subtitles attributed to this video can change the overall verdict
+        for state, status in (("unavailable", "FAIL"), ("unidentified", "UNKNOWN")):
+            for other in ("", "zzzzzzzzzzz"):
+                result = _youtube(page_state=state, transcript_video_id=other, **full)
+                self.assertEqual(result["status"], status, (state, other))
         # no single video: nothing is tied to a video, transcript flag or not
         for extra in ({"has_transcript": True, "page_state": "ok", "video_id": ""},
                       {"has_transcript": False, "page_state": "unidentified", "video_id": ""}):
@@ -193,13 +198,56 @@ class EvidenceContractTest(unittest.TestCase):
             result = classify_payload({"source_type": "manual", "title": title, "content": body, "extra": VERIFIED})
             self.assertEqual(result["status"], status, (title, body[-40:]))
 
+    def test_login_walls_in_any_dash_or_wording(self):
+        for opening in ("Please sign\u2011in to continue.", "Please sign\u2010in to continue.",
+                        "Please sign\u00adin to continue.", "Please sign\u2013in to continue.",
+                        "Authentication required to continue.", "Login is required to continue."):
+            thin = classify_payload({"source_type": "manual", "title": "Example", "content": opening, "extra": VERIFIED})
+            self.assertEqual(thin["status"], "FAIL", opening)
+            long = classify_payload({"source_type": "manual", "title": "Example",
+                                     "content": opening + "\n" + ARTICLE * 2, "extra": VERIFIED})
+            self.assertEqual(long["status"], "UNKNOWN", opening)
+        for title in ("Sign in to Example", "401 Authorization Required"):
+            result = classify_payload({"source_type": "manual", "title": title, "content": "Use your account.",
+                                       "extra": VERIFIED})
+            self.assertEqual(result["status"], "FAIL", title)
+        # prompts to comment or to open one's own account are not walls
+        for line in ("Please sign in before commenting.", "Please sign in or register to comment.",
+                     "Please sign in to your account."):
+            result = classify_payload({"source_type": "manual", "title": "Blog", "content": ARTICLE * 2 + "\n" + line,
+                                       "extra": VERIFIED})
+            self.assertEqual(result["status"], "PASS", line)
+
+    def test_standalone_read_more_is_a_teaser(self):
+        for cta in ("Read more →", "READ MORE", "Read more…", "Read full story"):
+            result = classify_payload({"source_type": "manual", "title": "Story", "content": ARTICLE + "\n" + cta,
+                                       "extra": VERIFIED})
+            self.assertEqual(result["reason_code"], "paywall_or_teaser", cta)
+        # "Read more:" introducing a related link inside an article is not a teaser
+        related = classify_payload({"source_type": "manual", "title": "Story",
+                                    "content": ARTICLE + "\nRead more: how the index was built\n" + ARTICLE,
+                                    "extra": VERIFIED})
+        self.assertEqual(related["status"], "PASS")
+
+    def test_pages_too_large_to_check_do_not_pass(self):
+        from x_reader import evidence
+
+        huge = "x. " * (evidence.MAX_WALL_SCAN_CHARS // 3 + 10)
+        self.assertEqual(evidence.gate_signals("T", huge), ["scan_budget_exceeded"])
+        expanding = "\ufdfa" * (evidence.MAX_WALL_SCAN_CHARS // 10)  # NFKC turns each into 18 characters
+        self.assertEqual(evidence.gate_signals("T", expanding), ["scan_budget_exceeded"])
+        result = classify_payload({"source_type": "manual", "title": "T", "content": ARTICLE,
+                                   "extra": dict(VERIFIED, page_signals=["scan_budget_exceeded"])})
+        self.assertEqual(result["reason_code"], "page_too_large_to_check")
+
     def test_known_missing_page_wording_never_passes(self):
         for opening in ("Page not found (Error 404)", "Page not found [ERROR 404]", "Page not found (HTTP 404)",
                         "Page not found, try searching our site.", "[ERROR 404]", "(HTTP 404)", "404 - Page not found",
                         "Page not found. " + "We looked everywhere for the page you wanted, but it has wandered off.",
                         "We're sorry, but the page you requested could not be found.",
                         "Error: This page does not exist", "The page you are looking for might have been removed.",
-                        "PAGE NOT FOUND", "Page Not Found: /old-slug"):
+                        "PAGE NOT FOUND", "Page Not Found: /old-slug", "Page unavailable.", "Content not available.",
+                        "This page is gone."):
             result = classify_payload({"source_type": "manual", "title": "Example", "content": opening + "\n" + ARTICLE * 3,
                                        "extra": VERIFIED})
             self.assertEqual(result["reason_code"], "possibly_missing_page", opening)

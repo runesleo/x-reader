@@ -450,7 +450,8 @@ class GenericReadTest(unittest.TestCase):
             "</article><article><p>The second article on the page is kept as well, word for word.</p></article></main>"
             "<footer>Copyright and legal links for this site, all rights reserved here.</footer></body></html>"
         )
-        title, content, embeds, _page, _primary = _extract_html_page(html)
+        page = _extract_html_page(html)
+        title, content, embeds = page["title"], page["content"], page["embeds"]
         self.assertEqual(title, "T")
         self.assertEqual(embeds, 4)  # video, two frames, embed; hidden and noscript frames ignored
         self.assertNotIn("Pricing", content)
@@ -534,7 +535,10 @@ class GenericReadTest(unittest.TestCase):
                        "<div style='display:none!important;display:block ! important'>Subscribe to continue reading.</div>",
                        """<div style='display:block;--label:"x; display:none ;"'>Subscribe to continue reading.</div>""",
                        "<div style='display:none;dis\\play:block'>Subscribe to continue reading.</div>",
-                       "<div style='display:block' style='display:none'>Subscribe to continue reading.</div>"):
+                       "<div style='display:block' style='display:none'>Subscribe to continue reading.</div>",
+                       "<div style='display:n/**/one'>Subscribe to continue reading.</div>",
+                       "<div style='--x:{color:red;display:none;}'>Subscribe to continue reading.</div>",
+                       "<div style='display:none;display:var(--shown)'>Subscribe to continue reading.</div>"):
             _page, receipt = self._page_receipt(
                 f"<html><head><title>T</title></head><body>{long_main}{notice}</body></html>")
             self.assertEqual(receipt["status"], "PARTIAL", notice)
@@ -559,11 +563,35 @@ class GenericReadTest(unittest.TestCase):
         _page, receipt = self._page_receipt(sloppy)
         self.assertEqual(receipt["status"], "PARTIAL")
 
+    def test_content_of_unresolved_or_hidden_visibility_never_passes(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        # an invalid later value is ignored, so the main content really is hidden
+        hidden = f"<html><head><title>T</title></head><body><main style='display:none;display:bogus'>{article}</main><p>Short note.</p></body></html>"
+        page, receipt = self._page_receipt(hidden)
+        self.assertNotIn("careful argument", page["content"])
+        self.assertNotEqual(receipt["status"], "PASS")
+        unresolved = f"<html><head><title>T</title></head><body><main style='display:var(--d)'>{article}</main></body></html>"
+        page, receipt = self._page_receipt(unresolved)
+        self.assertIn("visibility_unknown", page["page_signals"])
+        self.assertEqual(receipt["reason_code"], "visibility_unverified")
+
+    def test_frames_in_svg_and_shadow_roots_count(self):
+        main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
+        for extra, counted in (("<svg><foreignObject><iframe src='https://p.example/v'></iframe></foreignObject></svg>", 1),
+                               ("<div><template shadowrootmode='open'><iframe src='https://p.example/v'></iframe></template></div>", 1),
+                               ("<template><iframe src='https://p.example/v'></iframe></template>", 0),
+                               ("<svg><title>Close</title><path d='M0 0'/></svg>", 0)):
+            page, _receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{main}{extra}</body></html>")
+            self.assertEqual(page["embedded_media"], counted, extra)
+            self.assertEqual(page["title"], "T", extra)
+
     def test_frame_size_comes_from_inline_css_first(self):
         main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
         for frame, counted in (("<iframe width='1' style='width:600px;height:400px' src='https://p.example/v'>", 1),
                                ("<iframe width='1' height='1' style='transform:scale(400)' src='https://p.example/v'>", 1),
                                ("<iframe width='1' src='https://p.example/v'>", 1),
+                               ("<iframe style='width:1;height:1' src='https://p.example/v'>", 1),
+                               ("<iframe width='1' height='1' style='width:1;height:1' src='https://t.example/p'>", 0),
                                ("<iframe width='0' height='0' style='border:0' src='https://t.example/p'>", 0),
                                ("<iframe style='width:0;height:0;border:none' src='https://t.example/p'>", 0)):
             page, _receipt = self._page_receipt(
@@ -619,21 +647,27 @@ class YoutubeTest(unittest.TestCase):
 
         vid = "abcdefghijk"
         watch = f"https://www.youtube.com/watch?v={vid}"
-        state = youtube._page_state
-        self.assertEqual(state(vid, "YouTube", "This video isn't available anymore\nVideo unavailable"), "unavailable")
-        self.assertEqual(state(vid, "- YouTube", "Something"), "unidentified")
-        self.assertEqual(state(vid, "Rick Astley - Never Gonna Give You Up", "Official video", watch), "ok")
-        self.assertEqual(state(vid, "YouTube Rewind 2018", "Official video"), "ok")
-        # a title discussing the error is still a video title
-        self.assertEqual(state(vid, "How to fix 'Video unavailable' errors", "Video unavailable explained"), "ok")
+
+        def state(title, content="Official video", source=watch, video=vid):
+            return youtube._page_state(video, title, content, source)
+
+        self.assertEqual(state("YouTube", "This video isn't available anymore\nVideo unavailable"), "unavailable")
+        self.assertEqual(state("- YouTube", "Something"), "unidentified")
+        self.assertEqual(state("Rick Astley - Never Gonna Give You Up"), "ok")
+        self.assertEqual(state("YouTube Rewind 2018"), "ok")
+        # a title discussing the error is still a video title; YouTube's own error titles are not
+        self.assertEqual(state("How to fix 'Video unavailable' errors", "Video unavailable explained"), "ok")
+        for title in ("Video unavailable - YouTube", "Sign in to confirm your age - YouTube", "Private video"):
+            self.assertEqual(state(title), "unavailable", title)
         for title in ("Before you continue to YouTube", "Sign in - YouTube", "Consent", ""):
-            self.assertEqual(state(vid, title, "Before you continue"), "unidentified", title)
-        self.assertEqual(state(vid, "Bevor Sie zu YouTube weitergehen", "[Accept](https://consent.youtube.com/s)"),
+            self.assertEqual(state(title, "Before you continue"), "unidentified", title)
+        self.assertEqual(state("Bevor Sie zu YouTube weitergehen", "[Accept](https://consent.youtube.com/s)"),
                          "unidentified")
-        # no single video, or Jina read another page
-        self.assertEqual(state("", "Some channel", "Videos"), "unidentified")
-        self.assertEqual(state(vid, "A video", "x", "https://consent.youtube.com/m?continue=x"), "unidentified")
-        self.assertEqual(state(vid, "A video", "x", "https://www.youtube.com/watch?v=zzzzzzzzzzz"), "unidentified")
+        # no single video, no URL Source, or Jina ended on another page
+        self.assertEqual(state("Some channel", video=""), "unidentified")
+        self.assertEqual(state("A video", source=""), "unidentified")
+        self.assertEqual(state("A video", source="https://consent.youtube.com/m?continue=x"), "unidentified")
+        self.assertEqual(state("A video", source="https://www.youtube.com/watch?v=zzzzzzzzzzz"), "unidentified")
 
     def test_jina_envelope_is_parsed(self):
         from x_reader.fetchers.jina import _parse_jina_text

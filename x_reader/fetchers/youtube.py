@@ -60,25 +60,32 @@ _UNAVAILABLE_VIDEO = (
 # Titles of pages that are not a video: YouTube's own, consent and sign-in pages.
 _NOT_A_VIDEO_TITLE = re.compile(r"^(?:|youtube|sign in|consent|before you continue\b.*)$", re.IGNORECASE)
 _CONSENT_PAGE = ("before you continue to youtube", "consent.youtube.com")
+# Titles YouTube gives pages for videos that cannot be watched.
+_UNAVAILABLE_TITLES = {
+    "video unavailable", "this video is unavailable", "this video isn't available anymore",
+    "this video is not available", "this video is private", "private video", "this video has been removed",
+    "sign in to confirm your age", "content not available",
+}
 
 
 def _page_state(video_id: str, title: str, content: str, source_url: str = "") -> str:
     """How the page Jina read relates to the requested video.
 
-    "ok": a single-video URL whose page (Jina's "URL Source", when given) is that
-    video's and carries a video title. "unavailable": YouTube's bare "YouTube"
-    page saying the video is gone, private or restricted. "unidentified":
-    anything else (channel, playlist, consent or sign-in pages, other videos).
-    A title merely mentioning "Video unavailable" is a video title.
+    "ok": a single-video URL whose page (Jina's "URL Source", the page its
+    browser ended on, required) is that video's and carries a video title.
+    "unavailable": YouTube's page for a video that is gone, private or
+    restricted. "unidentified": anything else (channel, playlist, consent or
+    sign-in pages, other videos, no URL Source). A title merely mentioning
+    "Video unavailable" is a video title.
     """
-    if not video_id:
-        return "unidentified"
-    if source_url and _extract_video_id(source_url) != video_id:
+    if not video_id or _extract_video_id(source_url) != video_id:
         return "unidentified"
     if any(marker in content[:3000].lower() for marker in _CONSENT_PAGE):
         return "unidentified"  # a consent interstitial, whatever its title or language
     name = re.sub(r"[\s\-–—|]+", " ", title).strip()
     name = re.sub(r"\s+youtube$", "", name, flags=re.IGNORECASE).strip()
+    if name.lower() in _UNAVAILABLE_TITLES:
+        return "unavailable"
     if not _NOT_A_VIDEO_TITLE.search(name):
         return "ok"
     if name.lower() in ("", "youtube"):

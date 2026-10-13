@@ -165,13 +165,17 @@ def _host_in(url: str, domains: tuple) -> bool:
     return any(host == domain or host.endswith("." + domain) for domain in domains)
 
 
-_QUOTES = str.maketrans({"‘": "'", "’": "'", "ʼ": "'", "′": "'",
-                         "“": '"', "”": '"', " ": " "})
+_QUOTES = str.maketrans({
+    "\u2018": "'", "\u2019": "'", "\u02bc": "'", "\u2032": "'", "\u201c": '"', "\u201d": '"', "\u00a0": " ",
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2015": "-", "\u2212": "-",
+    "\u00ad": None, "\u200b": None, "\u200c": None, "\u200d": None, "\u2060": None, "\ufeff": None,
+})
 
 
 def _normalize(text: str) -> str:
-    """The form wall rules match on: NFKC, casefolded, plain quotes, hyphenated
-    words split ("Sign-in" -> "sign in"), whitespace collapsed."""
+    """The form wall rules match on: NFKC, casefolded, plain quotes and dashes,
+    soft hyphens and zero-width characters removed, hyphenated words split
+    ("Sign-in" -> "sign in"), whitespace collapsed."""
     text = unicodedata.normalize("NFKC", text).casefold().translate(_QUOTES)
     return " ".join(re.sub(r"(?<=\w)-(?=\w)", " ", text).split())
 
@@ -204,14 +208,16 @@ _AUTH_START = re.compile("|".join((
     rf"(?:please )?{_SIGN_IN} (?:to|into) (?:your|an?) (?:\w+ )?account {_GATE_ACTION}",
     rf"please {_SIGN_IN}(?: (?:first|again|now|below|here))?{_END}",
     rf"{_MUST_SIGN_IN}(?: {_GATE_ACTION}|{_END})",
-    rf"(?:{_SIGN_IN}|authentication) (?:is )?required{_END}",
+    rf"(?:{_SIGN_IN}|authentication|authorization) (?:is )?required(?:{_END}| {_GATE_ACTION})",
     _ZH_SIGN_IN,
 )))
+# A title part like "Sign in to Example" names a login page (judged like a notice line).
+_AUTH_TITLE_START = re.compile(rf"(?:please )?{_SIGN_IN} (?:to|with|into)\b")
 # The same prompts inside a sentence: they keep a page from passing, nothing more.
 _AUTH_ANY = re.compile("|".join((
     rf"\b{_SIGN_IN_OR_JOIN} {_GATE_ACTION}",
     rf"\b{_SIGN_IN} (?:to|into) (?:your|an?) (?:\w+ )?account {_GATE_ACTION}",
-    rf"\bplease {_SIGN_IN}\b(?! to {_INTERACTION}\b)",
+    rf"\bplease {_SIGN_IN}(?: (?:first|again|now|below|here))?{_END}",
     rf"\b{_MUST_SIGN_IN} {_GATE_ACTION}",
     _ZH_SIGN_IN,
 )))
@@ -220,7 +226,8 @@ _AUTH_TITLES = {
     "login to continue", "sign in or sign up", "sign in or register", "log in or sign up",
     "login or sign up", "authentication required", "login required", "please log in",
     "please sign in", "account login", "member login", "user login", "log in to your account",
-    "sign in to your account", "登录", "用户登录", "会员登录", "请登录", "账号登录",
+    "sign in to your account", "401", "401 unauthorized", "401 authorization required", "error 401",
+    "401 error", "unauthorized", "authorization required", "登录", "用户登录", "会员登录", "请登录", "账号登录",
 }
 
 # Bot checks and blocks. Server-error status lines are only hints: articles list them too.
@@ -285,7 +292,8 @@ _MISSING_START = re.compile("|".join((
     r"|can no longer) (?:be )?(?:found|located|reached|displayed)\b",
     rf"{_SUBJECT}{_SOUGHT} (?:does not|doesn't|did not|didn't|no longer) exists?\b",
     rf"{_SUBJECT}{_SOUGHT} (?:is|was|has been|appears to (?:be|have been)|may have been|might have been)"
-    r" (?:no longer available|unavailable|not available|removed|deleted|moved|taken down|expired)\b",
+    r" (?:no longer available|unavailable|not available|removed|deleted|moved|taken down|expired|gone)\b",
+    rf"{_SUBJECT} (?:unavailable|not available|no longer available|removed|gone){_END}",
     rf"{_SUBJECT}{_SOUGHT} isn't (?:available|here)\b",
     r"we (?:can't|cannot|couldn't|could not|were unable to|are unable to) (?:find|locate)"
     r" (?:the|that|this|your|any) (?:page|url|content|article|post)\b",
@@ -325,6 +333,11 @@ _TEASER_START = re.compile("|".join((
     r"(?:(?:this|the) (?:article|story|post) (?:continues|is continued)|story continues) (?:on|at|in)\b",
     r"(?:点击)?(?:继续阅读|阅读全文|展开全文|查看全文|阅读原文|展开阅读|查看完整(?:内容|文章|版)|阅读完整(?:内容|文章|版))",
 )))
+# A block that is only a call to read on ("Read more →"); checked in the text shown.
+_TEASER_LINE = re.compile(
+    r"(?:read more|read (?:the )?full (?:story|article|post)|read (?:the )?(?:article|story)|full (?:story|article)"
+    r"|阅读更多|查看更多)[\s→»›>….:!]*$"
+)
 _TEASER_END = re.compile(
     r"(?:(?:continue|keep) reading(?: (?:this|the) (?:article|story|post))?"
     r"|read (?:the )?(?:rest|full (?:article|story|post))(?: of (?:this|the) (?:article|story|post))?"
@@ -338,60 +351,124 @@ def _title_segments(title: str) -> set:
     return {re.sub(r"^[\W_]+|[\W_]+$", "", part) for part in parts} - {""}
 
 
-def gate_signals(title: str, text: str) -> list:
+# Wall scans read at most this much visible text (and lines of at most this
+# length); a bigger page cannot be checked and does not pass.
+MAX_WALL_SCAN_CHARS = 2_000_000
+MAX_WALL_LINE_CHARS = 100_000
+MAX_WALL_SCAN_LINES = 100_000
+_CONSENT_ANY = re.compile("|".join(re.escape(p) for p in (*_CONSENT_PHRASES, *_CONSENT_WEAK_PHRASES)))
+_PAYWALL_ANY = re.compile("|".join(re.escape(p) for p in _PAYWALL_PHRASES))
+_HAS_SENTENCE_BREAK = re.compile(r"[.!?…:;。！？：；]")
+
+
+def _normalized_lines(title: str, text: str):
+    """Yield normalized lines, the title first; raise ValueError past the scan budget."""
+    if len(text) > 2 * MAX_WALL_SCAN_CHARS:
+        raise ValueError("page too large to check")
+    visible = visible_text(text)
+    if len(visible) > MAX_WALL_SCAN_CHARS or visible.count("\n") > MAX_WALL_SCAN_LINES:
+        raise ValueError("page too large to check")
+    budget = 2 * MAX_WALL_SCAN_CHARS  # NFKC can expand text
+    for raw in (title[:1000], *visible.splitlines()):
+        if len(raw) > MAX_WALL_LINE_CHARS:
+            raise ValueError("line too long to check")
+        line = _normalize(raw)
+        budget -= len(line)
+        if budget < 0:
+            raise ValueError("page too large to check")
+        if line:
+            yield line
+
+
+def _consent_level(strong: set, weak: set) -> bool:
+    return bool(strong) or len(strong) + len(weak) >= 3
+
+
+def consent_signals(title: str, text: str) -> list:
+    """Cookie/consent wording in the text: "consent", plus "consent_title" for a consent-style title."""
+    found = set()
+    try:
+        for line in _normalized_lines(title, text):
+            found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
+    except ValueError:
+        return ["scan_budget_exceeded"]
+    if not _consent_level(found & set(_CONSENT_PHRASES), found & set(_CONSENT_WEAK_PHRASES)):
+        return []
+    title_n = _normalize(title[:1000])
+    return ["consent", "consent_title"] if any(m in title_n for m in _CONSENT_TITLES) else ["consent"]
+
+
+def gate_signals(title: str, text: str, cta_text: str | None = None) -> list:
     """Walls a page announces, wherever they appear: login, challenge, consent,
     missing page, paywall or teaser.
 
-    Rules run on normalized text, over every line of any length. A login,
-    challenge or missing-page notice is a line (or title part) that opens with
-    one; a wall title (auth_title, challenge_title) names the page itself. The
-    same wording opening a later sentence, or a prompt inside one, is a hint
+    Rules run on normalized text, line by line, over lines of any length. A
+    login, challenge or missing-page notice is a line (or title part) that opens
+    with one; a wall title (auth_title, challenge_title) names the page itself.
+    The same wording opening a later sentence, or a prompt inside one, is a hint
     (auth_hint, challenge_hint, missing_hint): it keeps a page from passing and
-    nothing more. The fetcher runs this over every visible block of the page,
-    nav and footer included.
+    nothing more. A block that is only "Read more" counts in cta_text (the text
+    shown; default text). The fetcher runs this over every visible block of the
+    page, nav and footer included. Past the scan budget the only signal is
+    scan_budget_exceeded.
     """
-    title_n = _normalize(title)
+    title_n = _normalize(title[:1000])
     segments = _title_segments(title_n)
-    lines = [line for line in (title_n, *(_normalize(raw) for raw in visible_text(text).splitlines())) if line]
-    starts = (*lines, *segments)
-    heads = [_LEAD.sub("", line, count=1) for line in starts]
-    # A bracketed line is an annotation ("(registration required)." after a
-    # citation), not a login or block notice; "(HTTP 404)" still marks a missing page.
-    notice_heads = [head for line, head in zip(starts, heads) if not line.startswith(("(", "["))]
-    later_parts = [part for line in lines for part in _SENTENCE_BREAK.split(line)[1:] if part]
-    later = [_LEAD.sub("", part, count=1) for part in later_parts]
-    later_notices = [head for part, head in zip(later_parts, later) if not part.startswith(("(", "["))]
-    everything = "\n".join(lines)
     signals = set()
+    consent_found = set()
+    flags = dict.fromkeys(("auth", "auth_hint", "challenge", "challenge_hint", "missing", "missing_hint"), False)
 
-    def opens(pattern: re.Pattern, starts: list) -> bool:
-        return any(pattern.match(head) for head in starts)
+    def check_start(head: str, annotation: bool, strong: bool) -> None:
+        # A bracketed part is an annotation ("(registration required)." after a
+        # citation), not a login or block notice; "(HTTP 404)" still marks a missing page.
+        suffix = "" if strong else "_hint"
+        if not annotation and _AUTH_START.match(head):
+            flags["auth" + suffix] = True
+        if not annotation and _CHALLENGE_START.match(head):
+            flags["challenge" + suffix] = True
+        if _MISSING_START.match(head):
+            flags["missing" + suffix] = True
 
+    try:
+        for line in _normalized_lines(title, text):
+            head = _LEAD.sub("", line, count=1)
+            check_start(head, line.startswith(("(", "[")), strong=True)
+            if _HAS_SENTENCE_BREAK.search(line):
+                for part in _SENTENCE_BREAK.split(line)[1:]:
+                    if part:
+                        check_start(_LEAD.sub("", part, count=1), part.startswith(("(", "[")), strong=False)
+            flags["auth_hint"] |= bool(_AUTH_ANY.search(line))
+            flags["challenge_hint"] |= bool(_CHALLENGE_ANY.search(line))
+            flags["missing_hint"] |= bool(_MISSING_ANY.search(line))
+            consent_found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
+            if _PAYWALL_ANY.search(line) or _TEASER_START.match(head) or _TEASER_END.search(line):
+                signals.add("paywall")
+        for line in _normalized_lines("", text if cta_text is None else cta_text):
+            if _TEASER_LINE.match(_LEAD.sub("", line, count=1)):
+                signals.add("paywall")
+    except ValueError:
+        return ["scan_budget_exceeded"]
+    for segment in segments:
+        head = _LEAD.sub("", segment, count=1)
+        check_start(head, False, strong=True)
+        if _AUTH_TITLE_START.match(head):
+            flags["auth"] = True
+        if _MISSING_TITLE.fullmatch(segment):
+            flags["missing"] = True
     if segments & _AUTH_TITLES:
         signals.add("auth_title")
-    if opens(_AUTH_START, notice_heads):
-        signals.add("auth_required")
-    elif opens(_AUTH_START, later_notices) or _AUTH_ANY.search(everything):
-        signals.add("auth_hint")
     if segments & _CHALLENGE_TITLES:
         signals.add("challenge_title")
-    if opens(_CHALLENGE_START, notice_heads):
-        signals.add("challenge_or_error")
-    elif opens(_CHALLENGE_START, later_notices) or _CHALLENGE_ANY.search(everything):
-        signals.add("challenge_hint")
-    if opens(_MISSING_START, heads) or any(_MISSING_TITLE.fullmatch(segment) for segment in segments):
-        signals.add("missing_page")
-    elif opens(_MISSING_START, later) or _MISSING_ANY.search(everything):
-        signals.add("missing_hint")
-    strong = sum(phrase in everything for phrase in _CONSENT_PHRASES)
-    weak = sum(phrase in everything for phrase in _CONSENT_WEAK_PHRASES)
-    if strong or strong + weak >= 3:
+    for kind, strong_name in (("auth", "auth_required"), ("challenge", "challenge_or_error"),
+                              ("missing", "missing_page")):
+        if flags[kind]:
+            signals.add(strong_name)
+        elif flags[kind + "_hint"]:
+            signals.add(kind + "_hint")
+    if _consent_level(consent_found & set(_CONSENT_PHRASES), consent_found & set(_CONSENT_WEAK_PHRASES)):
         signals.add("consent")
         if any(marker in title_n for marker in _CONSENT_TITLES):
             signals.add("consent_title")
-    if (any(phrase in everything for phrase in _PAYWALL_PHRASES)
-            or opens(_TEASER_START, heads) or any(_TEASER_END.search(line) for line in lines)):
-        signals.add("paywall")
     return sorted(signals)
 
 
@@ -642,7 +719,9 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
     title = str(payload.get("title") or "")
     prose = prose_chars(visible_text(content))
     page_signals = extra.get("page_signals")
-    signals = set(gate_signals(title, content))
+    # A direct read's page signals already cover the text shown (a subset of the page).
+    direct = extra.get("fetch_method") == "direct_html_pinned" and isinstance(page_signals, list)
+    signals = set() if direct else set(gate_signals(title, content))
     if isinstance(page_signals, list):
         signals.update(str(item) for item in page_signals)
     # A wall title names the page itself. A notice line fails a page with little
@@ -685,6 +764,20 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "status": UNKNOWN,
             "reason_code": "possible_access_wall",
             "evidence": "the page shows a login, bot-check or block notice beside its text, so it may not show the content",
+            "components": {"text_body": UNKNOWN},
+        }
+    if "scan_budget_exceeded" in signals:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "page_too_large_to_check",
+            "evidence": "the page is too large for x-reader to check for walls, so it cannot pass",
+            "components": {"text_body": UNKNOWN},
+        }
+    if "visibility_unknown" in signals:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "visibility_unverified",
+            "evidence": "part of the page text sits under an inline style x-reader cannot resolve, so it may be hidden",
             "components": {"text_body": UNKNOWN},
         }
     # Nothing below may claim any text was read from the page unless x-reader
@@ -844,7 +937,10 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
         video_id = str(extra.get("video_id") or "")
         # Only a single-video URL has a video to tie the page or transcript to.
         metadata = {"ok": PASS, "unavailable": FAIL}.get(page_state, UNKNOWN) if video_id else UNKNOWN
-        if not (extra.get("has_transcript") is True and video_id):
+        has_transcript = extra.get("has_transcript") is True and bool(video_id)
+        # Only subtitles yt-dlp attributed to this very video can outweigh the page.
+        transcript_ours = has_transcript and extra.get("transcript_video_id") == video_id
+        if not has_transcript or (metadata != PASS and not transcript_ours):
             if metadata == FAIL:
                 return {
                     "status": FAIL,
@@ -867,7 +963,7 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
             }
         page_note = "" if metadata == PASS else "; the page itself could not be confirmed as the video's"
         # x-reader reads speech, never pictures: a video is at most PARTIAL.
-        if extra.get("transcript_video_id") == video_id and _subtitle_coverage_proven(extra):
+        if transcript_ours and _subtitle_coverage_proven(extra):
             return {
                 "status": PARTIAL,
                 "reason_code": "visual_media_unread",
