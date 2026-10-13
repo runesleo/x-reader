@@ -1,6 +1,6 @@
 [project]
 name = "x-reader"
-version = "0.3.1"
+version = "0.4.0"
 description = "Universal content reader for AI agents with structured sources and evidence coverage"
 readme = "README.md"
 license = {text = "MIT"}

@@ -9,7 +9,15 @@ x-reader is a universal content reader for AI agents. It reads X/Twitter, articl
 
 Its differentiator is evidence-aware reading: **a search snippet is not the source, a tweet caption is not the attached video, and a video description is not a transcript.** When a material source layer is still missing, x-reader keeps that gap explicit instead of pretending the read is complete.
 
-**简体中文：** [README.zh-CN.md](./README.zh-CN.md)
+**简体中文：** [README.zh-CN.md](./README.zh-CN.md) · **Website:** [xreader.leolabs.me](https://xreader.leolabs.me/en) · [Try it in the browser](https://xreader.leolabs.me/app)
+
+## Set up in one step
+
+Paste this into your AI agent (Claude Code, Codex, Cursor, …):
+
+> Set up x-reader on this computer by following the official instructions at https://github.com/runesleo/x-reader/blob/main/install.md.
+
+Your agent installs the skill and the CLI, runs the read-only `x-reader doctor` self-check, and reads a first link with you. The steps it follows are in [install.md](./install.md); to do it by hand, see below.
 
 ## Evidence Receipt web utility
 
@@ -112,11 +120,11 @@ x-reader makes these distinctions explicit:
 | Web / articles | Jina Reader | Browser fallback where supported |
 | YouTube | yt-dlp metadata/subtitles | Groq Whisper fallback when configured |
 | Bilibili | Bilibili API | Subtitle/audio transcription workflow |
-| WeChat | Jina → Playwright | Saved browser session when needed |
+| WeChat | Jina → Playwright | Headless browser fallback for public articles; saved login sessions are not used yet |
 | Xiaohongshu | Jina → Playwright | One-time local login may be required |
 | Telegram | Telethon | Telegram credentials required |
 | RSS | feedparser | — |
-| Xiaoyuzhou / Apple Podcasts | Media discovery | Transcript required for spoken-content claims |
+| Xiaoyuzhou / Apple Podcasts | Generic web read (page text and metadata) | Audio is not fetched; transcribe it locally before claiming spoken content |
 
 Platform behavior changes over time. x-reader's contract is to expose the gap rather than overclaim coverage.
 
@@ -140,6 +148,12 @@ Read a URL:
 
 ```bash
 x-reader https://x.com/elonmusk/status/123456
+```
+
+Check what is ready and what is missing (read-only; add `--json` for agents):
+
+```bash
+x-reader doctor
 ```
 
 Get the complete machine-readable payload:

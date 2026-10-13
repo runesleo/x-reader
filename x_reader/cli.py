@@ -6,6 +6,7 @@ Usage:
     x-reader <url>                     # Fetch a single URL
     x-reader <url1> <url2> ...         # Fetch multiple URLs
     x-reader <url> --json              # Full machine-readable payload
+    x-reader doctor [--json]           # Read-only self-check: what is ready, what is missing
     x-reader list                      # Show inbox contents
     x-reader clear                     # Clear inbox
 """
@@ -15,11 +16,16 @@ import asyncio
 import json
 from pathlib import Path
 
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
 
-from x_reader.reader import UniversalReader
-from x_reader.schema import UnifiedInbox, SourceType
+    from x_reader.reader import UniversalReader
+    from x_reader.schema import UnifiedInbox, SourceType
+    _IMPORT_ERROR = None
+except ImportError as exc:  # keep `x-reader doctor` usable on a broken install
+    UniversalReader = UnifiedInbox = SourceType = None
+    _IMPORT_ERROR = exc
 
 
 def get_inbox_path() -> str:
@@ -154,6 +160,7 @@ Usage:
     x-reader <podcast-url> --media-full-long --json
                                 Opt-in resumable whole-source <=64 MiB / <=90m
     x-reader login <platform>   Login to a platform (saves session for browser fallback)
+    x-reader doctor [--json]    Check what is ready and what is missing (read-only)
     x-reader list               Show inbox contents
     x-reader clear              Clear inbox
 
@@ -189,6 +196,18 @@ Examples:
         sys.exit(1)
 
     cmd = args[0].lower()
+
+    if cmd == "doctor":
+        from x_reader.doctor import run_doctor
+        sys.exit(run_doctor(json_output=json_output))
+
+    if _IMPORT_ERROR is not None:
+        message = f"x-reader is missing a dependency ({_IMPORT_ERROR}). Run `x-reader doctor` to see what to fix."
+        if json_output:
+            print(json.dumps({"ok": False, "error": message, "error_type": "ImportError"}, ensure_ascii=False))
+        else:
+            print(f"❌ {message}")
+        sys.exit(1)
 
     if cmd == "login":
         if len(args) < 2:

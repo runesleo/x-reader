@@ -21,6 +21,14 @@ x-reader 是给 AI Agent 用的通用内容读取层（Universal Content Reader�
 
 本地运行使用 `x-reader-web`，也可以直接使用上面的 Hosted Beta。详见 [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md)、[分发方案](./docs/DISTRIBUTION.md) 和 [公开 Beta 发布门](./docs/PUBLIC_BETA_GATE.md)。
 
+## 一步装好
+
+把下面这句话粘给你的 AI（Claude Code、Codex、Cursor 等）：
+
+> 按照 https://github.com/runesleo/x-reader/blob/main/install.md 的官方说明，在这台电脑上安装 x-reader。
+
+它会自己装好 skill 和命令行工具，跑一遍只读的 `x-reader doctor` 自检，再陪你读第一个链接。它照着做的步骤写在 [install.md](./install.md)；想手动装，看下面。产品页：[xreader.leolabs.me](https://xreader.leolabs.me/zh) · [网页版试用](https://xreader.leolabs.me/app)
+
 ## 一行安装
 
 ```bash
@@ -114,11 +122,11 @@ npx skills add runesleo/x-reader --skill x-reader
 | 普通网页 / 文章 | Jina Reader | 支持时走 browser fallback |
 | YouTube | yt-dlp metadata / 字幕 | 配置后可 Groq Whisper |
 | Bilibili | Bilibili API | 字幕 / 音频转录流程 |
-| 微信公众号 | Jina → Playwright | 必要时使用本地浏览器 session |
+| 微信公众号 | Jina → Playwright | 公开文章走无头浏览器兜底；暂不使用保存的登录态 |
 | 小红书 | Jina → Playwright | 部分页面需一次性本地登录 |
 | Telegram | Telethon | 需要 Telegram 凭证 |
 | RSS | feedparser | — |
-| 小宇宙 / Apple Podcasts | 媒体发现 | 必须转录后才能声称读过口头内容 |
+| 小宇宙 / Apple Podcasts | 按普通网页读取（页面文字和元数据） | 不下载音频；要声称读过口头内容，需先在本地转录 |
 
 平台规则会变化。x-reader 的承诺不是“永远全覆盖”，而是**覆盖不到时不装作覆盖到了**。
 
@@ -142,6 +150,12 @@ pip install "x-reader @ git+https://github.com/runesleo/x-reader.git"
 
 ```bash
 x-reader https://x.com/elonmusk/status/123456
+```
+
+检查哪些已就绪、还缺什么（只读；给 Agent 用加 `--json`）：
+
+```bash
+x-reader doctor
 ```
 
 完整 JSON：
