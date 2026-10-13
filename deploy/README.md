@@ -19,7 +19,7 @@ Per request, in code (`x_reader/web_app.py`, `x_reader/utils/proc.py`):
   timeout or overflow its whole process group is killed;
 - ceilings on that process: 768 MiB address space, 120 CPU-seconds, 64 MiB per written
   file, 256 open files, no core dumps; it is also the first OOM-kill candidate;
-- at most 4 concurrent reads and 24 connection threads; a request not fully read
+- at most 3 concurrent reads and 24 connection threads; a request not fully read
   within 20 s is cut off.
 
 ## Verify a deployment

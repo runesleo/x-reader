@@ -14,8 +14,8 @@ from typing import Mapping, Optional, Sequence
 _DRAIN_GRACE_SECONDS = 1.0
 
 # Ceilings the hosted reader process applies to itself. A hosted read runs in a
-# single process (no external tools), so these are per-request ceilings. A read
-# peaks around 260 MiB of address space and 40 MiB resident.
+# single process (no external tools), so these are per-request ceilings. The
+# largest pages the parse budgets accept peak around 120 MiB resident.
 HOSTED_CPU_SECONDS = 120
 HOSTED_MAX_ADDRESS_SPACE_BYTES = 768 * 1024 * 1024
 HOSTED_MAX_FILE_BYTES = 64 * 1024 * 1024

@@ -221,6 +221,10 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         quoted = twitter._structure_from_fxtwitter({"id": "1", "text": "main", "quote": {"id": "2", "text": [None]}})
         self.assertEqual(quoted["quote_status"], "unknown")
         self.assertNotIn("quote_text", quoted)
+        for author in ([], "alice", True):
+            damaged = twitter._structure_from_fxtwitter(
+                {"id": "1", "text": "main", "author": author, "quote": {"id": "2", "text": "q", "author": author}})
+            self.assertEqual(damaged["quote_status"], "unknown", author)
         response = MagicMock()
         response.json.return_value = {"tweet": {"id": "123", "text": [None], "author": {"screen_name": "a"}}}
         with patch.object(twitter.requests, "get", return_value=response):

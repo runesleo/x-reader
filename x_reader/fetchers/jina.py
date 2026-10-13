@@ -65,6 +65,9 @@ _UNRENDERED = {"head", "title", "script", "style", "noscript", "template", "noem
 # Form controls show their text, but in a box or a menu: walls count, page text does not.
 _CONTROL_TAGS = {"select", "textarea", "button"}
 _BUTTON_INPUTS = {"submit", "button", "reset"}
+# Inputs that show no typed wording (other types, unknown ones included, show their value as text).
+_NON_TEXT_INPUTS = _BUTTON_INPUTS | {"hidden", "password", "checkbox", "radio", "file", "image", "color", "range",
+                                     "date", "datetime-local", "month", "time", "week"}
 _BOILERPLATE_TAGS = {"nav", "footer", "aside"}
 _BLOCK_TAGS = {
     "p", "div", "article", "section", "main", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -95,23 +98,19 @@ def _inline_declarations(style: str) -> list | None:
     """Parse an inline style into (property, value, important) declarations.
 
     CSS escapes are decoded as browsers decode them ("dis\\play" is display,
-    "\\61 bsolute" is absolute) and an escaped character is never a delimiter;
-    a comment ends a token (it reads as a space), and quoted strings and (), [],
-    {} blocks stay whole, so a ";" or "display:none" inside them is not a
-    declaration. None when the style cannot be parsed with confidence (an
-    unterminated comment, string or escape, unbalanced brackets) or is longer
-    than MAX_STYLE_CHARS.
+    "\\61 bsolute" is absolute), and an escaped character is never syntax: an
+    escaped ";", ":" or "!" stays part of a name or value. A comment ends a
+    token (it reads as a space), and quoted strings and (), [], {} blocks stay
+    whole, so a ";" or "display:none" inside them is not a declaration. None
+    when the style cannot be parsed with confidence (an unterminated comment,
+    string or escape, unbalanced brackets) or is longer than MAX_STYLE_CHARS.
     """
     if len(style) > MAX_STYLE_CHARS:
         return None
-    if _PLAIN_STYLE.fullmatch(style):
-        chunks = style.split(";")  # no escapes, strings, comments or brackets holding a ";"
-    else:
-        chunks = _style_chunks(style)
-        if chunks is None:
-            return None
+    if not _PLAIN_STYLE.fullmatch(style):
+        return _style_tokens(style)
     parsed = []
-    for declaration in chunks:
+    for declaration in style.split(";"):  # no escapes, strings, comments or brackets holding a ";"
         name, colon, value = declaration.partition(":")
         if not colon:
             continue
@@ -126,9 +125,23 @@ def _inline_declarations(style: str) -> list | None:
 _PLAIN_STYLE = re.compile(r"[^\\\"'/\[\]{}()]*(?:\([^\\\"'/\[\]{}();]*\)[^\\\"'/\[\]{}()]*)*")
 
 
-def _style_chunks(style: str) -> list | None:
-    """The declarations of a style that needs the full tokenizer (see _inline_declarations)."""
-    declarations, current, quote, open_blocks, position, size = [], [], "", [], 0, len(style)
+def _declaration(parts: list, colon, bang):
+    """(name, value, important) from a declaration's pieces and the positions of
+    its unescaped ":" and last unescaped "!"; None without a ":"."""
+    if colon is None:
+        return None
+    name = "".join(parts[:colon]).strip().lower()
+    if bang is not None and bang > colon and "".join(parts[bang + 1:]).strip().lower() == "important":
+        value, important = "".join(parts[colon + 1:bang]), True
+    else:
+        value, important = "".join(parts[colon + 1:]), False
+    return name, " ".join(value.split()).lower(), important
+
+
+def _style_tokens(style: str) -> list | None:
+    """_inline_declarations for styles that need the full tokenizer."""
+    declarations, parts, colon, bang = [], [], None, None
+    quote, open_blocks, position, size = "", [], 0, len(style)
     while position < size:
         match = _STYLE_TOKEN.match(style, position)
         token, position = match.group(0), match.end()
@@ -136,44 +149,53 @@ def _style_chunks(style: str) -> list | None:
             digits, newline, char = match.group(1), match.group(2), match.group(3)
             if digits:
                 code = int(digits, 16)
-                current.append(chr(code) if 0 < code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF else "\ufffd")
+                parts.append(chr(code) if 0 < code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF else "\ufffd")
             elif newline:
                 if not quote:
                     return None  # an escaped newline is only valid inside a string, where it continues the line
             elif char is not None:
-                current.append(char)
+                parts.append(char)
             else:
                 return None  # a backslash at the very end
         elif quote:
             if token == "\n":
                 return None
-            current.append(token)
+            parts.append(token)
             if token == quote:
                 quote = ""
         elif token == "/*":
             end = style.find("*/", position)
             if end == -1:
                 return None
-            current.append(" ")
+            parts.append(" ")
             position = end + 2
         elif token in ("\"", "'"):
             quote = token
-            current.append(token)
+            parts.append(token)
         elif token in _CLOSERS:
             open_blocks.append(_CLOSERS[token])
-            current.append(token)
+            parts.append(token)
         elif token in (")", "]", "}"):
             if not open_blocks or open_blocks.pop() != token:
                 return None
-            current.append(token)
+            parts.append(token)
         elif token == ";" and not open_blocks:
-            declarations.append("".join(current))
-            current = []
+            declaration = _declaration(parts, colon, bang)
+            if declaration:
+                declarations.append(declaration)
+            parts, colon, bang = [], None, None
         else:
-            current.append(token)
+            if not open_blocks:
+                if token == ":" and colon is None:
+                    colon = len(parts)
+                elif token == "!" and colon is not None:
+                    bang = len(parts)
+            parts.append(token)
     if quote or open_blocks:
         return None
-    declarations.append("".join(current))
+    declaration = _declaration(parts, colon, bang)
+    if declaration:
+        declarations.append(declaration)
     return declarations
 
 
@@ -181,7 +203,7 @@ def _style_chunks(style: str) -> list | None:
 # opener, a delimiter, or a run of ordinary characters.
 _STYLE_TOKEN = re.compile(
     r"\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|(\r\n|[\n\r\f])|(.)|$)"
-    r"|/\*|[\"'();\[\]{}\n]|[^\\\"'/;()\[\]{}\n]+|/",
+    r"|/\*|[\"'();:!\[\]{}\n]|[^\\\"'/;:!()\[\]{}\n]+|/",
     re.S,
 )
 
@@ -265,7 +287,8 @@ _INERT_PROPERTIES = {
 }
 # Sizes that set how wide a line of the element's text runs.
 _WIDTHS = {"width", "min-width", "inline-size", "min-inline-size", "flex", "flex-basis", "-webkit-flex",
-           "-webkit-flex-basis", "-ms-flex", "grid-template-columns", "grid-auto-columns", "grid-template"}
+           "-webkit-flex-basis", "-ms-flex", "grid-template-columns", "grid-auto-columns"}
+_GRID_TRACKS = {"grid-template-rows", "grid-template-columns", "grid-auto-rows", "grid-auto-columns"}
 _OFFSETS = {"top", "left", "right", "bottom", "inset", "inset-block", "inset-inline", "inset-block-start",
             "inset-block-end", "inset-inline-start", "inset-inline-end"}
 _MARGINS = {"margin", "margin-left", "margin-right", "margin-top", "margin-bottom", "margin-inline",
@@ -718,19 +741,39 @@ def _vertical_box(prop: str, value: str, font_px: float) -> float:
     return max(widths, default=0.0)
 
 
+_CLIP_VALUES = {"hidden", "clip", "auto", "scroll"}
+_OVERFLOW_AXES = {"overflow": ("x", "y"), "overflow-x": ("x",), "overflow-inline": ("x",), "overflow-y": ("y",),
+                  "overflow-block": ("y",)}
+
+
 def _clips_both(declarations: list) -> bool:
-    """The overflow that wins on each axis is hidden, clip, auto or scroll."""
+    """The overflow that wins on each axis (physical and logical properties, in
+    horizontal writing) is hidden, clip, auto or scroll; any overflow value
+    browsers would drop, or another writing mode, makes it no."""
     axes, important_axes = {"x": None, "y": None}, {"x": False, "y": False}
     for prop, value, important in declarations:
-        parts = value.split()
-        if not parts or prop not in ("overflow", "overflow-x", "overflow-y"):
+        if prop == "writing-mode" and value not in {"horizontal-tb"} | _WIDE_KEYWORDS:
+            return False
+        if prop not in _OVERFLOW_AXES:
             continue
-        pairs = {"overflow": (("x", parts[0]), ("y", parts[1] if len(parts) > 1 else parts[0])),
-                 "overflow-x": (("x", parts[0]),), "overflow-y": (("y", parts[0]),)}[prop]
-        for axis, part in pairs:
+        parts = value.split()
+        if not 1 <= len(parts) <= len(_OVERFLOW_AXES[prop]) or any(part not in _CLIP_VALUES | {"visible"} for part in parts):
+            return False
+        for index, axis in enumerate(_OVERFLOW_AXES[prop]):
             if important or not important_axes[axis]:
-                axes[axis], important_axes[axis] = part, important
-    return all(axes[axis] in ("hidden", "clip", "auto", "scroll") for axis in ("x", "y"))
+                axes[axis], important_axes[axis] = parts[min(index, len(parts) - 1)], important
+    return all(axes[axis] in _CLIP_VALUES for axis in ("x", "y"))
+
+
+# Boxes that clip what overflows them (overflow does not apply to inline boxes,
+# nor to display:contents, which generates no box).
+_CLIPPING_DISPLAYS = {"block", "flow-root", "flex", "grid", "inline-block", "inline-flex", "inline-grid",
+                      "list-item", "-webkit-box", "-ms-flexbox"}
+_BLOCK_TAGS_BY_DEFAULT = {
+    "address", "article", "aside", "blockquote", "body", "center", "dd", "details", "dialog", "div", "dl", "dt",
+    "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup",
+    "html", "li", "main", "menu", "nav", "ol", "p", "pre", "search", "section", "summary", "ul",
+}
 
 
 def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: bool) -> bool:
@@ -890,7 +933,12 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
     # A relative box that clips both axes and passed _covers (so it stays put):
     # whatever is positioned inside it cannot paint outside it.
     position = _winner(declarations, "position", lambda value: value)
-    context["clip_box"] = not context["cover"] and position == "relative" and _clips_both(declarations)
+    display = _winner(declarations, "display", lambda value: value)
+    # A clip box is a relative box that generates a box overflow applies to and
+    # clips both axes with values browsers keep; it may still hide some of its
+    # own text (so that text stays unsettled), but nothing inside it paints outside.
+    context["clip_box"] = (not context["cover"] and position == "relative" and _clips_both(declarations)
+                           and (display in _CLIPPING_DISPLAYS or (display is None and name in _BLOCK_TAGS_BY_DEFAULT)))
     context["box_shown"] = until_found  # content-visibility:hidden still paints the element's own box
 
     # Font size, text color, background and line height for this element's text.
@@ -916,6 +964,8 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
     elif color is not None:
         context["color"] = color
     background = _merge_background(declarations, paint, shorthand)
+    if display == "contents":
+        background, images = "keep", []  # no box, so no background: its text sits on what is behind it
     if background == "currentcolor":
         background = context["color"]
     if any(value not in _NO_PAINT for value in images) or background == "image":
@@ -970,6 +1020,14 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
         elif prop in _WIDTHS:
             if (uses_var and custom) or _reach(value, font, combined=prop.startswith("grid")) > _WIDE_PX:
                 return unknown()
+            if prop in _GRID_TRACKS and not _tracks_ok(value, font):
+                return unknown()  # tracks too small for their content: items pile on one another
+        elif prop in _GRID_TRACKS:
+            if not _tracks_ok(value, font):
+                return unknown()
+        elif prop in ("grid", "grid-template"):
+            if value not in {"none"} | _WIDE_KEYWORDS:
+                return unknown()  # shorthands mixing areas and tracks are not judged
         elif prop.startswith(_INERT_PREFIXES) or prop in _INERT_PROPERTIES:
             continue
         elif prop in _NONE_ONLY or prop in ("all", "font"):
@@ -1096,6 +1154,69 @@ def _foreign_cover(tag: str, name: str, attrs: dict, parent: dict) -> bool:
     return _covers(name, attrs, declarations, parent["font_px"], parent["custom"])
 
 
+class _Page(str):
+    """A downloaded page's text, which remembers the response's media type."""
+
+    media_type = "text/html"
+
+
+def _plain_text_page(text: str) -> dict:
+    """A text/plain response as browsers show it: every character as text."""
+    content = "\n".join(line.rstrip() for line in str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+    content = content.strip()
+    if len(content) > MAX_CONTENT_CHARS:
+        return {"title": "", "content": "", "embeds": 0, "page_text": "", "primary_used": False,
+                "visibility_unknown": True, "layout_risk": False, "templates": False, "too_complex": True,
+                "client_redirect": False}
+    return {"title": "", "content": content, "embeds": 0, "page_text": content, "primary_used": False,
+            "visibility_unknown": bool(_BIDI_OVERRIDE.search(content)), "layout_risk": False, "templates": False,
+            "too_complex": False, "client_redirect": False}
+
+
+def _split_tracks(value: str) -> list:
+    """Track-list tokens split on spaces outside (), with [line names] left out."""
+    tokens, current, depth = [], [], 0
+    for char in value + " ":
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth -= 1
+        if char.isspace() and depth == 0:
+            token = "".join(current)
+            if token and not token.startswith("["):
+                tokens.append(token)
+            current = []
+            continue
+        current.append(char)
+    return tokens
+
+
+def _track_ok(token: str, font_px: float) -> bool:
+    """A grid track that can hold a line of text: flexible or content-sized, or at least 1em (5%)."""
+    if token in ("auto", "min-content", "max-content") or re.fullmatch(rf"{_NUMBER}fr", token):
+        return True
+    for function in ("repeat(", "minmax(", "fit-content("):
+        if token.startswith(function) and token.endswith(")"):
+            inner = token[len(function):-1]
+            if function == "repeat(":
+                _count, comma, tracks = inner.partition(",")
+                return bool(comma) and bool(_split_tracks(tracks)) and all(
+                    _track_ok(track, font_px) for track in _split_tracks(tracks))
+            if function == "minmax(":
+                low, comma, high = inner.partition(",")
+                return bool(comma) and (_track_ok(high.strip(), font_px) or _track_ok(low.strip(), font_px))
+            return _track_ok(inner.strip(), font_px)
+    amount = _box_px(token, font_px)
+    return amount is not None and amount[0] >= (5 if amount[1] else font_px)
+
+
+def _tracks_ok(value: str, font_px: float) -> bool:
+    if value in {"none", "subgrid", "masonry"} | _WIDE_KEYWORDS:
+        return True
+    tokens = _split_tracks(value)
+    return bool(tokens) and all(_track_ok(token, font_px) for token in tokens)
+
+
 def _join_text(parts: list) -> str:
     """Inline chunks joined by spaces, blocks separated by a blank line."""
     blocks, current = [], []
@@ -1130,7 +1251,7 @@ MAX_PARSE_ERRORS = 20_000  # real pages checked: under 200
 MAX_STYLE_TOTAL = 1_000_000  # inline style characters on a page (real pages checked: under 100k)
 MAX_STYLE_DECLARATIONS = 50_000
 # Raw-text elements whose text x-reader never reads.
-_UNREAD_TEXT = {"script", "style", "noscript", "iframe", "noembed", "noframes", "xmp"}
+_UNREAD_TEXT = {"script", "style", "noscript", "iframe", "noembed", "noframes"}
 
 
 class ParseBudgetExceeded(ValueError):
@@ -1364,8 +1485,8 @@ def _extract_html_page(html: str) -> dict:
     substantial prose, content is that region, so banners around it stay out.
     page_text is every rendered text block, hidden ones included, so wall
     notices count wherever they sit; menus, text boxes, button labels and
-    placeholders count only there. embeds counts players, frames and plugins
-    page-wide, except frames that are themselves hidden or 0/1-pixel.
+    placeholders, text box values and option labels count only there. embeds
+    counts every player, frame and plugin on the page, however small or hidden.
     visibility_unknown: content includes text whose visibility x-reader cannot
     settle (see _style_context: inline styles, presentational attributes,
     browser default sizes and colors, bidi overrides), or any rendered element
@@ -1496,6 +1617,9 @@ def _extract_html_page(html: str) -> dict:
             "button_text": name == "input" and (attrs.get("type") or "").strip().lower() in _BUTTON_INPUTS
             and (attrs.get("value") or ""),
             "placeholder": attrs.get("placeholder") or "" if name in ("input", "textarea") else "",
+            "field_value": attrs.get("value") or "" if name == "input"
+            and (attrs.get("type") or "").strip().lower() not in _NON_TEXT_INPUTS else "",
+            "option_label": attrs.get("label") or "" if name in ("option", "optgroup") else "",
         }
 
     stack: list = []
@@ -1504,7 +1628,7 @@ def _extract_html_page(html: str) -> dict:
         state = child_state(element, parent)
         if state["block"]:
             emit("\n", state)
-        for label in (state["button_text"], state["placeholder"]):
+        for label in (state["button_text"], state["placeholder"], state["field_value"], state["option_label"]):
             if label:  # visible wording that is not a text node: a wall's button or prompt
                 emit(label, dict(state, control=True))
         emit(element.text, state)
@@ -1851,7 +1975,8 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
     from x_reader.evidence import consent_signals, gate_signals
 
     html, final_url = _download_html(url, max_redirects, hop_guard)
-    page = _extract_html_page(html)
+    media_type = getattr(html, "media_type", "text/html")
+    page = _plain_text_page(html) if media_type == "text/plain" else _extract_html_page(html)
     if page["too_complex"]:
         raise ParseBudgetExceeded("The page has more markup than x-reader parses")
     title, content = page["title"], page["content"]
@@ -1871,6 +1996,8 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
         signals.add("client_redirect")
     if page["templates"]:
         signals.add("template_markup")
+    if media_type == "application/xhtml+xml":
+        signals.add("xml_markup")  # browsers parse it as XML (an error page if it is not well formed)
     return {
         "title": title or final_url,
         "content": content,
@@ -1933,7 +2060,9 @@ def _download_html(url: str, max_redirects: int = 5, hop_guard=None) -> tuple[st
                 if charset_match
                 else "utf-8"
             )
-            return body.decode(encoding, errors="replace"), current
+            page = _Page(body.decode(encoding, errors="replace"))
+            page.media_type = raw_content_type.split(";", 1)[0].strip().lower() or "text/html"
+            return page, current
         finally:
             if response is not None:
                 response.close()

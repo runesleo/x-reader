@@ -458,6 +458,10 @@ class EvidenceContractTest(unittest.TestCase):
         self.assertEqual(wechat("参数错误排查指南", long_text)["status"], "PASS")
         self.assertEqual(wechat("文章", "该内容已被发布者删除\n" + long_text)["status"], "UNKNOWN")
         self.assertEqual(wechat("文章", "参数错误\n" + long_text)["status"], "UNKNOWN")
+        self.assertEqual(wechat("文章", long_text + "\n该内容已被发布者删除")["status"], "UNKNOWN")  # any line
+        self.assertEqual(wechat("文章", long_text + "\n参数错误")["status"], "UNKNOWN")
+        short = "排查参数错误需要先检查请求格式，再核对签名与时间戳，最后看服务端日志里的具体报错。" * 4
+        self.assertNotEqual(wechat("文章", short)["status"], "FAIL")  # wording in a sentence is not the notice
 
     def test_xhs_and_telegram_need_media_proof(self):
         for source in ("xhs", "telegram"):

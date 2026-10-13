@@ -32,7 +32,7 @@ MAX_BODY_BYTES = 4096
 MAX_URL_CHARS = 2048
 MAX_PREVIEW_CHARS = 1200
 REQUEST_TIMEOUT_SECONDS = 75
-REQUEST_SLOTS = threading.BoundedSemaphore(4)
+REQUEST_SLOTS = threading.BoundedSemaphore(3)
 ALLOWED_PLATFORMS = {"twitter", "youtube", "generic"}
 SOCKET_TIMEOUT_SECONDS = 15
 # Absolute budget for the request line, headers and body together: a client

@@ -665,10 +665,11 @@ def _podcast_long_audio_proof_valid(content: str, extra: dict) -> bool:
             expected_frames += frames
             expected_asr_segments += asr_count
 
+        declared_overrun = float(extra.get("max_boundary_overrun_seconds", 0.0))
         if (
             extra.get("asr_boundary_adjustments", 0) != expected_boundary_adjustments
-            or abs(float(extra.get("max_boundary_overrun_seconds", 0.0))
-                   - max_boundary_overrun) > 0.001
+            or not math.isfinite(declared_overrun)
+            or abs(declared_overrun - max_boundary_overrun) > 0.001
         ):
             return False
         if (type(extra.get("asr_segments")) is not int
@@ -700,9 +701,8 @@ def _classify_article(source: str, title: str, content: str, extra: dict) -> dic
     """WeChat article: unavailable notices fail; image-carried or container-less reads do not pass."""
     body = visible_text(content)
     noticed_title = _wechat_notice(title)
-    noticed_head = any(_wechat_notice(line) for line in body[:600].splitlines())
-    thin_notice = prose_chars(body) < 600 and any(phrase in f"{title}\n{body[:600]}" for phrase in _WECHAT_UNAVAILABLE)
-    if noticed_title or thin_notice:
+    noticed_head = any(_wechat_notice(line) for line in body.splitlines())
+    if noticed_title or (noticed_head and prose_chars(body) < 600):
         return {
             "status": FAIL,
             "reason_code": "source_unavailable",
@@ -810,7 +810,7 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "the page is too large for x-reader to check for walls, so it cannot pass",
             "components": {"text_body": UNKNOWN},
         }
-    if "template_markup" in signals:
+    if "template_markup" in signals or "xml_markup" in signals:
         return {
             "status": UNKNOWN,
             "reason_code": "page_structure_unverified",

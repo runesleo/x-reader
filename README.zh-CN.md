@@ -110,7 +110,7 @@ npx skills add runesleo/x-reader --skill x-reader
 | 搜索结果 / preview card | 只能用于发现，不能当原文证据 |
 | X 推文正文 | 只能支持正文里的内容 |
 | 推文正文 + 未读取的附件视频 | 正文可通过；视频必须保持 `PARTIAL` |
-| 线程首帖、引用帖或 X Article 没读到 | 在读到或确认不存在之前保持 `PARTIAL` |
+| 线程首帖、引用帖或 X Article 没读到 | 在确认该层不存在之前保持 `PARTIAL`（引用帖也可以被读到；X Article 正文不会被读取） |
 | 视频标题 / 简介 | 只是 metadata，不是视频内容 |
 | 覆盖整段视频的字幕 | 能支持视频里的口头内容；画面没有分析，视频整体保持 `PARTIAL` |
 | 登录墙 / 删除页 / 空响应 | `FAIL` 或 `PARTIAL`，不能脑补 |

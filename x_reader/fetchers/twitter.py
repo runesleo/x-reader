@@ -210,7 +210,10 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     quote = tweet.get("quote")
     if isinstance(quote, dict):
         quote_text = quote.get("text").strip() if isinstance(quote.get("text"), str) else ""
-        quote_author = str((quote.get("author") or {}).get("screen_name") or "")
+        quote_author = quote.get("author")
+        if quote_author is not None and not isinstance(quote_author, dict):
+            quote_text = ""  # an author that is not an object: a damaged layer
+        quote_author = str(quote_author.get("screen_name") or "") if isinstance(quote_author, dict) else ""
         quote_media = _media_status_from_fxtwitter(quote) if quote.get("id") else "unknown"
         if not quote_text or quote_media == "unknown":
             result["quote_status"] = "unknown"
@@ -248,7 +251,8 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
 
 def _is_self_reply(tweet: dict) -> bool:
     """A reply to the author's own post continues a thread."""
-    author = str((tweet.get("author") or {}).get("screen_name") or "").lower()
+    author = tweet.get("author") if isinstance(tweet.get("author"), dict) else {}
+    author = str(author.get("screen_name") or "").lower()
     replied = str(tweet.get("replying_to") or "").lower()
     return bool(tweet.get("replying_to_status")) and bool(author) and replied == author
 

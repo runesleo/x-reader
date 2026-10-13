@@ -108,7 +108,7 @@ x-reader makes these distinctions explicit:
 | Search result / preview card | Discovery only — not source evidence |
 | X post text | Claims in the post text only |
 | X post text + unconsumed attached video | Post may pass; video stays `PARTIAL` |
-| First post of a thread, quoted post or X Article not read | `PARTIAL` until that layer is read or shown absent |
+| First post of a thread, quoted post or X Article not read | `PARTIAL` until that layer is shown absent (a quoted post can also be read; an X Article body never is) |
 | Video page title / description | Metadata only — not spoken content |
 | Subtitle track covering the whole video | Spoken-content evidence; the video stays `PARTIAL` because pictures are not analyzed |
 | Login wall / deleted page / empty payload | `FAIL` or `PARTIAL`, never invented completion |

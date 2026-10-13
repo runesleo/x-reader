@@ -721,6 +721,13 @@ class GenericReadTest(unittest.TestCase):
             # em and % line heights are of the element's own font size
             ("<body>", f"<div style='font-size:80px'><main style='font-size:8px;line-height:10%'>{article}</main></div>"),
             ("<body>", f"<div style='font-size:80px'><main style='font-size:8px;line-height:.1em'>{article}</main></div>"),
+            # escaped ":" and "!" are not syntax; display:contents paints no background; zero grid tracks
+            ("<body>", f"<main style='color:white;color\\:black;background:white'>{article}</main>"),
+            ("<body>", f"<main style='color:white;color:black\\!important;background:white'>{article}</main>"),
+            ("<body>", f"<main style='display:contents;color:white;background:black'>{article}</main>"),
+            ("<body>", f"<main style='display:grid;grid-auto-rows:0'>{article}</main>"),
+            ("<body>", f"<main style='display:grid;grid-template-columns:repeat(4,0)'>{article}</main>"),
+            ("<body>", f"<main style='display:grid;grid-template:auto / 1fr'>{article}</main>"),
             # var() fallbacks nested past any use
             ("<body>", "<main style='font-size:" + "var(--x," * 1100 + "16px" + ")" * 1100 + f"'>{article}</main>"),
             # hidden whatever the display; fallback content browsers do not show
@@ -766,6 +773,16 @@ class GenericReadTest(unittest.TestCase):
             "background:white;z-index:999'></div></div>",
             "<div style='position:relative;overflow:hidden;overflow-y:visible'><div style='position:absolute;inset:0;"
             "width:100vw;height:100vh;background:white'></div></div>",
+            # no clip box: display:contents makes no box, inline boxes do not clip, the
+            # logical overflow that wins shows, and dropped overflow values clip nothing
+            "<div style='position:relative;display:contents;overflow:hidden'><div style='position:absolute;"
+            "z-index:999;inset:0;width:100vw;height:100vh;background:white'></div></div>",
+            "<span style='position:relative;overflow:hidden'><span style='position:absolute;inset:0;width:100vw;"
+            "height:100vh;background:white'></span></span>",
+            "<div style='position:relative;overflow:hidden;overflow-block:visible;overflow-inline:visible'>"
+            "<div style='position:absolute;inset:0;width:100vw;height:100vh;background:white'></div></div>",
+            "<div style='position:relative;overflow-x:hidden nope;overflow-y:hidden nope'><div style='position:absolute;"
+            "inset:0;width:100vw;height:100vh;background:white'></div></div>",
             # an <svg> inside MathML is not clipped by any <svg> around it
             "<math><mi><svg style='position:fixed;width:100vw;height:100vh' viewBox='0 0 1 1'>"
             "<rect width='1' height='1' fill='#fff'/></svg></mi></math>",
@@ -804,12 +821,47 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main>{article}<p>Note <sup style='position:relative;top:-0.3em'>1</sup></p></main>"),
             ("<body style='position:relative'>", f"<main style='position:relative;max-width:800px'>{article}</main>"),
             ("<body>", f"<main>{article}<p>A <mark>highlighted</mark> phrase.</p></main>"),
+            ("<body>", f"<main style='display:grid;grid-template-columns:minmax(0,1fr) 200px;grid-auto-rows:auto'>"
+                       f"{article}</main>"),
+            ("<body>", f"<main><xmp>shown as written</xmp>{article}</main>"),
             ("<body>", f"<main><div style='position:relative;overflow:hidden;height:200px'><img src='x.jpg' "
                        f"style='position:absolute;inset:0;width:100%;height:100%'></div>{article}</main>"),
             ("<body>", f"<main style='font-family:\\5FAE\\8F6F\\96C5\\9ED1'>{article}</main>"),
         ):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head>{head}{body}</body></html>")
             self.assertEqual(receipt["status"], "PASS", (head, body[:80]))
+
+    def test_text_box_values_and_option_labels_count_for_walls(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        for control in ("<input type='text' value='Please sign in to continue.'>",
+                        "<input value='Please sign in to continue.'>",
+                        "<select><option label='Please sign in to continue.'></option></select>"):
+            page, receipt = self._page_receipt(
+                f"<html><head><title>T</title></head><body>{control}<main>{article}</main></body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", control)
+        page, receipt = self._page_receipt("<html><head><title>T</title></head><body><input type='password' "
+                                           f"value='Please sign in to continue.'><main>{article}</main></body></html>")
+        self.assertEqual(receipt["status"], "PASS")  # a password box shows dots, not the words
+
+    def test_the_media_type_decides_how_the_body_is_read(self):
+        from x_reader.evidence import classify_payload
+        from x_reader.fetchers.jina import _Page, fetch_html_page
+
+        def read(body, media_type):
+            page_text = _Page(body)
+            page_text.media_type = media_type
+            with patch("x_reader.fetchers.jina._download_html", return_value=(page_text, "https://e.com/a")):
+                page = fetch_html_page("https://e.com/a")
+            return page, classify_payload({
+                "source_type": "manual", "title": page["title"], "content": page["content"],
+                "extra": {"fetch_method": "direct_html_pinned", "redirects_verified": True, "body_verified": True,
+                          "embedded_media": page["embedded_media"], "page_signals": page["page_signals"]}})
+
+        body = "<script>shown too</script><main>" + ARTICLE * 2 + "</main>"
+        page, receipt = read(body, "text/plain")
+        self.assertIn("<script>shown too</script>", page["content"])  # browsers show text/plain as written
+        page, receipt = read("<html><body><main>" + ARTICLE * 2 + "</main><p>unclosed", "application/xhtml+xml")
+        self.assertEqual(receipt["reason_code"], "page_structure_unverified")
 
     def test_button_labels_count_for_walls_not_as_page_text(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
@@ -824,6 +876,9 @@ class GenericReadTest(unittest.TestCase):
         self.assertEqual(_inline_declarations("dis\\play:none"), [("display", "none", False)])
         self.assertEqual(_inline_declarations("position:\\61 bsolute"), [("position", "absolute", False)])
         self.assertEqual(_inline_declarations("c\\;d:e"), [("c;d", "e", False)])
+        self.assertEqual(_inline_declarations("color\\:black"), [])  # no unescaped ":", no declaration
+        self.assertEqual(_inline_declarations("color:black\\!important"), [("color", "black!important", False)])
+        self.assertEqual(_inline_declarations("color:red !\\69mportant"), [("color", "red", True)])
         for broken in ("a:b\\", "a:\\\nb", "a:b/*", "a:(b", "a:b)", "a:'b"):
             self.assertIsNone(_inline_declarations(broken), broken)
         page, receipt = self._page_receipt(
