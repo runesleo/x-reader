@@ -184,8 +184,18 @@ class EvidenceContractTest(unittest.TestCase):
             self.assertEqual(result["status"], "FAIL", reason)
             self.assertEqual(result["reason_code"], reason)
 
-    def test_articles_that_mention_walls_are_not_mistaken_for_them(self):
-        article = "How to fix a 404 page not found error.\n" + ARTICLE + ARTICLE
+    def test_missing_page_openings_never_pass(self):
+        verified = {"redirects_verified": True, "embedded_media": 0}
+        soft_404 = "Page not found\n" + ARTICLE * 3  # HTTP 200 with plenty of help text
+        result = classify_payload({"source_type": "manual", "title": "Example", "content": soft_404, "extra": verified})
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["reason_code"], "possibly_missing_page")
+        thin = classify_payload({"source_type": "manual", "title": "404 Not Found | Example",
+                                 "content": "Sorry, we could not find that page.", "extra": verified})
+        self.assertEqual(thin["status"], "FAIL")
+
+    def test_walls_mentioned_later_in_an_article_do_not_count(self):
+        article = ARTICLE + "Readers who hit a page not found error should check the address first.\n" + ARTICLE
         result = classify_payload({"source_type": "manual", "title": "Fixing 404 errors", "content": article,
                                    "extra": {"redirects_verified": True, "embedded_media": 0}})
         self.assertEqual(result["status"], "PASS")

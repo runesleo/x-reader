@@ -7,6 +7,7 @@ or follows redirects itself.
 """
 
 import asyncio
+import re
 from typing import Any, Dict, List
 
 import feedparser
@@ -44,20 +45,33 @@ def _is_full_body(html_body: str) -> bool:
     )
 
 
-# The feed body must cover this share of the linked article's prose to count as full.
-FULL_BODY_COVERAGE = 0.8
+# A feed body counts as full when it covers this share of the article page's
+# text, measured as overlapping word runs, not just length.
+FULL_BODY_COVERAGE = 0.6
+# ...and when this share of the feed body actually appears on the page.
+FEED_ON_PAGE_SHARE = 0.7
+_SHINGLE = 6
+_MAX_TOKENS = 50_000
+_TOKEN = re.compile(r"[a-z0-9]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+
+def _shingles(text: str) -> set:
+    """Runs of six words (or CJK characters), the unit used to compare two texts."""
+    tokens = _TOKEN.findall(text.lower())[:_MAX_TOKENS]
+    return {tuple(tokens[i:i + _SHINGLE]) for i in range(max(0, len(tokens) - _SHINGLE + 1))}
 
 
 async def verify_full_body(article: Dict[str, Any]) -> str:
-    """Compare a "full" feed body with the article page it links to.
+    """Check a "full" feed body against the article page it links to.
 
     An unmarked excerpt looks like a full body until it is set against the
-    article. Returns "full" when the feed covers the page's prose, "summary"
-    when the page has clearly more, and "unverified" when the page cannot be read.
+    article. The page itself must pass as a readable article (no login,
+    paywall or thin shell); then the feed body must share most of its text.
+    Returns "full", "summary" (an excerpt of the page) or "unverified".
     """
     if article.get("content_kind") != "full":
         return article.get("content_kind", "summary")
-    from x_reader.evidence import prose_chars, visible_text
+    from x_reader.evidence import PASS, classify_payload, visible_text
     from x_reader.fetchers.jina import CrossPlatformRedirect, fetch_html_page
     from x_reader.routing import detect_platform
 
@@ -73,11 +87,20 @@ async def verify_full_body(article: Dict[str, Any]) -> str:
     except Exception as exc:
         logger.warning(f"RSS article page not readable ({type(exc).__name__}); body unverified")
         return "unverified"
-    feed_prose = prose_chars(visible_text(article.get("summary") or ""))
-    page_prose = prose_chars(visible_text(page["content"]))
-    if page_prose and feed_prose < FULL_BODY_COVERAGE * page_prose:
-        return "summary"
-    return "full"
+    page_receipt = classify_payload({
+        "source_type": "manual", "title": page["title"], "content": page["content"], "url": page["url"],
+        "extra": {"redirects_verified": True, "embedded_media": page["embedded_media"]},
+    })
+    if page_receipt["status"] != PASS:
+        return "unverified"  # gated, thin or media-carrying article: nothing solid to compare
+    feed = _shingles(visible_text(article.get("summary") or ""))
+    on_page = _shingles(visible_text(page["content"]))
+    if not feed or not on_page:
+        return "unverified"
+    shared = len(feed & on_page)
+    if shared < FEED_ON_PAGE_SHARE * len(feed):
+        return "unverified"  # the feed body is not this page's text
+    return "full" if shared >= FULL_BODY_COVERAGE * len(on_page) else "summary"
 
 
 async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:

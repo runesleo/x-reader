@@ -150,12 +150,12 @@ class UniversalReader:
         """Read any other page; a redirect into another platform goes to that reader.
 
         x-reader first loads the page itself over pinned, validated hops: that proves
-        where the URL leads and shows embedded audio/video. Jina follows redirects on
-        its own side and may be sent elsewhere, so its text is only "verified" when
-        the direct read succeeded and, on the hosted surface, never: there the
-        receipt must describe the text this process fetched.
+        where the URL leads and shows embedded players and frames. Jina follows
+        redirects on its own side and may be sent elsewhere, so the hosted surface
+        never uses it: there the reader returns only text this process fetched over
+        checked hops. Locally Jina's cleaner text is preferred, with the direct read
+        as evidence.
         """
-        from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars, visible_text
         from x_reader.fetchers.jina import BlockedDestination, CrossPlatformRedirect, fetch_html_page
 
         def generic_only(hop: str) -> None:
@@ -163,6 +163,7 @@ class UniversalReader:
             if hop_platform != "generic":
                 raise CrossPlatformRedirect(hop, hop_platform)
 
+        hosted = hosted_mode()
         page = None
         try:
             page = await asyncio.to_thread(fetch_html_page, url, hop_guard=generic_only)
@@ -171,20 +172,21 @@ class UniversalReader:
         except BlockedDestination:
             raise
         except Exception as exc:
+            if hosted:
+                raise
             logger.warning(f"Direct page read failed ({type(exc).__name__}); trying Jina unverified")
 
-        hosted = hosted_mode()
         target_url = page["url"] if page else url
         page_usable = bool(page) and len(page["content"]) >= 40
-        substantial = bool(page) and prose_chars(visible_text(page["content"])) >= MIN_GENERIC_BODY_CHARS
 
-        if hosted and substantial:
+        if hosted:
+            if not page_usable:
+                raise ValueError("The page returned too little readable text")
             data, verified = page, True  # the text shown is the text that was checked
         else:
             try:
                 data = await asyncio.to_thread(fetch_via_jina, target_url)
-                # Locally a successful direct read vouches for where the URL leads.
-                verified = bool(page) and not hosted
+                verified = bool(page)  # the direct read vouches for where the URL leads
             except Exception as exc:
                 if not page_usable:
                     raise

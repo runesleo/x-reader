@@ -29,6 +29,7 @@ DIRECT_HEADERS = {
 DIRECT_TOTAL_TIMEOUT = 20
 JINA_TOTAL_TIMEOUT = 30
 IO_TIMEOUT = 5
+MAX_CONNECT_ATTEMPTS = 3
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
@@ -51,24 +52,27 @@ class BlockedDestination(ValueError):
     """A hop points at a private/special address, an unresolvable host or a non-http scheme."""
 
 
-# Players whose audio/video is the substance of an embedding page.
-_MEDIA_EMBED_HOSTS = (
-    "youtube.com", "youtube-nocookie.com", "youtu.be", "vimeo.com", "dailymotion.com",
-    "twitch.tv", "soundcloud.com", "spotify.com", "podcasts.apple.com", "bilibili.com",
-    "tiktok.com", "loom.com", "wistia.com", "wistia.net", "streamable.com", "rumble.com",
-    "ted.com", "xiaoyuzhoufm.com", "v.qq.com", "ixigua.com", "youku.com", "anchor.fm",
-)
 _SKIP_TAGS = {"script", "style", "noscript", "svg", "template"}
 _BOILERPLATE_TAGS = {"nav", "footer", "aside"}
 _BLOCK_TAGS = {
     "p", "div", "article", "section", "main", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6",
     "blockquote", "pre", "tr",
 }
+# Anything a page embeds is content x-reader does not read: players, frames, plugins.
+_EMBED_TAGS = {"video", "audio", "iframe", "embed", "object"}
 
 
-def _is_media_embed(src: str) -> bool:
-    host = (urlsplit(src if "//" in src else "").hostname or "").lower()
-    return any(host == domain or host.endswith("." + domain) for domain in _MEDIA_EMBED_HOSTS)
+def _is_hidden_embed(attrs: dict) -> bool:
+    """Zero-size or hidden frames (tracking pixels, tag managers) carry no content."""
+    style = (attrs.get("style") or "").replace(" ", "").lower()
+    return (
+        "hidden" in attrs
+        or attrs.get("aria-hidden") == "true"
+        or "display:none" in style
+        or "visibility:hidden" in style
+        or (attrs.get("width") or "").strip() in ("0", "1")
+        or (attrs.get("height") or "").strip() in ("0", "1")
+    )
 
 
 def _join_text(parts: list) -> str:
@@ -89,26 +93,20 @@ def _join_text(parts: list) -> str:
 
 
 def _extract_html_page(html: str) -> tuple[str, str, int]:
-    """Title, article text and the number of embedded audio/video players.
+    """Title, page text and the number of embedded players, frames and plugins.
 
-    Navigation, footers and asides are dropped; when the first <main>/<article>
-    region carries substantial prose, only that region is kept.
+    Navigation, footers and asides are dropped; everything else in the body is
+    kept, so no part of the page's own text is silently left out.
     """
     from html.parser import HTMLParser
-    from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars
 
     class _PageParser(HTMLParser):
         def __init__(self):
             super().__init__()
-            self.skip_depth = self.boiler_depth = self.main_depth = 0
-            self.main_seen = self.in_head = self.in_title = False
-            self.title_parts, self.body_parts, self.main_parts = [], [], []
-            self.media = 0
-
-        def _append(self, chunk):
-            self.body_parts.append(chunk)
-            if self.main_depth:
-                self.main_parts.append(chunk)
+            self.skip_depth = self.boiler_depth = 0
+            self.in_head = self.in_title = False
+            self.title_parts, self.body_parts = [], []
+            self.embeds = 0
 
         def handle_starttag(self, tag, attrs):
             tag = tag.lower()
@@ -119,19 +117,13 @@ def _extract_html_page(html: str) -> tuple[str, str, int]:
             elif tag in _SKIP_TAGS:
                 self.skip_depth += 1
             else:
-                if tag in ("video", "audio"):
-                    self.media += 1
-                elif tag in ("iframe", "embed", "object"):
-                    values = dict(attrs)
-                    if _is_media_embed(values.get("src") or values.get("data") or ""):
-                        self.media += 1
                 if tag in _BOILERPLATE_TAGS:
                     self.boiler_depth += 1
-                if tag in ("main", "article") and (self.main_depth or not self.main_seen):
-                    self.main_depth += 1
-                    self.main_seen = True
+                if (tag in _EMBED_TAGS and not self.skip_depth and not self.boiler_depth
+                        and not _is_hidden_embed(dict(attrs))):
+                    self.embeds += 1
                 if not self.in_head and tag in _BLOCK_TAGS:
-                    self._append("\n")
+                    self.body_parts.append("\n")
 
         def handle_endtag(self, tag):
             tag = tag.lower()
@@ -144,10 +136,8 @@ def _extract_html_page(html: str) -> tuple[str, str, int]:
             else:
                 if tag in _BOILERPLATE_TAGS and self.boiler_depth:
                     self.boiler_depth -= 1
-                if tag in ("main", "article") and self.main_depth:
-                    self.main_depth -= 1
                 if not self.in_head and tag in _BLOCK_TAGS:
-                    self._append("\n")
+                    self.body_parts.append("\n")
 
         def handle_data(self, data):
             text = data.strip()
@@ -156,14 +146,12 @@ def _extract_html_page(html: str) -> tuple[str, str, int]:
             if self.in_title:
                 self.title_parts.append(text)
             elif not self.in_head and not self.boiler_depth:
-                self._append(text)
+                self.body_parts.append(text)
 
     parser = _PageParser()
     parser.feed(html)
     title = " ".join(parser.title_parts).strip()
-    main = _join_text(parser.main_parts)
-    content = main if prose_chars(main) >= MIN_GENERIC_BODY_CHARS else _join_text(parser.body_parts)
-    return title[:200], content, parser.media
+    return title[:200], _join_text(parser.body_parts), parser.embeds
 
 
 def _extract_html_text(html: str) -> tuple[str, str]:
@@ -269,6 +257,7 @@ def _request_pinned(
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
 
     remaining = max(0.1, float(timeout_seconds))
+    deadline = time.monotonic() + remaining
     try:
         safe_ips = resolve_safe_ips(
             hostname,
@@ -277,9 +266,6 @@ def _request_pinned(
         )
     except ValueError as exc:
         raise BlockedDestination(str(exc)) from exc
-
-    io_timeout = max(0.1, min(remaining, IO_TIMEOUT))
-    timeout = Timeout(connect=io_timeout, read=io_timeout)
 
     target = parsed.path or "/"
     if parsed.query:
@@ -293,13 +279,18 @@ def _request_pinned(
     )
 
     # Every candidate was validated above. IPv4 goes first and a failed connect
-    # moves on to the next address: many hosts have IPv6 addresses but no IPv6 route.
-    candidates = sorted(safe_ips, key=lambda address: ":" in address)
+    # moves on to the next address (many hosts have IPv6 addresses but no IPv6
+    # route), within the caller's time budget and at most MAX_CONNECT_ATTEMPTS.
+    candidates = sorted(safe_ips, key=lambda address: ":" in address)[:MAX_CONNECT_ATTEMPTS]
     for attempt, ip in enumerate(candidates):
+        left = deadline - time.monotonic()
+        if left <= 0.1:
+            raise TimeoutError(f"Connecting to {hostname} exceeded its time budget")
+        io_timeout = min(left, IO_TIMEOUT)
         common = {
             "host": ip,
             "port": port,
-            "timeout": timeout,
+            "timeout": Timeout(connect=io_timeout, read=io_timeout),
             "maxsize": 1,
             "block": True,
         }

@@ -228,13 +228,25 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         self.assertEqual(article["article_status"], "present")
         self.assertEqual(twitter._structure_from_fxtwitter({})["structure_status"], "unknown")
 
+    def test_replies_to_the_authors_own_post_continue_a_thread(self):
+        post = {"id": "5", "text": "And here is the next step.", "author": {"screen_name": "Leo"},
+                "replying_to": "leo", "replying_to_status": "4"}
+        structure = twitter._structure_from_fxtwitter(post)
+        self.assertTrue(twitter._with_structure({"text": post["text"]}, structure)["thread_marker"])
+        reply_to_other = dict(post, replying_to="someone_else")
+        structure = twitter._structure_from_fxtwitter(reply_to_other)
+        self.assertFalse(twitter._with_structure({"text": post["text"]}, structure)["thread_marker"])
+        quoted = twitter._structure_from_fxtwitter({"id": "6", "text": "Look", "quote": dict(post, id="5")})
+        self.assertEqual(quoted["quote_status"], "incomplete")
+
     def test_text_only_fxtwitter_post_has_no_media(self):
         # FxTwitter omits "media" for posts without media.
         self.assertEqual(twitter._media_status_from_fxtwitter({"id": "20", "text": "just setting up"}), "none")
         self.assertEqual(twitter._media_status_from_fxtwitter({}), "unknown")
 
     def test_thread_markers(self):
-        for text in ("1/ Here is why", "(1/5) A thread", "Last point (5/5)", "Big news 🧵", "A thread 👇"):
+        for text in ("1/ Here is why", "1/NoSpace thread start", "(1/5) A thread", "Last point (5/5)",
+                     "Big news 🧵", "A thread 👇"):
             self.assertTrue(twitter._looks_like_thread(text), text)
         for text in ("Plain post with no thread", "Updated 10/13 numbers below", "50/50 odds"):
             self.assertFalse(twitter._looks_like_thread(text), text)

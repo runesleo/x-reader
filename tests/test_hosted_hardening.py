@@ -213,13 +213,25 @@ class SafeFetchTest(unittest.TestCase):
     def test_full_feed_bodies_are_checked_against_the_article(self):
         from x_reader.fetchers import rss
 
-        item = {"content_kind": "full", "url": "https://e.com/a", "summary": f"<p>{ARTICLE}</p>"}
-        same = {"title": "A", "content": ARTICLE, "url": "https://e.com/a", "embedded_media": 0}
-        longer = dict(same, content=ARTICLE * 4)
-        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=same):
-            self.assertEqual(asyncio.run(rss.verify_full_body(dict(item))), "full")
-        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=longer):
-            self.assertEqual(asyncio.run(rss.verify_full_body(dict(item))), "summary")
+        story = " ".join(
+            f"Paragraph {i} of the story explains another step of the argument in plain words." for i in range(40)
+        )
+        story_page = story.replace(". ", ".\n")  # sentence per line, like an article page
+        item = {"content_kind": "full", "url": "https://e.com/a", "summary": f"<p>{story}</p>"}
+        page = {"title": "A", "content": story_page, "url": "https://e.com/a", "embedded_media": 0}
+
+        def verdict(**changes):
+            with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(page, **changes)):
+                return asyncio.run(rss.verify_full_body(dict(item)))
+
+        self.assertEqual(verdict(), "full")
+        longer = story_page + "\n" + "\n".join(
+            f"Later section {i} adds detail that the feed never carried, sentence after sentence." for i in range(80))
+        self.assertEqual(verdict(content=longer), "summary")
+        unrelated = "\n".join(f"An unrelated page talks about gardening tips number {i} in detail." for i in range(60))
+        self.assertEqual(verdict(content=unrelated), "unverified")
+        self.assertEqual(verdict(content="Sign in to continue reading."), "unverified")
+        self.assertEqual(verdict(embedded_media=1), "unverified")
         with patch("x_reader.fetchers.jina.fetch_html_page", side_effect=ValueError("HTTP status 403")):
             self.assertEqual(asyncio.run(rss.verify_full_body(dict(item))), "unverified")
         video = dict(item, url="https://www.youtube.com/watch?v=abcdefghijk")
@@ -250,6 +262,30 @@ class SafeFetchTest(unittest.TestCase):
             _pool, response, ip = jina._request_pinned("https://e.com/a", 5)
         self.assertEqual(tried, ["198.51.100.7", "203.0.113.5"])
         self.assertEqual((response, ip), ("response", "203.0.113.5"))
+
+    def test_pinned_requests_stop_after_three_addresses(self):
+        from urllib3.exceptions import NewConnectionError
+        from x_reader.fetchers import jina
+
+        tried = []
+
+        class Pool:
+            def __init__(self, host, **_kw):
+                self.host = host
+
+            def request(self, *_a, **_kw):
+                tried.append(self.host)
+                raise NewConnectionError(None, "unreachable")
+
+            def close(self):
+                pass
+
+        addresses = [f"198.51.100.{i}" for i in range(1, 9)]
+        with patch("x_reader.utils.url_validator.resolve_safe_ips", return_value=addresses), \
+                patch.object(jina, "HTTPSConnectionPool", Pool):
+            with self.assertRaises(NewConnectionError):
+                jina._request_pinned("https://e.com/a", 5)
+        self.assertEqual(len(tried), jina.MAX_CONNECT_ATTEMPTS)
 
     def test_feeds_with_generic_content_types_are_sniffed(self):
         from x_reader.fetchers.jina import _read_bounded
@@ -331,13 +367,18 @@ class GenericReadTest(unittest.TestCase):
         self.assertIs(content.extra["redirects_verified"], True)
         self.assertEqual(content.extra["embedded_media"], 0)
 
-    def test_hosted_jina_text_is_never_verified(self):
-        thin = dict(self.PAGE, content="Loading the application, please wait.")
+    def test_hosted_reads_never_use_jina(self):
+        thin = dict(self.PAGE, content="Loading the application, please wait a moment.")
         with patch("x_reader.fetchers.jina.fetch_html_page", return_value=thin), \
-                patch("x_reader.reader.fetch_via_jina", return_value=dict(self.JINA)):
+                patch("x_reader.reader.fetch_via_jina") as jina:
             content = self._read("https://e.com/a", hosted=True)
-        self.assertEqual(content.extra["fetch_method"], "jina_pinned")
-        self.assertIs(content.extra["redirects_verified"], False)
+        jina.assert_not_called()
+        self.assertEqual(content.extra["fetch_method"], "direct_html_pinned")
+        with patch("x_reader.fetchers.jina.fetch_html_page", side_effect=TimeoutError()), \
+                patch("x_reader.reader.fetch_via_jina") as jina:
+            with self.assertRaises(TimeoutError):
+                self._read("https://e.com/a", hosted=True)
+        jina.assert_not_called()
 
     def test_local_reads_use_jina_text_with_direct_evidence(self):
         with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(self.PAGE, embedded_media=1)), \
@@ -354,22 +395,26 @@ class GenericReadTest(unittest.TestCase):
         self.assertIs(content.extra["redirects_verified"], False)
         self.assertIsNone(content.extra["embedded_media"])
 
-    def test_page_extraction_drops_boilerplate_and_counts_players(self):
+    def test_page_extraction_drops_boilerplate_and_counts_embeds(self):
         from x_reader.fetchers.jina import _extract_html_page
 
         html = (
             "<html><head><title>T</title></head><body><nav>Home Pricing Blog Careers Contact</nav>"
             "<main><article>" + "".join(f"<p>{line}</p>" for line in ARTICLE.splitlines()) +
-            "<video src='/a.mp4'></video><iframe src='https://www.youtube.com/embed/abcdefghijk'></iframe>"
-            "<iframe src='https://ads.example.com/frame'></iframe></article></main>"
+            "<video src='/a.mp4'></video><iframe src='https://player.example.org/v/1'></iframe>"
+            "<iframe src='/player/video'></iframe><embed src='/a.swf'>"
+            "<iframe src='https://t.example.com/px' width='0' height='0'></iframe>"
+            "<noscript><iframe src='https://tags.example.com/ns'></iframe></noscript>"
+            "</article><article><p>The second article on the page is kept as well, word for word.</p></article></main>"
             "<footer>Copyright and legal links for this site, all rights reserved here.</footer></body></html>"
         )
-        title, content, media = _extract_html_page(html)
+        title, content, embeds = _extract_html_page(html)
         self.assertEqual(title, "T")
-        self.assertEqual(media, 2)
+        self.assertEqual(embeds, 4)  # video, two frames, embed; hidden and noscript frames ignored
         self.assertNotIn("Pricing", content)
         self.assertNotIn("Copyright", content)
         self.assertIn("careful argument", content)
+        self.assertIn("second article on the page", content)
 
 
 class TelegramRoutingTest(unittest.TestCase):

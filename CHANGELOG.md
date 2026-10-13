@@ -16,7 +16,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 - Podcast episodes (Xiaoyuzhou, Apple Podcasts): show notes by default, plus opt-in local ASR in the CLI: `--media-preview-seconds N` (≤30 s sample, always `PARTIAL`), `--media-full-short` (≤120 s / ≤2 MiB, verified full transcript) and `--media-full-long` (≤90 min / ≤64 MiB, resumable, verified chunks). Needs `x-reader[media]`, ffmpeg and ffprobe.
 - X posts: the quoted post and poll options are appended to the post text when they were read; extra fields `structure_status`, `quote_status`, `poll_status`, `article_status` and `thread_marker` record what was checked.
 - A generic URL that redirects into X, YouTube, a podcast or another supported platform is read by that platform's reader.
-- Generic reads load the page directly over pinned hops first; the extra fields `redirects_verified` and `embedded_media` record whether that worked and how many audio/video players the page embeds.
+- Generic reads load the page directly over pinned hops first; the extra fields `redirects_verified` and `embedded_media` record whether that worked and how many players, frames and plugins the page embeds.
 - `x-reader doctor` checks ffprobe and local transcription (faster-whisper).
 - Bilibili, Xiaohongshu and browser-fallback fixes from the Evidence Receipt work.
 
@@ -27,14 +27,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 - Evidence receipts are stricter:
   - YouTube videos are never `PASS`, because pictures are not analyzed; the `spoken_media` component is `PASS` only when subtitle cues cover the whole video (no uncaptioned stretch over 30 s).
   - X posts are `PASS` only when media, quoted post, poll, X Article and thread layers were checked and are absent or read (a quoted post with its own layers is incomplete); text from a page reader (Jina, a page without the post element) is `UNKNOWN`.
-  - Generic pages are `PASS` only when x-reader loaded the page itself, found no embedded audio/video, and read 280+ characters of sentence-like prose without login, paywall, consent, teaser, removed or challenge markers; pages with players and teasers are `PARTIAL`; thin text and pages x-reader could not load are `UNKNOWN`.
-  - RSS items count as full only with 280+ characters of visible prose, no "read more" or paywall text, and at least 80 % of the linked article page's prose (`feed_body_unverified` when the page cannot be read); WeChat removal/verification notices `FAIL`, image-carried posts are `PARTIAL`.
+  - Generic pages are `PASS` only when x-reader loaded the page itself, found no visible player, frame or plugin, and read 280+ characters of sentence-like prose without login, paywall, consent, teaser, missing-page or challenge markers; pages with embedded content and teasers are `PARTIAL`; thin text, pages that open like a missing-page notice and pages x-reader could not load are `UNKNOWN`.
+  - RSS items count as full only with 280+ characters of visible prose, no "read more" or paywall text, a linked article page that passes on its own, and most of that page's text in the feed body (`feed_body_unverified` otherwise); WeChat removal/verification notices `FAIL`, image-carried posts are `PARTIAL`.
   - Full-audio proofs allow 0.5 s between declared and decoded duration (was 1 %), and `coverage_ratio` is the measured processed/declared ratio.
 - Podcast previews report the seconds actually decoded (`preview_seconds`) next to `requested_preview_seconds`.
 - Telegram message URLs (`t.me/<channel>/<id>`, `t.me/s/...`) read that exact message instead of the channel's latest post.
 - FxTwitter posts without a `media` field count as having no media (before: unknown).
 - RSS feeds served as `text/plain`, `application/octet-stream` or without a Content-Type are accepted when the body is a feed.
-- Pinned connections try IPv4 addresses first and move on to the next checked address when a connection fails (hosts with IPv6 addresses but no IPv6 route could not read generic pages).
+- Pinned connections try IPv4 addresses first and move on to the next checked address when a connection fails, within the request's time budget and at most three addresses (hosts with IPv6 addresses but no IPv6 route could not read generic pages).
 - With `--json`, usage errors print `{"ok": false, "error_type": "UsageError", ...}` and exit 2; an unknown command exits 2.
 - The `all` extra includes `media` (faster-whisper).
 - Moat benchmark: every x-reader row is scored from its Evidence Receipt; new outcome `UNVERIFIED`; restricted controls that time out stay out of the denominator; benchmark runs cannot write to an Obsidian vault configured in `.env`.
@@ -44,7 +44,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) for stru
 - yt-dlp only receives a rebuilt `https://www.youtube.com/watch?v=<id>` URL with its generic extractor disabled, so consent or redirect URLs cannot send it to other hosts.
 - RSS feeds are downloaded with the pinned, per-hop validated fetcher and parsed from bytes, so feed reads can no longer be redirected to private addresses.
 - External tools run with a deadline and an output budget enforced while they run; on exit, timeout or overflow their whole process group is killed.
-- Hosted reads: one shared router plus a child-side platform allowlist that also covers redirects; generic text comes only from the service's own pinned fetch; the child skips `.env`, writes no inbox or Markdown, inherits no proxies, starts no external tools (no yt-dlp, ffmpeg or browser), and runs under address-space / CPU / file-size / open-file ceilings; CLI output is size-capped.
+- Hosted reads: one shared router plus a child-side platform allowlist that also covers redirects; generic text comes only from the service's own pinned fetch (no Jina Reader); the child skips `.env`, writes no inbox or Markdown, inherits no proxies, starts no external tools (no yt-dlp, ffmpeg or browser), and runs under address-space / CPU / file-size / open-file ceilings; CLI output is size-capped.
 - Hosted server: absolute 20 s request-read deadline watched by one thread, connection cap that survives thread-start failures, JSON-only POSTs, JSON for every error including unparseable request targets, a fixed set of public reason codes, control characters refused in URLs, no interpreter version in headers, stricter CSP.
 - The manual preview workflow no longer opens a public tunnel; it runs the live canary against the server on the CI runner.
 - yt-dlp calls skip playlists, cap audio downloads at 25 MB and bound subtitle / metadata files; short-audio decoding stops at the PCM budget and long-audio decoding has an idle watchdog.

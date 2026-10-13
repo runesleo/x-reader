@@ -465,13 +465,24 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "generic reader returned an error, challenge or consent shell",
             "components": {"text_body": FAIL},
         }
-    # A real article can mention "page not found"; a missing page has little else.
-    if prose < 600 and any(phrase in f"{title.lower()}\n{head}" for phrase in _UNAVAILABLE_PHRASES):
+    # A page that opens by saying it is missing never passes, however much help
+    # text follows (soft 404s answer HTTP 200); thin ones fail outright.
+    opening = f"{title.lower()}\n{lowered[:200]}"
+    if any(phrase in opening for phrase in _UNAVAILABLE_PHRASES) or (
+        prose < 600 and any(phrase in head for phrase in _UNAVAILABLE_PHRASES)
+    ):
+        if prose < 600:
+            return {
+                "status": FAIL,
+                "reason_code": "source_unavailable",
+                "evidence": "the page reports that the content is missing or removed",
+                "components": {"text_body": FAIL},
+            }
         return {
-            "status": FAIL,
-            "reason_code": "source_unavailable",
-            "evidence": "the page reports that the content is missing or removed",
-            "components": {"text_body": FAIL},
+            "status": UNKNOWN,
+            "reason_code": "possibly_missing_page",
+            "evidence": "the page opens like a missing-page notice, so its text may not be the requested content",
+            "components": {"text_body": UNKNOWN},
         }
     if any(phrase in lowered for phrase in _PAYWALL_PHRASES) or any(
         marker in lowered[-300:] for marker in _TEASER_TAIL

@@ -75,7 +75,7 @@ These should be run as connector/model-assisted adjudication against the same co
 
 ### Short podcast full-source proof (explicit, single case only)
 
-The development runner supports `--podcast-full-short` but **only** with `--providers x_reader --workers 1` and a single eligible podcast row in a custom corpus. It calls the canonical Evidence Receipt; `MEDIA_COMPLETE` is awarded only when the hash/bytes/duration/coverage fields are independently self-consistent and the receipt is `PASS`. A forged `has_transcript=true`, incomplete bytes or partially decoded audio cannot earn `MEDIA_COMPLETE`.
+The benchmark runner supports `--podcast-full-short` but **only** with `--providers x_reader --workers 1` and a single eligible podcast row in a custom corpus. It calls the canonical Evidence Receipt; `MEDIA_COMPLETE` is awarded only when the hash/bytes/duration/coverage fields are independently self-consistent and the receipt is `PASS`. A forged `has_transcript=true`, incomplete bytes or partially decoded audio cannot earn `MEDIA_COMPLETE`.
 
 A 13.12-second publicly accessible Xiaoyuzhou episode (ID `6a14e9dd3209346094186445`) completed in 25.660 seconds on the isolated benchmark host (97,989 complete bytes, full decoded 13.12s, ASR 4 speech segments). **This proves a short-file mechanism, not a long-podcast moat or cross-provider win.**
 

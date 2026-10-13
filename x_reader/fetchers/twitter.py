@@ -195,7 +195,8 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     if not (tweet.get("id") and "text" in tweet):
         return {"structure_status": "unknown"}
     result: Dict[str, Any] = {"structure_status": "verified", "quote_status": "none",
-                              "poll_status": "none", "article_status": "none"}
+                              "poll_status": "none", "article_status": "none",
+                              "self_reply": _is_self_reply(tweet)}
     quote = tweet.get("quote")
     if isinstance(quote, dict):
         quote_text = str(quote.get("text") or "").strip()
@@ -206,7 +207,8 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
             result["quote_text"] = f"[Quoted post by @{quote_author}]\n{quote_text}"
             if _media_status_from_fxtwitter(quote) != "none":
                 result["quote_status"] = "media_unread"
-            elif quote.get("quote") or quote.get("poll") or quote.get("article") or _looks_like_thread(quote_text):
+            elif (quote.get("quote") or quote.get("poll") or quote.get("article")
+                    or _looks_like_thread(quote_text) or _is_self_reply(quote)):
                 # The quoted post carries its own layers; only its text was read.
                 result["quote_status"] = "incomplete"
             else:
@@ -230,8 +232,15 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     return result
 
 
+def _is_self_reply(tweet: dict) -> bool:
+    """A reply to the author's own post continues a thread."""
+    author = str((tweet.get("author") or {}).get("screen_name") or "").lower()
+    replied = str(tweet.get("replying_to") or "").lower()
+    return bool(tweet.get("replying_to_status")) and bool(author) and replied == author
+
+
 _STRUCTURE_KEYS = ("structure_status", "quote_status", "poll_status", "article_status")
-_THREAD_START = re.compile(r"^\s*[\(（]?1\s*/\s*(?:\d{1,2}|n)?[\)）]?(?=\s|$)", re.IGNORECASE)
+_THREAD_START = re.compile(r"^\s*[\(（]?1\s*/", re.IGNORECASE)
 _THREAD_COUNTER_END = re.compile(r"[\(（]\d{1,2}\s*/\s*(?:\d{1,2}|n)[\)）]\s*$", re.IGNORECASE)
 
 
@@ -245,7 +254,7 @@ def _looks_like_thread(text: str) -> bool:
 
 def _with_structure(result: Dict[str, Any], structure: Dict[str, Any]) -> Dict[str, Any]:
     """Attach structure fields and append quoted-post / poll text that was actually read."""
-    result["thread_marker"] = _looks_like_thread(result["text"])
+    result["thread_marker"] = _looks_like_thread(result["text"]) or bool(structure.get("self_reply"))
     for key in _STRUCTURE_KEYS:
         if key in structure:
             result[key] = structure[key]
