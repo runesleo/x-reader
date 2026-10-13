@@ -131,7 +131,7 @@ class EvidenceContractTest(unittest.TestCase):
     def test_generic_article_with_real_prose_is_pass(self):
         result = classify_payload({"source_type": "manual", "title": "Essay", "content": ARTICLE,
                                    "url": "https://blog.example.com/essay",
-                                   "extra": {"redirects_verified": True, "embedded_media": 0}})
+                                   "extra": {"redirects_verified": True, "embedded_media": 0, "page_signals": []}})
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["reason_code"], "text_body_read")
 
@@ -182,7 +182,7 @@ class EvidenceContractTest(unittest.TestCase):
             result = classify_payload({"source_type": "manual", "title": title, "content": body})
             self.assertEqual(result["status"], "FAIL", reason)
             self.assertEqual(result["reason_code"], reason)
-        verified = {"redirects_verified": True, "embedded_media": 0}
+        verified = {"redirects_verified": True, "embedded_media": 0, "page_signals": []}
         for body in (long_consent, "We use cookies to give you the best experience.\n" + ARTICLE * 3):
             # one cookie phrase in long text: a consent wall and a bannered article look alike
             result = classify_payload({"source_type": "manual", "title": "News site", "content": body, "extra": verified})
@@ -190,7 +190,7 @@ class EvidenceContractTest(unittest.TestCase):
             self.assertEqual(result["reason_code"], "consent_text_present")
 
     def test_missing_page_openings_never_pass(self):
-        verified = {"redirects_verified": True, "embedded_media": 0}
+        verified = {"redirects_verified": True, "embedded_media": 0, "page_signals": []}
         soft_404 = "Page not found\n" + ARTICLE * 3  # HTTP 200 with plenty of help text
         result = classify_payload({"source_type": "manual", "title": "Example", "content": soft_404, "extra": verified})
         self.assertEqual(result["status"], "UNKNOWN")
@@ -200,7 +200,7 @@ class EvidenceContractTest(unittest.TestCase):
         self.assertEqual(thin["status"], "FAIL")
 
     def test_missing_page_detection_is_anchored(self):
-        verified = {"redirects_verified": True, "embedded_media": 0}
+        verified = {"redirects_verified": True, "embedded_media": 0, "page_signals": []}
         guide = "How to fix Page Not Found errors\n" + ARTICLE * 2
         result = classify_payload({"source_type": "manual", "title": "How to fix Page Not Found errors",
                                    "content": guide, "extra": verified})
@@ -212,10 +212,28 @@ class EvidenceContractTest(unittest.TestCase):
                                   "content": "We looked everywhere for this page.", "extra": verified})
         self.assertEqual(error["status"], "FAIL")
 
+    def test_missing_page_notices_must_be_exact(self):
+        verified = {"redirects_verified": True, "embedded_media": 0, "page_signals": []}
+        for title, body in (("How to fix Page Not Found errors", "How to fix Page Not Found errors\n" + ARTICLE),
+                            ("404 Errors Explained: A Guide", ARTICLE)):
+            result = classify_payload({"source_type": "manual", "title": title, "content": body, "extra": verified})
+            self.assertEqual(result["status"], "PASS", title)
+        branded = classify_payload({"source_type": "manual", "title": "Example News",
+                                    "content": "Example News\nPage not found\n" + ARTICLE * 3, "extra": verified})
+        self.assertEqual(branded["reason_code"], "possibly_missing_page")
+
+    def test_page_wide_signals_are_honoured(self):
+        for signal, status in (("paywall", "PARTIAL"), ("auth_required", "FAIL"), ("missing_page", "UNKNOWN"),
+                               ("consent", "UNKNOWN")):
+            result = classify_payload({"source_type": "manual", "title": "A", "content": ARTICLE * 2,
+                                       "extra": {"redirects_verified": True, "embedded_media": 0,
+                                                 "page_signals": [signal]}})
+            self.assertEqual(result["status"], status, signal)
+
     def test_walls_mentioned_later_in_an_article_do_not_count(self):
         article = ARTICLE + "Readers who hit a page not found error should check the address first.\n" + ARTICLE
         result = classify_payload({"source_type": "manual", "title": "Fixing 404 errors", "content": article,
-                                   "extra": {"redirects_verified": True, "embedded_media": 0}})
+                                   "extra": {"redirects_verified": True, "embedded_media": 0, "page_signals": []}})
         self.assertEqual(result["status"], "PASS")
 
     def test_generic_unverified_redirect_and_media_pages_do_not_pass(self):
@@ -225,7 +243,7 @@ class EvidenceContractTest(unittest.TestCase):
         self.assertEqual(unverified["reason_code"], "page_unverified")
         media = classify_payload({"source_type": "manual", "title": "A", "content": ARTICLE,
                                   "url": "https://vimeo.com/123456",
-                                  "extra": {"redirects_verified": True, "embedded_media": 0}})
+                                  "extra": {"redirects_verified": True, "embedded_media": 0, "page_signals": []}})
         self.assertEqual(media["status"], "PARTIAL")
         self.assertEqual(media["reason_code"], "embedded_media_unread")
 
@@ -293,7 +311,7 @@ class EvidenceContractTest(unittest.TestCase):
             "content": ARTICLE,
             "url": "https://example.com",
             "fetched_at": "2026-10-07T00:00:00Z",
-            "extra": {"fetch_method": "direct_html_pinned", "redirects_verified": True, "embedded_media": 0},
+            "extra": {"fetch_method": "direct_html_pinned", "redirects_verified": True, "embedded_media": 0, "page_signals": []},
         })
         self.assertEqual(receipt["status"], "PASS")
         self.assertEqual(receipt["content_chars"], len(ARTICLE))

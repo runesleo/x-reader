@@ -8,6 +8,7 @@ or follows redirects itself.
 
 import asyncio
 import re
+import unicodedata
 from collections import Counter
 from typing import Any, Dict, List
 
@@ -57,9 +58,11 @@ _MAX_TOKENS = 50_000
 _TOKEN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]|[^\W_]+")
 
 
-def _shingles(text: str) -> Counter:
-    """Runs of six words (or CJK characters), with how often each occurs."""
-    tokens = _TOKEN.findall(text.casefold())[:_MAX_TOKENS]
+def _shingles(text: str) -> Counter | None:
+    """Runs of six words (or CJK characters) with their counts; None when too long to compare."""
+    tokens = _TOKEN.findall(unicodedata.normalize("NFC", text).casefold())
+    if len(tokens) > _MAX_TOKENS:
+        return None  # a cut-off count would overstate coverage
     return Counter(tuple(tokens[i:i + _SHINGLE]) for i in range(max(0, len(tokens) - _SHINGLE + 1)))
 
 
@@ -91,7 +94,8 @@ async def verify_full_body(article: Dict[str, Any]) -> str:
         return "unverified"
     page_receipt = classify_payload({
         "source_type": "manual", "title": page["title"], "content": page["content"], "url": page["url"],
-        "extra": {"redirects_verified": True, "embedded_media": page["embedded_media"]},
+        "extra": {"redirects_verified": True, "embedded_media": page["embedded_media"],
+                  "page_signals": page.get("page_signals", [])},
     })
     if page_receipt["status"] != PASS:
         return "unverified"  # gated, thin or media-carrying article: nothing solid to compare

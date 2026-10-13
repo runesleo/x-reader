@@ -240,6 +240,14 @@ class SafeFetchTest(unittest.TestCase):
         with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(page, content=repeated)):
             five = dict(item, summary="<p>" + " ".join([repeated.splitlines()[0]] * 5) + "</p>")
             self.assertEqual(asyncio.run(rss.verify_full_body(five)), "summary")  # repeats are counted
+        huge = " ".join(f"word{i}" for i in range(rss._MAX_TOKENS + 10))
+        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(page, content=huge + ".")):
+            self.assertEqual(asyncio.run(rss.verify_full_body(dict(item, summary=huge[:200]))), "unverified")
+        import unicodedata
+        cafe = "\n".join(f"Le café numéro {i} de la rue raconte une histoire assez longue ici." for i in range(40))
+        with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(page, content=cafe)):
+            nfd = unicodedata.normalize("NFD", cafe)
+            self.assertEqual(asyncio.run(rss.verify_full_body(dict(item, summary=f"<p>{nfd}</p>"))), "full")
         russian = "\n".join(f"Раздел {i} длинной статьи подробно объясняет следующий шаг рассуждения." for i in range(40))
         with patch("x_reader.fetchers.jina.fetch_html_page", return_value=dict(page, content=russian)):
             self.assertEqual(asyncio.run(rss.verify_full_body(dict(item, summary=f"<p>{russian}</p>"))), "full")
@@ -324,7 +332,7 @@ class SafeFetchTest(unittest.TestCase):
 
 class GenericReadTest(unittest.TestCase):
     PAGE = {"title": "A", "content": ARTICLE, "url": "https://e.com/a", "author": "",
-            "fetch_method": "direct_html_pinned", "embedded_media": 0}
+            "fetch_method": "direct_html_pinned", "embedded_media": 0, "page_signals": []}
     JINA = {"title": "A (Jina)", "content": "Jina text. " * 40, "url": "https://e.com/a", "fetch_method": "jina_pinned"}
 
     def _read(self, url, hosted=False):
@@ -420,7 +428,7 @@ class GenericReadTest(unittest.TestCase):
             "</article><article><p>The second article on the page is kept as well, word for word.</p></article></main>"
             "<footer>Copyright and legal links for this site, all rights reserved here.</footer></body></html>"
         )
-        title, content, embeds = _extract_html_page(html)
+        title, content, embeds, _page, _primary = _extract_html_page(html)
         self.assertEqual(title, "T")
         self.assertEqual(embeds, 4)  # video, two frames, embed; hidden and noscript frames ignored
         self.assertNotIn("Pricing", content)
@@ -436,11 +444,46 @@ class GenericReadTest(unittest.TestCase):
                   "Accept all cookies or manage preferences. Reject all.</div>")
         html = ("<html><head><title>Essay</title></head><body>" + banner + "<main>" +
                 "".join(f"<p>{line}</p>" for line in ARTICLE.splitlines()) + "</main></body></html>")
-        title, content, embeds = _extract_html_page(html)
-        self.assertNotIn("cookies", content)
-        receipt = classify_payload({"source_type": "manual", "title": title, "content": content,
-                                    "extra": {"redirects_verified": True, "embedded_media": embeds}})
+        with patch("x_reader.fetchers.jina._download_html", return_value=(html, "https://e.com/essay")):
+            from x_reader.fetchers.jina import fetch_html_page
+            page = fetch_html_page("https://e.com/essay")
+        self.assertNotIn("cookies", page["content"])
+        receipt = classify_payload({"source_type": "manual", "title": page["title"], "content": page["content"],
+                                    "extra": {"redirects_verified": True, "embedded_media": page["embedded_media"],
+                                              "page_signals": page["page_signals"]}})
         self.assertEqual(receipt["status"], "PASS")
+
+    def _page_receipt(self, html):
+        from x_reader.evidence import classify_payload
+        from x_reader.fetchers.jina import fetch_html_page
+
+        with patch("x_reader.fetchers.jina._download_html", return_value=(html, "https://e.com/a")):
+            page = fetch_html_page("https://e.com/a")
+        return page, classify_payload({
+            "source_type": "manual", "title": page["title"], "content": page["content"],
+            "extra": {"redirects_verified": True, "embedded_media": page["embedded_media"],
+                      "page_signals": page["page_signals"]}})
+
+    def test_walls_beside_the_main_content_still_count(self):
+        main = "<main>" + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main>"
+        for notice, status in (("<div>Subscribe to continue reading this story.</div>", "PARTIAL"),
+                               ("<div>Please sign in to continue.</div>", "FAIL"),
+                               ("<div><h1>Page not found</h1></div>", "UNKNOWN")):
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{notice}{main}</body></html>")
+            self.assertEqual(receipt["status"], status, notice)
+        hidden_main = ("<html><head><title>T</title></head><body><main hidden>"
+                       + "".join(f"<p>{line}</p>" for line in ARTICLE.splitlines()) + "</main><p>Short visible note.</p></body></html>")
+        page, receipt = self._page_receipt(hidden_main)
+        self.assertNotIn("careful argument", page["content"])
+        self.assertNotEqual(receipt["status"], "PASS")
+
+    def test_embeds_count_anywhere_on_the_page(self):
+        main = "<main>" + "".join(f"<p>{line}</p>" for line in ARTICLE.splitlines()) + "</main>"
+        page, receipt = self._page_receipt(
+            "<html><head><title>T</title></head><body>" + main
+            + "<aside><iframe src='https://player.example.org/v/1'></iframe></aside></body></html>")
+        self.assertEqual(page["embedded_media"], 1)
+        self.assertEqual(receipt["status"], "PARTIAL")
 
 
 class TelegramRoutingTest(unittest.TestCase):

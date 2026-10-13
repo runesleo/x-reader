@@ -203,6 +203,7 @@ class UniversalReader:
                 "fetch_method": data.get("fetch_method", "jina"),
                 "redirects_verified": verified,
                 "embedded_media": page["embedded_media"] if page else None,
+                "page_signals": page.get("page_signals") if page else None,
             },
         )
 

@@ -62,14 +62,27 @@ _BLOCK_TAGS = {
 _EMBED_TAGS = {"video", "audio", "iframe", "embed", "object"}
 
 
-def _is_hidden_embed(attrs: dict) -> bool:
-    """Zero-size or hidden frames (tracking pixels, tag managers) carry no content."""
+_VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+    "source", "track", "wbr",
+}
+
+
+def _is_hidden_element(attrs: dict) -> bool:
+    """Explicitly hidden: the hidden attribute, aria-hidden or an inline display:none."""
     style = (attrs.get("style") or "").replace(" ", "").lower()
     return (
         "hidden" in attrs
         or attrs.get("aria-hidden") == "true"
         or "display:none" in style
         or "visibility:hidden" in style
+    )
+
+
+def _is_hidden_embed(attrs: dict) -> bool:
+    """Hidden or zero-size frames (tracking pixels, tag managers) carry no content."""
+    return (
+        _is_hidden_element(attrs)
         or (attrs.get("width") or "").strip() in ("0", "1")
         or (attrs.get("height") or "").strip() in ("0", "1")
     )
@@ -92,14 +105,17 @@ def _join_text(parts: list) -> str:
     return content.strip()
 
 
-def _extract_html_page(html: str) -> tuple[str, str, int]:
-    """Title, page text and the number of embedded players, frames and plugins.
+def _extract_html_page(html: str) -> tuple[str, str, int, str, bool]:
+    """Title, page text, embedded players/frames/plugins, page-wide text, and
+    whether the page text is the page's marked primary content.
 
-    Navigation, footers and asides are dropped. When the page marks its primary
-    content (every <main>, or else every <article>) and that region carries
-    substantial prose, the text is that region, so banners and widgets around it
-    stay out; otherwise the whole remaining body is kept. Embeds are counted
-    over the whole page.
+    Page text: navigation, footers, asides and explicitly hidden elements are
+    dropped; when the page marks its primary content (every <main>, else every
+    <article>) and that region carries substantial prose, the text is that
+    region, so banners around it stay out. The page-wide text keeps everything
+    but navigation and footers, hidden elements included, so wall notices
+    outside the article are still seen. Embeds are counted over the whole page,
+    except hidden ones.
     """
     from html.parser import HTMLParser
     from x_reader.evidence import MIN_GENERIC_BODY_CHARS, prose_chars
@@ -107,12 +123,19 @@ def _extract_html_page(html: str) -> tuple[str, str, int]:
     class _PageParser(HTMLParser):
         def __init__(self):
             super().__init__()
-            self.skip_depth = self.boiler_depth = self.main_depth = self.article_depth = 0
+            self.skip_depth = self.boiler_depth = self.chrome_depth = 0
+            self.main_depth = self.article_depth = 0
+            self.hidden_tag, self.hidden_nest = None, 0
             self.in_head = self.in_title = False
-            self.title_parts, self.body_parts, self.main_parts, self.article_parts = [], [], [], []
+            self.title_parts, self.body_parts, self.gate_parts = [], [], []
+            self.main_parts, self.article_parts = [], []
             self.embeds = 0
 
         def _append(self, chunk):
+            if not self.chrome_depth:
+                self.gate_parts.append(chunk)
+            if self.boiler_depth or self.hidden_tag:
+                return
             self.body_parts.append(chunk)
             if self.main_depth:
                 self.main_parts.append(chunk)
@@ -121,42 +144,60 @@ def _extract_html_page(html: str) -> tuple[str, str, int]:
 
         def handle_starttag(self, tag, attrs):
             tag = tag.lower()
+            values = dict(attrs)
             if tag == "head":
                 self.in_head = True
-            elif tag == "title":
+                return
+            if tag == "title":
                 self.in_title = True
-            elif tag in _SKIP_TAGS:
+                return
+            if tag in _SKIP_TAGS:
                 self.skip_depth += 1
-            else:
-                if tag in _BOILERPLATE_TAGS:
-                    self.boiler_depth += 1
-                if tag == "main":
-                    self.main_depth += 1
-                elif tag == "article":
-                    self.article_depth += 1
-                if (tag in _EMBED_TAGS and not self.skip_depth and not self.boiler_depth
-                        and not _is_hidden_embed(dict(attrs))):
-                    self.embeds += 1
-                if not self.in_head and tag in _BLOCK_TAGS:
-                    self._append("\n")
+                return
+            if self.hidden_tag is None:
+                if tag not in _VOID_TAGS and _is_hidden_element(values):
+                    self.hidden_tag, self.hidden_nest = tag, 1
+            elif tag == self.hidden_tag:
+                self.hidden_nest += 1
+            if tag in _BOILERPLATE_TAGS:
+                self.boiler_depth += 1
+            if tag in ("nav", "footer"):
+                self.chrome_depth += 1
+            if tag == "main":
+                self.main_depth += 1
+            elif tag == "article":
+                self.article_depth += 1
+            if (tag in _EMBED_TAGS and not self.skip_depth and not self.hidden_tag
+                    and not _is_hidden_embed(values)):
+                self.embeds += 1
+            if not self.in_head and tag in _BLOCK_TAGS:
+                self._append("\n")
 
         def handle_endtag(self, tag):
             tag = tag.lower()
             if tag == "title":
                 self.in_title = False
-            elif tag == "head":
+                return
+            if tag == "head":
                 self.in_head = False
-            elif tag in _SKIP_TAGS:
+                return
+            if tag in _SKIP_TAGS:
                 self.skip_depth = max(0, self.skip_depth - 1)
-            else:
-                if tag in _BOILERPLATE_TAGS and self.boiler_depth:
-                    self.boiler_depth -= 1
-                if tag == "main" and self.main_depth:
-                    self.main_depth -= 1
-                elif tag == "article" and self.article_depth:
-                    self.article_depth -= 1
-                if not self.in_head and tag in _BLOCK_TAGS:
-                    self._append("\n")
+                return
+            if not self.in_head and tag in _BLOCK_TAGS:
+                self._append("\n")
+            if tag in _BOILERPLATE_TAGS and self.boiler_depth:
+                self.boiler_depth -= 1
+            if tag in ("nav", "footer") and self.chrome_depth:
+                self.chrome_depth -= 1
+            if tag == "main" and self.main_depth:
+                self.main_depth -= 1
+            elif tag == "article" and self.article_depth:
+                self.article_depth -= 1
+            if self.hidden_tag is not None and tag == self.hidden_tag:
+                self.hidden_nest -= 1
+                if self.hidden_nest == 0:
+                    self.hidden_tag = None
 
         def handle_data(self, data):
             text = data.strip()
@@ -164,20 +205,19 @@ def _extract_html_page(html: str) -> tuple[str, str, int]:
                 return
             if self.in_title:
                 self.title_parts.append(text)
-            elif not self.in_head and not self.boiler_depth:
+            elif not self.in_head:
                 self._append(text)
 
     parser = _PageParser()
     parser.feed(html)
     title = " ".join(parser.title_parts).strip()
-    content = _join_text(parser.body_parts)
+    content, primary_used = _join_text(parser.body_parts), False
     for region in (parser.main_parts, parser.article_parts):
         primary = _join_text(region)
-        if primary:
-            if prose_chars(primary) >= MIN_GENERIC_BODY_CHARS:
-                content = primary
+        if primary and prose_chars(primary) >= MIN_GENERIC_BODY_CHARS:
+            content, primary_used = primary, True
             break
-    return title[:200], content, parser.embeds
+    return title[:200], content, parser.embeds, _join_text(parser.gate_parts), primary_used
 
 
 def _extract_html_text(html: str) -> tuple[str, str]:
@@ -468,8 +508,17 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
     navigation/footer text, with the count of embedded audio/video players, and
     returning thin pages too (the receipt decides what thin means).
     """
+    from x_reader.evidence import gate_signals
+
     html, final_url = _download_html(url, max_redirects, hop_guard)
-    title, content, media = _extract_html_page(html)
+    title, content, media, page_text, primary_used = _extract_html_page(html)
+    # Walls announced anywhere on the page count, not only in the extracted text.
+    # A cookie banner or consent overlay beside substantial marked main content
+    # hides nothing from this read (the article is in the HTML), so it is the
+    # one signal that only counts inside the text itself.
+    signals = gate_signals(title, page_text, include_tail=False)
+    if primary_used:
+        signals = [s for s in signals if s not in ("consent", "consent_title")]
     return {
         "title": title or final_url,
         "content": content,
@@ -477,6 +526,7 @@ def fetch_html_page(url: str, max_redirects: int = 5, hop_guard=None) -> dict:
         "author": "",
         "fetch_method": "direct_html_pinned",
         "embedded_media": media,
+        "page_signals": signals,
     }
 
 

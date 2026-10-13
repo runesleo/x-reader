@@ -174,18 +174,52 @@ def _host_in(url: str, domains: tuple) -> bool:
     return any(host == domain or host.endswith("." + domain) for domain in domains)
 
 
-_APOLOGY = re.compile(r"^(?:oops|sorry|uh[- ]oh|error|抱歉|对不起|哎呀)[\s!,.:;—–-]*")
+_APOLOGY = re.compile(r"^(?:oops|sorry|uh[- ]oh|抱歉|对不起|哎呀)[\s!,.:;—–-]*")
+_NOTICES = set(_UNAVAILABLE_PHRASES) | {
+    "404", "not found", "error 404", "404 error", "404 not found", "404 page not found",
+    "error 404 page not found", "page not found 404", "error page not found",
+}
+
+
+def _is_notice(text: str) -> bool:
+    """True when a short heading or title segment is itself a missing-page notice."""
+    text = _APOLOGY.sub("", text.strip().lower())
+    text = re.sub(r"[\s|·:—–-]+", " ", text).strip(" !.。！")
+    return text in _NOTICES
 
 
 def _opens_as_missing_page(title: str, body: str) -> bool:
-    """The title or the first line announces a missing page (anchored, not anywhere)."""
-    first = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    """A title segment or one of the first heading lines is exactly a missing-page notice."""
+    segments = re.split(r"\s[|·—–-]\s|[|·]", title)
+    if any(_is_notice(segment) for segment in segments):
+        return True
+    headings = [line.strip() for line in body.splitlines() if line.strip()][:3]
+    return any(len(line) <= 80 and _is_notice(line) for line in headings)
 
-    def announces(text: str) -> bool:
-        text = _APOLOGY.sub("", text.strip().lower())
-        return bool(re.match(r"(?:error\s*)?404\b", text)) or text.startswith(_UNAVAILABLE_PHRASES)
 
-    return announces(title) or (len(first) <= 80 and announces(first))
+def gate_signals(title: str, text: str, include_tail: bool = True) -> list:
+    """Walls a page's text announces, whatever its length: login, challenge,
+    consent, missing page, paywall or teaser. The fetcher runs this over the whole
+    page, so a notice outside the extracted article still counts."""
+    body = visible_text(text)
+    lowered = body.lower()
+    signals = set()
+    shell = _generic_shell_state(title, text)
+    if shell:
+        signals.add(shell)
+    strong = sum(phrase in lowered for phrase in _CONSENT_PHRASES)
+    weak = sum(phrase in lowered for phrase in _CONSENT_WEAK_PHRASES)
+    if strong or strong + weak >= 3:
+        signals.add("consent")
+        if any(marker in title.lower() for marker in _CONSENT_TITLES):
+            signals.add("consent_title")
+    if _opens_as_missing_page(title, body):
+        signals.add("missing_page")
+    if any(phrase in lowered for phrase in _PAYWALL_PHRASES) or (
+        include_tail and any(marker in lowered[-300:] for marker in _TEASER_TAIL)
+    ):
+        signals.add("paywall")
+    return sorted(signals)
 
 
 def _ends_with_read_more(text: str) -> bool:
@@ -205,7 +239,9 @@ def _generic_shell_state(title: str, content: str) -> str | None:
         "login required",
         "authentication required",
     )
-    error_titles = ("access denied", "forbidden", "404", "page not found")
+    # Exact title segments: "Forbidden City" or "404 Errors Explained" are articles.
+    error_titles = {"access denied", "forbidden", "403", "403 forbidden", "error 403", "just a moment...",
+                    "attention required!", "attention required! | cloudflare"}
     error_phrases = (
         "checking your browser before accessing",
         "enable javascript and cookies to continue",
@@ -215,9 +251,8 @@ def _generic_shell_state(title: str, content: str) -> str | None:
 
     if title_l in auth_titles or any(phrase in prefix for phrase in auth_phrases):
         return "auth_required"
-    if any(title_l.startswith(marker) for marker in error_titles) or any(
-        phrase in prefix for phrase in error_phrases
-    ):
+    segments = {segment.strip() for segment in re.split(r"\s[|·—–-]\s|[|·]", title_l)}
+    if segments & error_titles or title_l in error_titles or any(phrase in prefix for phrase in error_phrases):
         return "challenge_or_error"
     return None
 
@@ -456,25 +491,26 @@ def _classify_article(source: str, title: str, content: str, extra: dict) -> dic
 
 
 def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dict[str, Any]:
-    """Generic page: walls fail, teasers are partial, and PASS needs substantial prose."""
+    """Generic page: walls fail, teasers are partial, and PASS needs substantial prose.
+
+    Prose length comes from the text shown; wall signals come from that text and,
+    when x-reader loaded the page itself, from the whole page (page_signals).
+    """
     title = str(payload.get("title") or "")
-    body = visible_text(content)
-    lowered = body.lower()
-    prose = prose_chars(body)
-    shell_state = _generic_shell_state(title, content)
-    if shell_state == "auth_required":
+    prose = prose_chars(visible_text(content))
+    page_signals = extra.get("page_signals")
+    signals = set(gate_signals(title, content))
+    if isinstance(page_signals, list):
+        signals.update(str(item) for item in page_signals)
+    if "auth_required" in signals:
         return {
             "status": FAIL,
             "reason_code": "auth_required",
             "evidence": "generic reader returned a login/authentication shell",
             "components": {"text_body": FAIL},
         }
-    head = lowered[:600]
-    consent_hits = sum(phrase in lowered for phrase in _CONSENT_PHRASES)
-    consent_weight = consent_hits + sum(phrase in lowered for phrase in _CONSENT_WEAK_PHRASES)
-    consent_title = any(marker in title.lower() for marker in _CONSENT_TITLES)
-    if shell_state == "challenge_or_error" or (
-        consent_hits and (prose < 600 or consent_title)
+    if "challenge_or_error" in signals or (
+        "consent" in signals and (prose < 600 or "consent_title" in signals)
     ):
         return {
             "status": FAIL,
@@ -482,20 +518,9 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "generic reader returned an error, challenge or consent shell",
             "components": {"text_body": FAIL},
         }
-    # Cookie wording inside long text: a consent wall and an article carrying a
-    # banner look alike from here, so the page cannot pass.
-    if consent_hits or consent_weight >= 3:
-        return {
-            "status": UNKNOWN,
-            "reason_code": "consent_text_present",
-            "evidence": "the page text includes cookie/consent wording, so it may be a consent wall rather than the content",
-            "components": {"text_body": UNKNOWN},
-        }
-    # A page that opens by saying it is missing never passes, however much help
-    # text follows (soft 404s answer HTTP 200); thin ones fail outright.
-    if _opens_as_missing_page(title, body) or (
-        prose < 600 and any(phrase in head for phrase in _UNAVAILABLE_PHRASES)
-    ):
+    # A page that announces it is missing never passes, however much help text
+    # follows (soft 404s answer HTTP 200); thin ones fail outright.
+    if "missing_page" in signals:
         if prose < 600:
             return {
                 "status": FAIL,
@@ -506,12 +531,19 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
         return {
             "status": UNKNOWN,
             "reason_code": "possibly_missing_page",
-            "evidence": "the page opens like a missing-page notice, so its text may not be the requested content",
+            "evidence": "the page announces a missing page, so its text may not be the requested content",
             "components": {"text_body": UNKNOWN},
         }
-    if any(phrase in lowered for phrase in _PAYWALL_PHRASES) or any(
-        marker in lowered[-300:] for marker in _TEASER_TAIL
-    ):
+    # Cookie wording in long text: a consent wall and an article carrying a
+    # banner look alike from here, so the page cannot pass.
+    if "consent" in signals:
+        return {
+            "status": UNKNOWN,
+            "reason_code": "consent_text_present",
+            "evidence": "the page includes cookie/consent wording, so it may be a consent wall rather than the content",
+            "components": {"text_body": UNKNOWN},
+        }
+    if "paywall" in signals:
         return {
             "status": PARTIAL,
             "reason_code": "paywall_or_teaser",
@@ -525,7 +557,7 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
         return {
             "status": PARTIAL,
             "reason_code": "embedded_media_unread",
-            "evidence": "page text was read, but the page carries audio/video that was not",
+            "evidence": "page text was read, but the page embeds players, frames or plugins whose content was not",
             "components": {"text_body": PASS, "media": PARTIAL},
         }
     if prose < MIN_GENERIC_BODY_CHARS:
@@ -535,13 +567,13 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
             "evidence": "generic reader returned text, but it is too thin to prove source coverage",
             "components": {"text_body": UNKNOWN},
         }
-    if extra.get("redirects_verified") is not True or media_count != 0:
+    if extra.get("redirects_verified") is not True or media_count != 0 or not isinstance(page_signals, list):
         return {
             "status": UNKNOWN,
             "reason_code": "page_unverified",
             "evidence": (
                 "page text was read, but x-reader could not load the page itself to check "
-                "where it leads and whether it embeds audio/video"
+                "where it leads, what it embeds and whether it shows a wall"
             ),
             "components": {"text_body": UNKNOWN},
         }
@@ -549,8 +581,8 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
         "status": PASS,
         "reason_code": "text_body_read",
         "evidence": (
-            f"{prose} characters of page prose read; no login, paywall, consent, teaser or "
-            "embedded audio/video detected"
+            f"{prose} characters of page prose read; no login, paywall, consent, teaser, "
+            "missing-page notice or embedded content detected on the page"
         ),
         "components": {"text_body": PASS},
     }
