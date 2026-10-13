@@ -930,20 +930,29 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
         elif media_status != "none":
             components["attached_media"] = UNKNOWN
             gaps.append(("media_presence_unknown", "attached-media presence could not be verified"))
-        quote = extra.get("quote_status")
+        # With the post's structure checked, each layer is clear only as "none"
+        # or "read"; any other state (damaged, unread or missing) is a gap. An
+        # unchecked structure is one gap of its own (below).
+        checked = extra.get("structure_status") == "verified"
+        quote = extra.get("quote_status") if checked else extra.get("quote_status") or "none"
         if quote == "read":
             components["quoted_post"] = PASS
-        elif quote in ("media_unread", "incomplete", "unknown"):
+        elif quote != "none":
             components["quoted_post"] = PARTIAL
             gaps.append(("quoted_post_incomplete", "the quoted post or its media was not fully retrieved"))
-        if extra.get("poll_status") == "read":
+        poll = extra.get("poll_status") if checked else extra.get("poll_status") or "none"
+        if poll == "read":
             components["poll"] = PASS
-        elif extra.get("poll_status") == "unknown":
+        elif poll != "none":
             components["poll"] = UNKNOWN
             gaps.append(("poll_unread", "a poll is attached but its options were not retrieved"))
-        if extra.get("article_status") == "present":
+        article = extra.get("article_status") if checked else extra.get("article_status") or "none"
+        if article == "present":
             components["article_body"] = PARTIAL
             gaps.append(("article_body_unread", "the post carries an X Article whose body was not retrieved"))
+        elif article != "none":
+            components["article_body"] = UNKNOWN
+            gaps.append(("article_body_unread", "the post's X Article layer could not be checked"))
         if extra.get("thread_marker") is True:
             components["thread"] = PARTIAL
             gaps.append(("thread_continuation_unread", "the post is part of a thread; the other posts were not read"))

@@ -86,10 +86,11 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
             ),
             "present",
         )
-        self.assertEqual(
-            twitter._media_status_from_fxtwitter({"media": {"videos": [], "photos": []}}),
-            "none",
-        )
+        # FxTwitter leaves "media" out when a post has none; a key that is there
+        # but empty or null is a damaged layer, not proof of no media.
+        for media in ({"videos": [], "photos": []}, None, [], {}):
+            self.assertEqual(twitter._media_status_from_fxtwitter({"id": "1", "text": "t", "media": media}), "unknown")
+        self.assertEqual(twitter._media_status_from_fxtwitter({"id": "1", "text": "t"}), "none")
         self.assertEqual(twitter._media_status_from_fxtwitter({}), "unknown")
 
     def test_from_twitter_keeps_fetch_and_media_metadata(self):
@@ -213,6 +214,23 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         read = twitter._structure_from_fxtwitter(dict(base, poll={"choices": [{"label": "Yes"}, {"label": "No"}]}))
         self.assertEqual(read["poll_status"], "read")
         self.assertEqual(twitter._structure_from_fxtwitter(dict(base))["poll_status"], "none")
+
+    def test_layers_count_when_present_whatever_their_value(self):
+        from x_reader.evidence import classify_payload
+        from x_reader.schema import from_twitter
+
+        base = {"id": "1", "text": "main post", "author": {"screen_name": "a"}}
+        quoted = {"id": "2", "text": "quoted", "author": {"screen_name": "b"}}
+        damaged = (dict(base, poll=None), dict(base, quote=None), dict(base, article=None), dict(base, article={}),
+                   dict(base, media=None), dict(base, quote=dict(quoted, poll={})),
+                   dict(base, quote=dict(quoted, poll=None)), dict(base, quote=dict(quoted, media=None)),
+                   dict(base, quote=dict(quoted, article=None)))
+        for tweet in damaged + (dict(base),):
+            data = {"text": "main post", "author": "@a", "url": "https://x.com/a/status/1", "fetch_method": "fxtwitter",
+                    "post_id_verified": True, "media_status": twitter._media_status_from_fxtwitter(tweet),
+                    **twitter._structure_from_fxtwitter(tweet)}
+            status = classify_payload(from_twitter(data).to_dict())["status"]
+            self.assertEqual(status, "PASS" if tweet == dict(base) else "PARTIAL", tweet)
 
     def test_status_paths_must_match_whole(self):
         self.assertEqual(twitter._extract_status_id("https://x.com/alice/status/123"), "123")

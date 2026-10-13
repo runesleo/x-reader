@@ -49,6 +49,12 @@ class DoctorTest(unittest.TestCase):
             self.assertEqual(checks[optional].status, "MISSING", optional)
         self.assertTrue(build_report(list(checks.values()))["ready"])
 
+    def test_html5lib_is_a_core_library(self):
+        checks = self.checks(find_spec=_spec_for(missing=("html5lib",)))
+        self.assertEqual(checks["core-libraries"].status, "MISSING")
+        self.assertIn("html5lib", checks["core-libraries"].detail)
+        self.assertFalse(build_report(list(checks.values()))["ready"])
+
     def test_missing_core_library_is_not_ready_and_names_the_package(self):
         checks = self.checks(find_spec=_spec_for(missing=("dotenv",)))
         self.assertEqual(checks["core-libraries"].status, "MISSING")

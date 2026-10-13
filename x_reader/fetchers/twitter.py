@@ -119,19 +119,18 @@ def _media_status_from_fxtwitter(tweet: dict) -> str:
     """Return present/none/unknown from FxTwitter's structured media field.
 
     FxTwitter omits "media" for posts without media, so a missing key on a
-    real tweet object (it has an id and text) means none.
+    real tweet object (it has an id and text) means none; a key that is there
+    but null or empty is a damaged layer, not proof of no media.
     """
     if "media" not in tweet:
         return "none" if tweet.get("id") and "text" in tweet else "unknown"
 
     media = tweet.get("media")
     if isinstance(media, dict):
-        return "present" if any(bool(value) for value in media.values()) else "none"
+        return "present" if any(bool(value) for value in media.values()) else "unknown"
     if isinstance(media, (list, tuple)):
-        return "present" if media else "none"
-    if media is None:
-        return "none"
-    return "present" if bool(media) else "none"
+        return "present" if media else "unknown"
+    return "present" if media else "unknown"
 
 
 def _session_cookie_header(platform: str = "twitter") -> Optional[str]:
@@ -203,23 +202,26 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     result: Dict[str, Any] = {"structure_status": "verified", "quote_status": "none",
                               "poll_status": "none", "article_status": "none",
                               "self_reply": _is_self_reply(tweet)}
+    # FxTwitter omits a layer the post does not have: a key that is present
+    # counts, whatever its value (null, empty or damaged layers are not "none").
     quote = tweet.get("quote")
     if isinstance(quote, dict):
         quote_text = str(quote.get("text") or "").strip()
         quote_author = str((quote.get("author") or {}).get("screen_name") or "")
-        if not quote_text:
+        quote_media = _media_status_from_fxtwitter(quote) if quote.get("id") else "unknown"
+        if not quote_text or quote_media == "unknown":
             result["quote_status"] = "unknown"
         else:
             result["quote_text"] = f"[Quoted post by @{quote_author}]\n{quote_text}"
-            if _media_status_from_fxtwitter(quote) != "none":
+            if quote_media != "none":
                 result["quote_status"] = "media_unread"
-            elif (quote.get("quote") or quote.get("poll") or quote.get("article")
+            elif (any(key in quote for key in ("quote", "poll", "article"))
                     or _looks_like_thread(quote_text) or _is_self_reply(quote)):
                 # The quoted post carries its own layers; only its text was read.
                 result["quote_status"] = "incomplete"
             else:
                 result["quote_status"] = "read"
-    elif quote:
+    elif "quote" in tweet:
         result["quote_status"] = "unknown"
     poll = tweet.get("poll")
     choices = poll.get("choices") if isinstance(poll, dict) else None
@@ -233,10 +235,11 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
             lines.append(f"- {label} ({pct}%)" if pct is not None else f"- {label}")
         result["poll_text"] = "[Poll]\n" + "\n".join(lines)
         result["poll_status"] = "read"
-    elif "poll" in tweet and poll is not None:
+    elif "poll" in tweet:
         result["poll_status"] = "unknown"
-    if tweet.get("article"):
-        result["article_status"] = "present"
+    if "article" in tweet:
+        article = tweet.get("article")
+        result["article_status"] = "present" if isinstance(article, dict) and article else "unknown"
     return result
 
 

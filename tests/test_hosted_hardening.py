@@ -670,6 +670,140 @@ class GenericReadTest(unittest.TestCase):
                      f"<main style='font-size:var(--wp--preset--font-size--large);margin-top:var(--gap)'>{article}</main>"):
             self.assertEqual(receipt(body)["status"], "PASS", body[:70])
 
+    def test_text_style_follows_cascade_defaults_and_attributes(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+
+        def receipt(head, body):
+            return self._page_receipt(f"<html><head><title>T</title></head>{head}{body}</body></html>")[1]
+
+        hidden = (
+            # the !important one wins, whatever comes later
+            ("<body>", f"<main style='font-size:1px!important;font-size:16px'>{article}</main>"),
+            # text against the background behind it, inherited, blended through alpha
+            ("<body>", f"<main style='background:black'>{article}</main>"),
+            ("<body>", f"<main style='background:#000'><p><span>{article}</span></p></main>"),
+            ("<body>", f"<main style='color:rgba(0,0,0,0.05)'>{article}</main>"),
+            ("<body>", f"<main style='color:hsl(0 0% 100%)'>{article}</main>"),
+            ("<body>", f"<main style='background-image:url(black.png)'>{article}</main>"),
+            ("<body>", f"<main style='background-clip:text;background-image:linear-gradient(#fff,#fff)'>{article}</main>"),
+            ("<body>", f"<main style='background:#0000ee'><a href='/x'>{article}</a></main>"),
+            # presentational attributes
+            ("<body>", f"<main><font color='#ffffff'>{article}</font></main>"),
+            ("<body text='#fff'>", f"<main>{article}</main>"),
+            ("<body>", f"<main><table bgcolor='black'><tr><td>{article}</td></tr></table></main>"),
+            ("<body link='#ffffff' vlink='#ffffff'>", f"<main><a href='/x'>{article}</a></main>"),
+            ("<body>", f"<main><font face='Webdings'>{article}</font></main>"),
+            # browser default sizes, and line heights inherited as lengths
+            ("<body>", "<main>" + "<small>" * 6 + article + "</small>" * 6 + "</main>"),
+            ("<body>", "<main>" + "<h6><span>" * 4 + article + "</span></h6>" * 4 + "</main>"),
+            ("<body>", f"<main style='line-height:0'>{article}</main>"),
+            ("<body>", f"<main style='line-height:16px'><span style='font-size:80px'>{article}</span></main>"),
+            # spacing, decoration, bidi and fonts
+            ("<body>", f"<main style='padding-left:999999px'>{article}</main>"),
+            ("<body>", f"<main><span style='vertical-align:5000px'>{article}</span></main>"),
+            ("<body>", f"<main><p style='width:99999px'>{article}</p></main>"),
+            ("<body>", f"<main><div style='display:flex'><p style='flex:0 0 50000px'>{article}</p></div></main>"),
+            ("<body>", f"<main style='text-decoration:line-through 3em'>{article}</main>"),
+            ("<body>", f"<main style='unicode-bidi:bidi-override;direction:rtl'>{article}</main>"),
+            ("<body>", f"<main><bdo dir=rtl>{article}</bdo></main>"),
+            ("<body>", f"<main>{article}\u202e{article}</main>"),
+            ("<body>", f"<main style='font-family:Wingdings'>{article}</main>"),
+            ("<body>", f"<main style='content:url(x.png)'>{article}</main>"),
+            ("<body>", f"<main style='color-scheme:dark'>{article}</main>"),
+            ("<body>", f"<main><marquee>{article}</marquee></main>"),
+            ("<body>", f"<main style='color:#fff;background:#000'><mark style='color:inherit'>{article}</mark></main>"),
+            ("<body>", f"<main><pre style='tab-size:99999'>x\t{article}</pre></main>"),
+            ("<body>", f"<main><p style='position:relative;left:-9999px'>{article}</p></main>"),
+            # hidden whatever the display; fallback content browsers do not show
+            ("<body>", f"<main hidden='until-found' style='display:block'>{article}</main><p>Short.</p>"),
+            ("<body>", f"<main><meter>{article}</meter><progress>{article}</progress></main><p>Short.</p>"),
+        )
+        for head, body in hidden:
+            self.assertNotEqual(receipt(head, body)["status"], "PASS", (head, body[:80]))
+
+    def test_elements_that_can_cover_or_push_text_leave_the_page_unverified(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        covers = (
+            "<div style='position:fixed;inset:0;background:white;z-index:9999'></div>",
+            "<div style='position:sticky;top:0;height:100vh;background:#fff'></div>",
+            "<div style='position:relative;height:0'><div style='height:3000px;background:#fff'></div></div>",
+            "<div style='position:relative;top:200px;height:900px;background:#fff'></div>",
+            "<span style='outline:500px solid white'></span>",
+            "<span style='box-shadow:0 0 0 400px #fff'></span>",
+            "<p>x<span style='padding:40px 0;background:#fff'>y</span></p>",
+            "<dialog open><div style='height:900px;width:900px'></div></dialog>",
+            "<div style='transform:translateY(200px);height:500px;background:#fff'></div>",
+            "<div style='-webkit-transform:translateY(300px);height:500px;background:#fff'></div>",
+            "<div style='clip-path:circle(4999px);height:0'><div style='height:3000px;background:#fff'></div></div>",
+            "<div style='position:relative;height:10px'><div style='height:3000px;background:#fff'></div></div>",
+            "<div style='opacity:.99;height:0'><div style='height:3000px;background:#fff'></div></div>",
+            "<div style='display:grid'><div style='grid-area:1/1;background:#fff'></div></div>",
+            "<div style='margin-top:-300px;height:300px;background:#fff'></div>",
+            "<img src='w.png' style='margin-top:-300px' width='900' height='300'>",
+            "<div style='height:99999px'></div>", "<div style='height:calc(100px * 1000)'></div>",
+            "<div style='margin-top:1e6px'></div>", "<img src='x' vspace='99999'>",
+            "<table width='99999'><tr><td>x</td></tr></table>",
+            "<div style='--h:99999px;height:var(--h)'></div>",
+            "<table><colgroup><col style='visibility:collapse'></colgroup><tr><td>x</td></tr></table>",
+            "<svg overflow='visible' width='10' height='10'><rect x='-5000' y='-5000' width='10000' height='10000'/></svg>",
+            "<math><mi style='position:fixed;inset:0;background:white'>x</mi></math>",
+            "<svg><foreignObject><div style='position:fixed;inset:0;background:#fff'></div></foreignObject></svg>",
+            "<script style='display:block;position:fixed;inset:0;background:#fff'></script>",
+            "<iframe style='position:fixed;inset:0;width:100%;height:100%' src='about:blank'></iframe>",
+            "<div style='position:\\61 bsolute;inset:0;width:100%;height:100%;background:#fff'></div>",
+            "<div style='position:relative;overflow:hidden'><div style='position:fixed;inset:0;background:#fff'></div></div>",
+        )
+        for cover in covers:
+            for html in (f"<html><head><title>T</title></head><body>{cover}<main>{article}</main></body></html>",
+                         f"<html><head><title>T</title></head><body><main>{article}{cover}</main></body></html>"):
+                page, receipt = self._page_receipt(html)
+                self.assertNotEqual(receipt["status"], "PASS", cover)
+                self.assertIn("visibility_unknown", page["page_signals"], cover)
+
+    def test_a_cover_inside_a_clipping_box_only_unsettles_that_box(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        embed = ("<div style='position:relative;padding-bottom:56.25%;height:0;overflow:hidden'>"
+                 "<iframe src='https://www.youtube.com/embed/x' style='position:absolute;top:0;left:0;width:100%;"
+                 "height:100%'></iframe></div>")
+        page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body><main>{embed}{article}</main></body></html>")
+        self.assertEqual(receipt["status"], "PARTIAL")  # the player is unread; the text is not in doubt
+        boxed = (f"<div style='position:relative;overflow:hidden'>{article}"
+                 "<div style='position:absolute;inset:0;background:#fff'></div></div>")
+        page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body><main>{boxed}</main></body></html>")
+        self.assertNotEqual(receipt["status"], "PASS")
+
+    def test_ordinary_inline_styling_and_old_markup_still_pass(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        for head, body in (
+            ("<body>", f"<main><div style='column-width: calc( 0.9 * 30em );'><p style='margin:0 4em;padding:0 0.25em'>"
+                       f"{article}</p></div><span style='background:#ffcc55'>tag</span></main>"),
+            ("<body>", f"<main>{article}<p>a <code style='background:#f5f5f5;padding:2px 4px'>x</code></p></main>"),
+            ("<body>", f"<main><pre style='background:#272822;color:#f8f8f2'>code here</pre>{article}</main>"),
+            ("<body bgcolor='#ffffff' background='bel.gif' text='#000000' link='#000099' vlink='#464646'>",
+             f"<main><font size=2 face='verdana'>{article}<font color=#dddddd>[1]</font></font></main>"),
+            ("<body>", f"<main><svg width='16' height='16' viewBox='0 0 10000 10000'><rect width='10000' height='10000' "
+                       f"style='transform:rotate(45deg)'/></svg>{article}</main>"),
+            ("<body>", f"<main><ruby>x<rp>(</rp><rt>y</rt><rp>)</rp></ruby>{article}</main>"),
+            ("<body>", f"<main>{article}<p>Note <sup style='position:relative;top:-0.3em'>1</sup></p></main>"),
+            ("<body style='position:relative'>", f"<main style='position:relative;max-width:800px'>{article}</main>"),
+            ("<body>", f"<main style='font-family:\\5FAE\\8F6F\\96C5\\9ED1'>{article}</main>"),
+        ):
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head>{head}{body}</body></html>")
+            self.assertEqual(receipt["status"], "PASS", (head, body[:80]))
+
+    def test_style_escapes_are_read_as_browsers_read_them(self):
+        from x_reader.fetchers.jina import _inline_declarations
+
+        self.assertEqual(_inline_declarations("dis\\play:none"), [("display", "none", False)])
+        self.assertEqual(_inline_declarations("position:\\61 bsolute"), [("position", "absolute", False)])
+        self.assertEqual(_inline_declarations("c\\;d:e"), [("c;d", "e", False)])
+        for broken in ("a:b\\", "a:\\\nb", "a:b/*", "a:(b", "a:b)", "a:'b"):
+            self.assertIsNone(_inline_declarations(broken), broken)
+        page, receipt = self._page_receipt(
+            "<html><head><title>T</title></head><body><main><p style='dis\\play:none'>Hidden words here.</p>"
+            + "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines()) + "</main></body></html>")
+        self.assertNotIn("Hidden words", page["content"])
+
     def test_native_hidden_elements(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
         for body in (f"<main><details><summary>FAQ</summary><summary>{article}</summary></details><p>Short.</p></main>",
@@ -685,6 +819,11 @@ class GenericReadTest(unittest.TestCase):
 
         cases = (
             "<p>" + "\x01" * (jina.MAX_INVALID_CODEPOINTS + 10) + "</p>",  # parse errors drained quadratically
+            "<p>" + "\U0001fffe" * 100_000 + "</p>",  # noncharacters outside the BMP count too
+            "".join(f"<i a{i}=1>" for i in range(1490)) + "</b>" * 20_000,  # end tags walk both stacks
+            "<table>" + "<b>x</b>" * 30_000,  # foster parenting copies the child list
+            "".join(f'<p style="color:red;{"margin:0 1px;" * 1500}">x</p>' for _ in range(250)),  # style volume
+            "<main>" + '<span style="color:#123456;padding:1px 2px;font-family:a,b">w </span>' * 30_000 + "</main>",
             "<div a=x\" " + " ".join(f"a{i}=1" for i in range(jina.MAX_TAG_ATTRIBUTES + 10)) + " \">x</div>",
             "<table>" + "x<b></b>" * 12000,  # foster-parented text copies
             "<html><head><title>" + "word " * 200_000 + "</title></head><body><main>"
@@ -694,7 +833,7 @@ class GenericReadTest(unittest.TestCase):
         for html in cases:
             started = time.perf_counter()
             page = jina._extract_html_page(html)
-            self.assertLess(time.perf_counter() - started, 15, html[:40])
+            self.assertLess(time.perf_counter() - started, 8, html[:40])
             if "title" in html[:30]:
                 self.assertLessEqual(len(page["title"]), 200)
             else:

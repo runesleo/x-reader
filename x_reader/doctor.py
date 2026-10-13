@@ -32,6 +32,7 @@ CORE_LIBRARIES = (
     ("dotenv", "python-dotenv"),
     ("loguru", "loguru"),
     ("idna", "idna"),
+    ("html5lib", "html5lib"),
 )
 
 # Where `npx skills add runesleo/x-reader --skill x-reader` puts the skill.
