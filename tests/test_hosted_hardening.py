@@ -635,9 +635,66 @@ class GenericReadTest(unittest.TestCase):
             _page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{opening}{article}</main></body></html>")
             self.assertEqual(receipt["status"], "PASS", opening)
 
+    def test_nested_and_combined_css_cannot_vouch_for_text(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+
+        def receipt(body):
+            return self._page_receipt(f"<html><head><title>T</title></head><body>{body}</body></html>")[1]
+
+        for body in (f"<main style='opacity:.5'><div style='opacity:.5'><div style='opacity:.3'>{article}</div></div></main>",
+                     f"<main style='font-size:40%'><div style='font-size:40%'><div style='font-size:40%'>{article}</div></div></main>",
+                     f"<main style='zoom:.3'><div style='zoom:.3'>{article}</div></main>",
+                     f"<main style='margin-left:-199em'>{article}</main>", f"<main style='text-indent:999999px'>{article}</main>",
+                     f"<main style='overflow:hidden;height:100px'>{article}</main>",
+                     f"<main style='display:table-column'>{article}</main>",
+                     f"<main style='color:var(--missing,transparent)'>{article}</main>",
+                     f"<main style='overflow:var(--missing,hidden);height:0'>{article}</main>",
+                     f"<main style='contain:paint;width:0;height:0'>{article}</main>",
+                     f"<main style='font-size-adjust:0'>{article}</main>",
+                     f"<main style='color:white;background:white'>{article}</main>",
+                     f"<main style='letter-spacing:-50px'>{article}</main>"):
+            self.assertNotEqual(receipt(body)["status"], "PASS", body[:70])
+        for body in (f"<main style='opacity:.9'><div style='font-size:90%'>{article}</div></main>",
+                     f"<main style='color:transparent;color:black'>{article}</main>",
+                     f"<main style='font-size:var(--wp--preset--font-size--large);margin-top:var(--gap)'>{article}</main>"):
+            self.assertEqual(receipt(body)["status"], "PASS", body[:70])
+
+    def test_native_hidden_elements(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        for body in (f"<main><details><summary>FAQ</summary><summary>{article}</summary></details><p>Short.</p></main>",
+                     f"<main><div popover>{article}</div><p>Short.</p></main>",
+                     f"<main><div popover=manual>{article}</div><p>Short.</p></main>"):
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{body}</body></html>")
+            self.assertNotIn("careful argument", page["content"], body[:60])
+            self.assertNotEqual(receipt["status"], "PASS", body[:60])
+
+    def test_meta_refresh_grammar(self):
+        from x_reader.fetchers.jina import _parse_refresh
+
+        self.assertEqual(_parse_refresh("0; url=https://elsewhere.example/"), "https://elsewhere.example/")
+        self.assertEqual(_parse_refresh("0;https://elsewhere.example/"), "https://elsewhere.example/")
+        self.assertEqual(_parse_refresh("3, URL='https://e.example/a'"), "https://e.example/a")
+        self.assertEqual(_parse_refresh("5"), "")
+        self.assertEqual(_parse_refresh("not-a-delay-url"), "")
+
+    def test_pages_over_the_parse_budget_are_unknown(self):
+        from x_reader.evidence import build_receipt
+        from x_reader.fetchers.jina import ParseBudgetExceeded
+
+        with patch("x_reader.fetchers.jina.fetch_html_page", side_effect=ParseBudgetExceeded("too much")), \
+                patch("x_reader.reader.fetch_via_jina") as jina:
+            content = self._read("https://e.com/a", hosted=True)
+        jina.assert_not_called()
+        receipt = build_receipt(content.to_dict() if hasattr(content, "to_dict") else {
+            "source_type": "manual", "content": content.content, "title": content.title, "url": content.url,
+            "extra": content.extra})
+        self.assertEqual(receipt["status"], "UNKNOWN")
+        self.assertEqual(receipt["reason_code"], "page_too_large_to_check")
+
     def test_templates_and_shadow_roots_cannot_vouch_for_text(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
         for body in (f"<p hidden><template></p><div>{article}</div></template>",
+                     f"<select><template></select><main>{article}</main></template>",
                      f"<div><template shadowrootmode=open><p>Shadow</p></template><main>{article}</main></div>",
                      f"<div><template shadowrootmode=banana><iframe src='https://p.example/v'></iframe></template><main>{article}</main></div>"):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body>{body}</body></html>")
@@ -682,8 +739,14 @@ class GenericReadTest(unittest.TestCase):
 
         deep = "<div>" * (jina.MAX_PARSE_DEPTH + 10)
         self.assertTrue(jina._extract_html_page(deep)["too_complex"])
-        many = "<br>" * (jina.MAX_PARSE_TAGS + 10)
+        many = "<br>" * (jina.MAX_PARSE_NODES + 10)
         self.assertTrue(jina._extract_html_page(many)["too_complex"])
+        # a tag with thousands of attributes is refused before tokenizing (its duplicate check is quadratic)
+        heavy = "<div " + " ".join(f"a{i}" for i in range(jina.MAX_TAG_ATTRIBUTES + 10)) + ">x</div>"
+        self.assertTrue(jina._extract_html_page(heavy)["too_complex"])
+        # clones of attribute-heavy formatting elements are counted
+        cloned = "<p>" + "<b " + " ".join(f"a{i}=1" for i in range(300)) + "></p>" + "<p>x</p>" * 1000
+        self.assertTrue(jina._extract_html_page(cloned)["too_complex"])
         # formatting elements a parser re-opens for every block would multiply the tree
         amplified = "<p>" + "".join(f"<b class=c{i}>" for i in range(60)) + "</p>" + "<p>x</p>" * 3000
         self.assertTrue(jina._extract_html_page(amplified)["too_complex"])
@@ -785,6 +848,10 @@ class YoutubeTest(unittest.TestCase):
                       "The uploader has not made this video available in your country - YouTube"):
             self.assertEqual(state(title), "unavailable", title)
         self.assertEqual(state("Sign in to YouTube - YouTube"), "unidentified")
+        for title in ("Age-restricted video - YouTube", "This video is age-restricted - YouTube"):
+            self.assertEqual(state(title), "unavailable", title)
+        self.assertEqual(state("YouTube", "This video isn\u2019t available anymore"), "unavailable")
+        self.assertEqual(state("Video unavailable errors explained - YouTube"), "ok")
         for title in ("Before you continue to YouTube", "Sign in - YouTube", "Consent", ""):
             self.assertEqual(state(title, "Before you continue"), "unidentified", title)
         self.assertEqual(state("Bevor Sie zu YouTube weitergehen", "[Accept](https://consent.youtube.com/s)"),

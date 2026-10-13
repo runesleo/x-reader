@@ -209,6 +209,7 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         self.assertEqual(twitter._extract_status_id("https://x.com/alice/status/123"), "123")
         self.assertEqual(twitter._extract_status_id("https://twitter.com/alice/status/123/photo/1?s=20"), "123")
         self.assertEqual(twitter._extract_status_id("https://x.com/i/web/status/123"), "123")
+        self.assertEqual(twitter._extract_status_id("https://twitter.com:443/alice/status/123"), "123")
         for url in ("https://x.com/alice/status/123garbage", "https://x.com/alice/status/123/extra/path",
                     "https://evilx.com/alice/status/123", "https://x.com/alice/status/"):
             self.assertIsNone(twitter._extract_status_id(url), url)

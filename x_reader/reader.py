@@ -178,7 +178,9 @@ class UniversalReader:
         checked hops. Locally Jina's cleaner text is shown when it matches the
         direct read both ways; otherwise the direct read itself is shown.
         """
-        from x_reader.fetchers.jina import BlockedDestination, CrossPlatformRedirect, fetch_html_page
+        from x_reader.fetchers.jina import (
+            BlockedDestination, CrossPlatformRedirect, ParseBudgetExceeded, fetch_html_page,
+        )
 
         def generic_only(hop: str) -> None:
             hop_platform = detect_platform(hop)
@@ -193,6 +195,13 @@ class UniversalReader:
             return await self._redispatch(hop.platform, hop.url, redirected)
         except BlockedDestination:
             raise
+        except ParseBudgetExceeded:
+            # Too much markup to check: no text can be vouched for, so none is shown.
+            return UnifiedContent(
+                source_type=SourceType.MANUAL, source_name=urlparse(url).netloc, title="", content="", url=url,
+                extra={"fetch_method": "direct_html_pinned", "redirects_verified": True, "body_verified": False,
+                       "embedded_media": None, "page_signals": ["scan_budget_exceeded"]},
+            )
         except Exception as exc:
             if hosted:
                 raise

@@ -36,8 +36,9 @@ def _normalize_x_url(url: str) -> str:
         url = f"https://{url}"
     parsed = urlparse(url)
     netloc = parsed.netloc.lower().replace("www.", "")
-    if netloc in ("twitter.com", "mobile.twitter.com", "mobile.x.com", "fxtwitter.com", "vxtwitter.com",
-                  "fixupx.com", "fixvx.com"):
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    if host in ("twitter.com", "mobile.twitter.com", "mobile.x.com", "fxtwitter.com", "vxtwitter.com",
+                "fixupx.com", "fixvx.com", "x.com") and parsed.port in (None, 443, 80):
         netloc = "x.com"
     return urlunparse((parsed.scheme or "https", netloc, parsed.path, "", "", ""))
 
@@ -568,9 +569,9 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                 "platform": "twitter",
                 # Only a rendered tweetText element counts as the post itself.
                 "fetch_method": "playwright" if is_post else "playwright_page",
-                # The text came from the article whose permalink is the requested status.
-                "post_id_verified": bool(requested_id) and data.get("bound") is True and _extract_status_id(
-                    _normalize_x_url(str(data.get("final_url") or ""))) == requested_id,
+                # A rendered page cannot prove which post's text it read (quoted cards
+                # carry their own permalinks), so rendered reads stay unverified.
+                "post_id_verified": False,
                 "media_status": "unknown",
                 "structure_status": "unknown",
                 "thread_marker": _looks_like_thread(content),

@@ -60,16 +60,19 @@ _UNAVAILABLE_VIDEO = (
 
 
 # Titles of pages that are not a video: YouTube's own, consent and sign-in pages.
-_NOT_A_VIDEO_TITLE = re.compile(
-    r"^(?:|youtube|consent|before you continue\b.*|sign in(?: to (?:youtube|continue)\b.*)?)$", re.IGNORECASE
-)
+_NOT_A_VIDEO_TITLE = re.compile(r"^(?:|youtube|consent|before you continue\b.*|sign in(?: to (?:youtube|continue)\b.*)?)$")
 _CONSENT_PAGE = ("before you continue to youtube", "consent.youtube.com")
-_PLAIN_QUOTES = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'})
+_PLAIN_QUOTES = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+                               "\u2010": "-", "\u2011": "-", "\u2013": "-", "\u2014": "-", "\u2212": "-"})
 # Titles YouTube gives pages for videos that cannot be watched.
+# YouTube's own titles for videos that cannot be watched (normalized, without " - YouTube").
 _UNAVAILABLE_TITLES = {
-    "video unavailable", "this video is unavailable", "this video isn't available anymore",
-    "this video is not available", "this video is private", "private video", "this video has been removed",
-    "sign in to confirm your age", "content not available",
+    "video unavailable", "this video is unavailable", "this video isn't available",
+    "this video isn't available anymore", "this video is not available", "this video is no longer available",
+    "this video is private", "private video", "this video has been removed",
+    "this video has been removed by the uploader", "sign in to confirm your age", "age-restricted video",
+    "this video is age-restricted", "content not available", "this video is not available in your country",
+    "the uploader has not made this video available in your country", "video not available",
 }
 
 
@@ -85,21 +88,27 @@ def _page_state(video_id: str, title: str, content: str, source_url: str = "") -
     """
     if not video_id or _extract_video_id(source_url) != video_id:
         return "unidentified"
-    if any(marker in content[:3000].lower() for marker in _CONSENT_PAGE):
+    head = _plain(content[:3000])
+    if any(marker in head for marker in _CONSENT_PAGE):
         return "unidentified"  # a consent interstitial, whatever its title or language
-    name = re.sub(r"[\s\-–—|]+", " ", title).strip()
-    name = re.sub(r"\s+youtube$", "", name, flags=re.IGNORECASE).strip()
-    name = re.sub(r"[\s.!?…:;,]+$", "", name)
-    plain = name.lower().translate(_PLAIN_QUOTES)
-    if plain in _UNAVAILABLE_TITLES or plain.startswith(_UNAVAILABLE_VIDEO):
+    name = re.sub(r"(?:^|\s*[-|]\s*)youtube$", "", _plain(title))
+    name = re.sub(r"[\s.!?…:;,|-]+$", "", name).strip()
+    if name in _UNAVAILABLE_TITLES:
         return "unavailable"
     if not _NOT_A_VIDEO_TITLE.search(name):
         return "ok"
-    if name.lower() in ("", "youtube"):
-        head = content[:3000].lower()
+    if name in ("", "youtube"):
         if any(marker in head for marker in _UNAVAILABLE_VIDEO):
             return "unavailable"
     return "unidentified"
+
+
+def _plain(text: str) -> str:
+    """Casefolded, NFKC, plain quotes and dashes, single spaces."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", text).casefold().translate(_PLAIN_QUOTES)
+    return " ".join(text.split())
 
 
 def _extract_video_id(url: str) -> str:

@@ -100,6 +100,8 @@ def visible_text(content: str) -> str:
     return "\n".join(" ".join(line.split()) for line in text.splitlines()).strip()
 
 
+# Counting by search keeps memory flat however long a line is.
+_TWENTY_CJK = re.compile(r"(?:[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af][^\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]*){20}")
 _SENTENCE_END = re.compile(r"[.!?;:](?:[\"')\]]*)(?:\s|$)|[。！？；]")
 
 
@@ -112,7 +114,7 @@ def prose_chars(text: str) -> int:
     """
     total = 0
     for line in text.splitlines():
-        long_enough = (len(line) >= 40 and len(line.split()) >= 6) or len(_CJK.findall(line)) >= 20
+        long_enough = (len(line) >= 40 and len(line.split(None, 5)) >= 6) or _TWENTY_CJK.search(line)
         if long_enough and _SENTENCE_END.search(line):
             total += len(line)
     return total
@@ -1136,6 +1138,13 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     if source == "manual" and content:
         return _classify_generic(payload, content, extra)
+    if source == "manual" and "scan_budget_exceeded" in (extra.get("page_signals") or []):
+        return {
+            "status": UNKNOWN,
+            "reason_code": "page_too_large_to_check",
+            "evidence": "the page has more markup than x-reader parses, so it cannot be checked",
+            "components": {"text_body": UNKNOWN},
+        }
 
     if content:
         return {
