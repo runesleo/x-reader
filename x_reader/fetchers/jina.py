@@ -2990,6 +2990,7 @@ def _extract_html_page(html: str) -> dict:
     # out, each piece that may or may not draw read both ways: kept (in
     # parts["shown"]) only for lines where it differs from "gate".
     shown_block: list = []  # the current block as laid out: (chunk, piece) pairs, line breaks included
+    shown_edge = {"tail": "", "gap": False}  # the end of the last block shown, and whether hidden text came since
     folded: list = []  # blocks that line breaks part, read with each break as a space
     shown_chars = 0
     lines = {"dropped": False, "pre_px": 0.0, "pre_text": False, "nowrap_px": 0.0, "run_px": 0.0,
@@ -3050,6 +3051,15 @@ def _extract_html_page(html: str) -> dict:
         items = shown_block[:]
         shown_block.clear()
         dropped, lines["dropped"] = lines["dropped"], False
+        # Blocks that hidden text alone parts sit next to each other: the end of one
+        # is also read run on into the start of the next (a notice split around it).
+        flat = " ".join("".join(" " if chunk == _LINE_BREAK else "" if chunk == _BOUNDARY else chunk
+                                for chunk, _piece in items).split())
+        shown_edge["gap"] = shown_edge["gap"] or dropped
+        if flat:
+            if shown_edge["gap"] and shown_edge["tail"] and spend(2 * _JOINED_EDGE_CHARS + 2):
+                folded.append(shown_edge["tail"] + " " + flat[:_JOINED_EDGE_CHARS])
+            shown_edge["tail"], shown_edge["gap"] = flat[-_JOINED_EDGE_CHARS:], False
         doubtful = any(piece is not None for _chunk, piece in items)
         breaks = sum(chunk == _LINE_BREAK for chunk, _piece in items)
         if not (dropped or doubtful or breaks):

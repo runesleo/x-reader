@@ -22,7 +22,7 @@ TIMEOUT_MS = 30_000
 # this read does not take: they are counted and set aside. What innerText
 # cannot vouch for is reported as risks: text too small or faint to read,
 # turned, clipped or off the page, shown in another order, text made by CSS,
-# and anything outside the article painted over it. The page's whole text is
+# and anything painted over it. The page's whole text is
 # returned too, for walls drawn outside the article. The page is left as it
 # was found (the temporary marking uses an attribute name no page can know).
 _WECHAT_ARTICLE_JS = r"""() => {
@@ -56,7 +56,7 @@ _WECHAT_ARTICLE_JS = r"""() => {
     };
     walk(container);
     const style = document.createElement('style');
-    style.textContent = `[${mark}] { display: none !important; }`;
+    style.textContent = `[${mark}] { display: none !important; } * { pointer-events: auto !important; }`;
     (document.head || document.documentElement).append(style);
     const risks = new Set();
     let text;
@@ -142,22 +142,45 @@ _WECHAT_ARTICLE_JS = r"""() => {
                 if (made && /["'][^"']*[^\s"'][^"']*["']/.test(made)) risks.add('generated_text');
             }
         }
-        // anything outside the article painted over it
-        const area = container.getBoundingClientRect();
-        const left = Math.max(area.left, 0), right = Math.min(area.right, window.innerWidth);
-        const top = Math.max(area.top, 0), bottom = Math.min(area.bottom, window.innerHeight);
-        const seen = (right - left) * (bottom - top);
-        for (const fx of [0.1, 0.5, 0.9]) {
-            for (const fy of [0.1, 0.5, 0.9]) {
-                if (seen <= 0) break;
-                let hit = document.elementFromPoint(left + (right - left) * fx, top + (bottom - top) * fy);
-                if (!hit || container.contains(hit) || hit.contains(container)) continue;
-                while (hit.parentElement && !hit.parentElement.contains(container)) hit = hit.parentElement;
-                const over = hit.getBoundingClientRect();  // (bars and badges over a corner of it do not count)
-                const shared = Math.max(0, Math.min(over.right, right) - Math.max(over.left, left))
-                    * Math.max(0, Math.min(over.bottom, bottom) - Math.max(over.top, top));
-                if (shared >= 0.3 * seen) risks.add('covered_text');
+        // anything painted over the text: at the middle of each piece of text, page by page
+        // (a band of each screen, so bars fixed to its edges do not count)
+        const startY = window.scrollY;
+        const spots = [];
+        const walker2 = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+        for (let node = walker2.nextNode(); node && spots.length < 5000; node = walker2.nextNode()) {
+            if (!node.data.trim() || placed.has(node) || !node.parentElement
+                    || node.parentElement.closest(`[${mark}]`)) continue;
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            for (const box of range.getClientRects()) {
+                if (box.width > 1 && box.height > 1) {
+                    spots.push([node.parentElement, box.left + box.width / 2, box.top + box.height / 2 + startY]);
+                }
             }
+        }
+        const band = window.innerHeight * 0.7;
+        const height = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
+        const last = Math.max(0, height - window.innerHeight);
+        try {
+            for (let y = 0; !risks.has('covered_text'); y = Math.min(y + band, last)) {
+                window.scrollTo(0, y);
+                const shift = window.scrollY;
+                // (the screen's edges count where the page cannot scroll on past them)
+                const low = shift <= 1 ? 0 : window.innerHeight * 0.15;
+                const high = shift >= last - 1 ? window.innerHeight : window.innerHeight * 0.85;
+                for (const [owner, x, spotY] of spots) {
+                    const at = spotY - shift;
+                    if (at < low || at > high || x < 0 || x > window.innerWidth) continue;
+                    const hit = document.elementFromPoint(x, at);
+                    if (hit && hit !== owner && !owner.contains(hit) && !hit.contains(owner)) {
+                        risks.add('covered_text');
+                        break;
+                    }
+                }
+                if (y >= last) break;
+            }
+        } finally {
+            window.scrollTo(0, startY);
         }
     } finally {
         style.remove();

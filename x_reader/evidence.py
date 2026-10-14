@@ -8,7 +8,7 @@ contract used by the Agent Skill and the Evidence Receipt web surface.
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 import html
 import json
 import hashlib
@@ -416,7 +416,7 @@ _ACCESS_NOTE = re.compile(
     r" (?:is )?required[)\]][.,;]?"
 )
 _HAS_SENTENCE_BREAK = re.compile(r"[.!?…:;。！？：；]")
-_RUN_ON_CHARS = 80  # a short line (up to twice this) is also read run on from this much of the text before it
+_RUN_ON_CHARS = 80  # each line is also read run on from this much of the text before it
 
 
 def _normalized_lines(title: str, text: str, markup: bool = True):
@@ -497,8 +497,8 @@ def gate_signals(title: str, text: str, cta_text: str | None = None, markup: boo
         if _MISSING_START.match(head):
             flags["missing" + suffix] = True
 
-    def check_line(line: str, opens: bool = True) -> None:
-        # opens: the line starts where the text starts a line (not a cut-off window)
+    def check_line(line: str, opens: bool = True, closes: bool = True) -> None:
+        # opens / closes: the line starts / ends where the text does (not a cut-off window)
         head = _LEAD.sub("", line, count=1)
         if opens:
             check_start(head, bool(_ACCESS_NOTE.fullmatch(line)), strong=True)
@@ -509,13 +509,15 @@ def gate_signals(title: str, text: str, cta_text: str | None = None, markup: boo
         flags["auth_hint"] |= bool(_AUTH_ANY.search(line))
         flags["challenge_hint"] |= bool(_CHALLENGE_ANY.search(line))
         flags["missing_hint"] |= bool(_MISSING_ANY.search(line))
-        if _PAYWALL_ANY.search(line) or teasers and ((opens and _TEASER_START.match(head)) or _TEASER_END.search(line)):
+        if _PAYWALL_ANY.search(line) or teasers and (
+                (opens and _TEASER_START.match(head)) or (closes and _TEASER_END.search(line))):
             signals.add("paywall")
 
     try:
-        # A short line is also read run on from the text before it (its last
-        # _RUN_ON_CHARS, by a space and, beside other scripts, by nothing): a
-        # notice split over lines or paragraphs reads as one to a person.
+        # Each line is also read run on from the text before it (the last
+        # _RUN_ON_CHARS of it, into the line's first 2 * _RUN_ON_CHARS; by a
+        # space and, beside other scripts, by nothing): a notice split over
+        # lines or paragraphs reads as one to a person.
         for line in _normalized_lines(title, "", markup):  # the title, read as a line of its own
             check_line(line)
             consent_found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
@@ -523,11 +525,12 @@ def gate_signals(title: str, text: str, cta_text: str | None = None, markup: boo
         for line in _normalized_lines("", text, markup):
             check_line(line)
             consent_found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
-            if before is not None and len(line) <= 2 * _RUN_ON_CHARS:
+            if before is not None:
                 spaced, tight, opens = before
-                check_line(spaced + " " + line, opens)
-                if not (tight[-1:].isascii() and line[:1].isascii()):
-                    check_line(tight + line, opens)
+                head, closes = line[:2 * _RUN_ON_CHARS], len(line) <= 2 * _RUN_ON_CHARS
+                check_line(spaced + " " + head, opens, closes)
+                if not (tight[-1:].isascii() and head[:1].isascii()):
+                    check_line(tight + head, opens, closes)
             spaced = line if before is None else before[0] + " " + line
             tight = line if before is None else before[1] + line
             before = (spaced[-_RUN_ON_CHARS:], tight[-_RUN_ON_CHARS:], len(spaced) <= _RUN_ON_CHARS)
@@ -814,7 +817,22 @@ def _article_walls(source: str, title: str, content: str, prose: int, around=())
     return None
 
 
-def _classify_article(source: str, title: str, content: str, extra: dict) -> dict[str, Any]:
+def _wechat_article(url: str):
+    """Which WeChat article a URL names: ("short", id) for /s/<id>, ("long",
+    (__biz, mid, idx, sn)) for /s?...; None for anything else."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or (parsed.hostname or "").lower() != "mp.weixin.qq.com":
+        return None
+    if parsed.path.startswith("/s/") and parsed.path.strip("/") != "s":
+        return ("short", parsed.path[3:].strip("/"))
+    if parsed.path in ("/s", "/s/"):
+        query = parse_qs(parsed.query)
+        key = tuple((query.get(name) or [""])[0] for name in ("__biz", "mid", "idx", "sn"))
+        return ("long", key) if key[0] and key[1] else None
+    return None
+
+
+def _classify_article(source: str, title: str, content: str, extra: dict, url: str = "") -> dict[str, Any]:
     """WeChat article: unavailable notices fail; walls count as on generic pages;
     image-carried, container-less reads and reads that could not count the
     article's players and frames do not pass."""
@@ -846,13 +864,13 @@ def _classify_article(source: str, title: str, content: str, extra: dict) -> dic
     if walls is not None and walls["status"] == FAIL:
         return walls  # a login, challenge or missing-page shell, wherever the browser ended
     browser = extra.get("extraction") == "container"
-    final = urlparse(str(extra.get("final_url") or ""))
-    if browser and not (final.scheme == "https" and (final.hostname or "").lower() == "mp.weixin.qq.com"
-                        and final.path.startswith("/s")):
+    final = str(extra.get("final_url") or "")
+    if browser and not (final.startswith("https://") and _wechat_article(final) is not None
+                        and _wechat_article(final) == _wechat_article(url)):
         return {
             "status": UNKNOWN,
             "reason_code": "article_identity_unverified",
-            "evidence": f"the browser did not end on a {source} article page, so the text cannot be tied to it",
+            "evidence": f"the browser did not end on the requested {source} article, so the text cannot be tied to it",
             "components": {"text_body": UNKNOWN},
         }
     if walls is not None:
@@ -1329,7 +1347,7 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     if source == "wechat" and content:
         return _classify_article(
-            "wechat", str(payload.get("title") or ""), content, extra,
+            "wechat", str(payload.get("title") or ""), content, extra, str(payload.get("url") or ""),
         )
 
     if source == "manual" and content:

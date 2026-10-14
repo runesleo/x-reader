@@ -1123,6 +1123,9 @@ class GenericReadTest(unittest.TestCase):
                        # a notice split over paragraphs or list items reads as one
                        "<p>Subscribe to</p><p>continue.</p>", "<p>Subscribe</p><p>to</p><p>continue.</p>",
                        "<p>Please sign</p><p>in to continue.</p>", "<p>登录后</p><p>查看全文</p>",
+                       "<p>Subscribe to</p><p hidden>xx</p><p>continue.</p>",
+                       "<p>Subscribe to</p><p>continue reading this and all the other stories we publish every day for "
+                       "our readers around the world, from every desk and every bureau we have.</p>",
                        # spacing a math value works out to; a border whose style draws nothing
                        "<div>Sub<span style='margin-right:calc(10px - 5px)'>scribe</span>to continue.</div>",
                        "<div>Sub<span style='border-left-width:10px;border-left-style:none'>scribe</span>"
@@ -1522,6 +1525,11 @@ class WeChatArticleReadTest(unittest.TestCase):
              ["covered_text"]),
             (prose * 3 + "</div><div style='position:fixed;left:0;right:0;bottom:0;height:40px'>Like</div><div>", None,
              0, []),
+            # covers inside the article, or over a part of it further down the page
+            ("<div style='position:relative'>" + prose * 2 + "<div style='position:absolute;inset:0;background:#fff'>"
+             "</div></div>" + prose, None, 0, ["covered_text"]),
+            (prose * 40 + "</div><div style='position:absolute;left:0;right:0;top:1500px;height:400px;background:#fff;"
+             "pointer-events:none'></div><div>", None, 0, ["covered_text"]),
         )
         with sync_playwright() as playwright:
             try:
