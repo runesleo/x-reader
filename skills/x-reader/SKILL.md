@@ -27,14 +27,16 @@ The default bootstrap is pinned to the immutable first-success commit. Do not re
 XR_CLI_COMMIT="20d4c2eded74d0c15844611e31265767f63d55af"
 XR_VENV="${XDG_CACHE_HOME:-$HOME/.cache}/x-reader/venv-${XR_CLI_COMMIT:0:12}"
 if [ ! -x "$XR_VENV/bin/x-reader" ] || ! "$XR_VENV/bin/x-reader" doctor --json >/dev/null 2>&1; then
-  python3 -m venv "$XR_VENV"
-  "$XR_VENV/bin/pip" install --disable-pip-version-check \
+  if [ ! -x "$XR_VENV/bin/python" ] || ! "$XR_VENV/bin/python" -m pip --version >/dev/null 2>&1; then
+    python3 -m venv --clear "$XR_VENV"
+  fi
+  "$XR_VENV/bin/python" -m pip install --disable-pip-version-check --force-reinstall \
     "x-reader @ git+https://github.com/runesleo/x-reader.git@$XR_CLI_COMMIT"
 fi
 XR_BIN="${XR_BIN:-$XR_VENV/bin/x-reader}"
 ```
 
-The cache venv is named after the pinned commit. Rerunning this block after an interrupted install first checks whether the cached CLI can complete its read-only core self-check; a broken cache triggers a pinned reinstall. This check **does not fetch a real URL**. Verify a first source read below before claiming first-use success.
+The cache venv is named after the pinned commit. Recovery reuses the cached Python interpreter when its pip module actually works. If Python or pip cannot run, only this pinned x-reader cache venv is cleared and rebuilt; user projects and system Python are not changed. Rerunning this block after an interrupted install first checks whether the cached CLI can complete its read-only core self-check; a failed core self-check triggers force-reinstallation of the same pinned x-reader revision and its dependencies, including when a damaged dependency is still marked installed by pip. This check **does not fetch a real URL**. Verify a first source read below before claiming first-use success.
 
 If `x-reader` is already on PATH, use `XR_BIN=x-reader`. Each shell command may start a fresh shell: keep the full path from `echo "$XR_BIN"` and reuse it.
 
