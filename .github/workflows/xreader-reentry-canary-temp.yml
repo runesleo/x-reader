@@ -39,9 +39,25 @@ jobs:
             echo "Unexpected success during simulated GitHub transport outage" >&2
             exit 1
           fi
+          if ! grep -Eq '127[.]0[.]0[.]1|Connection refused|Failed to connect|Could not connect' "$RUNNER_TEMP/expected-failure.log"; then
+            echo "Failure was not the intended Git transport error" >&2
+            exit 1
+          fi
           echo "CANARY_GITHUB_TRANSPORT_FAILURE_REJECTED=1"
           bash "$RUNNER_TEMP/xreader-reentry.sh" >"$RUNNER_TEMP/first-recovery.log"
           echo "CANARY_GITHUB_PINNED_RETRY_OK=1"
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os, subprocess
+          cache = Path(os.environ["XDG_CACHE_HOME"]) / "x-reader"
+          venv = next(cache.glob("venv-*"))
+          p = subprocess.run([str(venv / "bin/x-reader"), "https://example.com", "--json"],
+              capture_output=True, text=True, timeout=30)
+          assert p.returncode == 0, p.stderr[-1200:]
+          data = json.loads(p.stdout)
+          assert len(data.get("content") or "") >= 100, data
+          print("CANARY_LINUX_REAL_FIRST_READ_OK=1")
+          PY
           python3 - <<'PY'
           from pathlib import Path
           import os, subprocess
