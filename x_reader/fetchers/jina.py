@@ -2473,7 +2473,7 @@ MAX_PARSE_WORK = 6_000_000  # the largest real pages checked need about a quarte
 MAX_TEXT_COPY = 64_000_000
 MAX_CONTENT_CHARS = 1_000_000
 MAX_PARSE_ERRORS = 20_000  # real pages checked: under 200
-MAX_DOUBTFUL_PIECES = 6  # pieces of text that may or may not draw, read every way, on one line
+MAX_DOUBTFUL_PIECES = 6  # pieces of text that may or may not draw, read every way, in one block
 MAX_WALL_TEXT_CHARS = 1_000_000  # page text (hidden included) the wall scan reads; past it, too large to check
 MAX_STYLE_TOTAL = 1_000_000  # inline style characters on a page (real pages checked: under 100k)
 MAX_STYLE_DECLARATIONS = 50_000
@@ -2777,7 +2777,7 @@ def _extract_html_page(html: str) -> dict:
     gate_chars = 0
     region_chars = {"body": 0, "main": 0, "article": 0}
     overflowing: set = set()  # wall text or regions past their budgets
-    annotations: list = []  # ruby annotations: per <rt>/<rtc>, its (chunk, piece) pairs (see line_variants)
+    annotations: list = []  # ruby annotations: per <rt>/<rtc>, its (chunk, piece) pairs (see piece_choices)
     # The text as laid out, hidden text and the breaks of hidden elements left
     # out, each piece that may or may not draw read both ways: kept (in
     # parts["shown"]) only for lines where it differs from "gate".
