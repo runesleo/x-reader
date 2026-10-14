@@ -26,7 +26,7 @@ The default bootstrap is pinned to the immutable first-success commit. Do not re
 ```bash
 XR_CLI_COMMIT="20d4c2eded74d0c15844611e31265767f63d55af"
 XR_VENV="${XDG_CACHE_HOME:-$HOME/.cache}/x-reader/venv-${XR_CLI_COMMIT:0:12}"
-if [ ! -x "$XR_VENV/bin/x-reader" ]; then
+if [ ! -x "$XR_VENV/bin/x-reader" ] || ! "$XR_VENV/bin/x-reader" doctor --json >/dev/null 2>&1; then
   python3 -m venv "$XR_VENV"
   "$XR_VENV/bin/pip" install --disable-pip-version-check \
     "x-reader @ git+https://github.com/runesleo/x-reader.git@$XR_CLI_COMMIT"
@@ -34,7 +34,7 @@ fi
 XR_BIN="${XR_BIN:-$XR_VENV/bin/x-reader}"
 ```
 
-The cache venv is named after the pinned commit, so a new pin installs a fresh environment instead of silently reusing an older CLI.
+The cache venv is named after the pinned commit. Rerunning this block after an interrupted install first checks whether the cached CLI can complete its read-only core self-check; a broken cache triggers a pinned reinstall. This check **does not fetch a real URL**. Verify a first source read below before claiming first-use success.
 
 If `x-reader` is already on PATH, use `XR_BIN=x-reader`. Each shell command may start a fresh shell: keep the full path from `echo "$XR_BIN"` and reuse it.
 
