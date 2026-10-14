@@ -480,6 +480,11 @@ class EvidenceContractTest(unittest.TestCase):
                                 embedded_media=0)["status"], "UNKNOWN")
         self.assertEqual(wechat("Subscribe to continue reading.\n" + long_body, extraction="container",
                                 embedded_media=0)["status"], "PARTIAL")
+        # a notice wrapped onto two lines of one paragraph, joined by a space or not
+        self.assertEqual(wechat("Please sign\nin to continue.\n\n" + long_body, extraction="container",
+                                embedded_media=0)["status"], "UNKNOWN")
+        self.assertNotEqual(wechat("登录后\n查看全文\n\n" + long_body, extraction="container",
+                                   embedded_media=0)["status"], "PASS")
 
     def test_wechat_notice_titles_fail_and_notice_lines_beside_text_are_unknown(self):
         def wechat(title, content):

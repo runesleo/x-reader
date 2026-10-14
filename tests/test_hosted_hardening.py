@@ -835,6 +835,7 @@ class GenericReadTest(unittest.TestCase):
             "<div style='opacity:.99;height:0'><div style='height:3000px;background:#fff'></div></div>",
             "<div style='display:grid'><div style='grid-area:1/1;background:#fff'></div></div>",
             "<div style='margin-top:-300px;height:300px;background:#fff'></div>",
+            "<div style='margin-top:-300px;margin-top:calc(1px +);height:300px;background:white'>x</div>",
             "<img src='w.png' style='margin-top:-300px' width='900' height='300'>",
             "<div style='height:99999px'></div>", "<div style='height:calc(100px * 1000)'></div>",
             "<div style='margin-top:1e6px'></div>", "<img src='x' vspace='99999'>",
@@ -873,6 +874,27 @@ class GenericReadTest(unittest.TestCase):
                 page, receipt = self._page_receipt(html)
                 self.assertNotEqual(receipt["status"], "PASS", cover)
                 self.assertIn("visibility_unknown", page["page_signals"], cover)
+
+    def test_lines_that_cannot_wrap_count_every_width_they_take(self):
+        article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
+        prose = ARTICLE.replace(chr(10), " ")
+        # (300 letters run 880px past a 2000px screen: under a tenth of the text, until the box's width counts)
+        for line in ("<span style='display:inline-block;min-width:1900px'></span>" + "x" * 300,
+                     "<span style='display:inline-block;width:calc(1900px)'></span>" + "x" * 300):
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body><main>{article}"
+                                               f"<p style='white-space:nowrap'>{line}</p></main></body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", line)  # used widths push the text past the screen
+        page, receipt = self._page_receipt("<html><head><title>T</title></head><body><main><p style='white-space:"
+                                           f"nowrap;letter-spacing:16px'>{prose}</p></main></body></html>")
+        self.assertNotEqual(receipt["status"], "PASS")  # spacing between letters widens the line
+        page, receipt = self._page_receipt("<html><head><title>T</title></head><body><main>"
+                                           + "<div style='width:150%;width:calc(1px +)'>" * 2 + article
+                                           + "</div>" * 2 + "</main></body></html>")
+        self.assertNotEqual(receipt["status"], "PASS")  # a width browsers drop leaves the one before it
+        page, receipt = self._page_receipt(
+            f"<html><head><title>T</title></head><body><main>{article}<p style='white-space:nowrap'>"
+            f"<span style='display:inline-block;width:300px;white-space:normal'>{prose}</span></p></main></body></html>")
+        self.assertEqual(receipt["status"], "PASS")  # a fixed-width box laid out whole wraps its own lines
 
     def test_a_cover_inside_a_clipping_box_only_unsettles_that_box(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
@@ -955,6 +977,9 @@ class GenericReadTest(unittest.TestCase):
                        f"</p><p>A <span style='display:inline-block'>badge</span> beside <bdi>Ann</bdi>.</p></main>"),
             ("<body>", f"<main><p>E = <math><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></math></p><svg width='200' "
                        f"height='40'><text x='0' y='20'>Figure 1</text></svg>{article}</main>"),
+            ("<body>", f"<svg><text style='display:none'>Jan</text><text style='display:none'>Feb</text></svg>"
+                       f"<main style='overflow:hidden;overflow-x:visible;overflow-y:visible;"
+                       f"border-left:4000px solid white;border-left:0;margin:calc(10px + 2px)'>{article}</main>"),
             ("<body>", f"<main style='white-space:pre-wrap;width:800px;max-width:100%;column-count:2;"
                        f"border:1px solid rgba(0,0,0,.1);border-left:3px solid #c00'>{article}"
                        f"<h2 style='text-wrap:balance'>A title</h2></main>"),
@@ -1073,7 +1098,18 @@ class GenericReadTest(unittest.TestCase):
                        "<div><span style='visibility:hidden'>x<span style='visibility:visible'>Sub</span>x</span>"
                        "scribe to continue.</div>",
                        # a notice a line break wraps onto two lines
-                       "<div>Subscribe to<br>continue.</div>",
+                       "<div>Subscribe to<br>continue.</div>", "<div>Subscribe<br>to<br>continue.</div>",
+                       "<pre>Subscribe\nto\ncontinue.</pre>",
+                       # a piece that may not draw beside a line break; space set at one edge only
+                       "<div>Sub<span style='font-size:0'>x</span>scribe to<br>continue.</div>",
+                       "<div>Sub<span style='margin-right:10px'>scribe</span>to continue.</div>",
+                       # text made by CSS: replaced content, hyphenation strings, custom ellipses
+                       "<div style=\"content:'Subscribe to continue.'\">x</div>",
+                       "<p style=\"hyphenate-character:'Subscribe to continue.';width:3em\">Super&shy;califragilistic</p>",
+                       "<p style=\"white-space:nowrap;overflow:hidden;text-overflow:'Subscribe to continue.'\">"
+                       + ARTICLE.replace(chr(10), " ") + "</p>",
+                       "<div>" + ARTICLE.replace(chr(10), " ") * 3 + " Subscribe to<br>continue. "
+                       + ARTICLE.replace(chr(10), " ") * 3 + "</div>",
                        # isolate controls; controls laid out whole whatever their display; SVG overrides and glyph
                        # positions; prose in SVG that is not returned as page text
                        "<p dir='rtl'>\u2066continue.\u2069 \u2066Subscribe to\u2069</p>",
@@ -1084,11 +1120,20 @@ class GenericReadTest(unittest.TestCase):
                        ".eunitnoc ot ebircsbuS</text></svg>",
                        "<svg width='800' height='600'><foreignObject width='800' height='600'><div>"
                        + ARTICLE.replace(chr(10), ' ') * 2 + "</div></foreignObject></svg>",
+                       # HTML inside foreignObject is laid out as HTML; visibility a hidden SVG shows again
+                       "<svg><foreignObject><bdo dir='rtl'>.eunitnoc ot ebircsbuS</bdo></foreignObject></svg>",
+                       "<svg style='visibility:hidden'><text style='visibility:visible;unicode-bidi:bidi-override;"
+                       "direction:rtl'>.eunitnoc ot ebircsbuS</text></svg>",
                        # table parts display:contents hands on; a caption side browsers drop
                        "<div><span style='display:table-row'>continue.</span><span style='display:contents'>"
                        "<span style='display:table-caption'>Subscribe to</span></span></div>",
                        "<table><tbody><tr><td>continue.</td></tr></tbody>"
                        "<caption style='caption-side:top;caption-side:bogus'>Subscribe to</caption></table>",
+                       # a caption side display:contents hands on; caption text shown again inside a hidden caption
+                       "<div><span style='display:contents;caption-side:bottom'><span style='display:table-caption'>"
+                       "continue.</span></span><span style='display:table-row'>Subscribe to</span></div>",
+                       "<table><tr><td>continue.</td></tr><caption style='visibility:hidden'>"
+                       "<span style='visibility:visible'>Subscribe to</span></caption></table>",
                        # characters that draw nothing, look-alike letters, accents
                        "<div>Sub\u034fscribe to continue.</div>", "<div>Sub\u180escribe to continue.</div>",
                        "<div>Sub\ufe0fscribe to continue.</div>", "<div>Sub\U000e0041scribe to continue.</div>",
@@ -1170,6 +1215,8 @@ class GenericReadTest(unittest.TestCase):
         self.assertNotEqual(receipt["status"], "PASS")
         page, receipt = read("\u0645\u0631\u062d\u0628\u0627 Wikipedia\n" + ARTICLE * 2, "text/plain")
         self.assertEqual(receipt["status"], "PASS")
+        page, receipt = read("\u202bcontinue. Subscribe to\u202c\n" + ARTICLE * 2, "text/plain")
+        self.assertNotEqual(receipt["status"], "PASS")  # explicit direction controls reorder plain text too
 
     def test_button_labels_count_for_walls_not_as_page_text(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
@@ -1229,6 +1276,8 @@ class GenericReadTest(unittest.TestCase):
             "<html><head><title>" + "word " * 200_000 + "</title></head><body><main>"
             + "<p>x</p>" * 10 + "</main></body></html>",
             "<main>" + ("<p>" + "a" * 999 + "</p>") * 1100 + "</main>",  # text over the content cap
+            # every way a long annotation's doubtful pieces may draw is charged before it is built
+            "<main><ruby>字<rt>" + "读" * 250_000 + "<span style='font-size:1px'>x</span>" * 6 + "</rt></ruby></main>",
         )
         for html in cases:
             started = time.perf_counter()
@@ -1238,6 +1287,9 @@ class GenericReadTest(unittest.TestCase):
                 self.assertLessEqual(len(page["title"]), 200)
             else:
                 self.assertTrue(page["too_complex"], html[:40])
+        deep = "<main>" + "<span style='display:contents'>" * 1000 + ARTICLE + "</span>" * 1000 + "</main>"
+        page = jina._extract_html_page(deep)  # box trees are unwound without recursion, to a set depth
+        self.assertTrue(page["layout_risk"] or page["too_complex"])
 
     def test_details_groups_keep_one_open(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
@@ -1376,6 +1428,46 @@ class GenericReadTest(unittest.TestCase):
             + "<aside><iframe src='https://player.example.org/v/1'></iframe></aside></body></html>")
         self.assertEqual(page["embedded_media"], 1)
         self.assertEqual(receipt["status"], "PARTIAL")
+
+
+class WeChatArticleReadTest(unittest.TestCase):
+    """The WeChat article read runs in a browser: skipped where Playwright or its Chromium is missing."""
+
+    def test_article_text_is_read_as_the_page_shows_it(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        from x_reader.fetchers.browser import _WECHAT_ARTICLE_JS
+
+        cases = (
+            # inline runs join and <br> parts lines; hidden text is left out, text shown again is kept
+            ("<p>Please sign <span>in to continue.</span></p><p>Body text.</p>",
+             "Please sign in to continue.\n\nBody text.", 0),
+            ("<p>Subscribe to<br>continue.</p>", "Subscribe to\ncontinue.", 0),
+            ("<p style='display:none'>gone</p><p style='visibility:hidden'>gone <span style='visibility:visible'>"
+             "back</span></p>", "back", 0),
+            # players, frames and WeChat's media components are counted, not read
+            ("<p>Text</p><mpvoice>voice</mpvoice><iframe></iframe><mp-common-profile>Profile</mp-common-profile>"
+             "<section><video><iframe></iframe></video></section><p>more</p>", "Text\n\nmore", 4),
+            # images stay where they are
+            ("<p>before<img data-src='https://e.test/a.png'>after</p>",
+             "before\n\n![image](https://e.test/a.png)\n\nafter", 0),
+        )
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # Chromium not downloaded
+                self.skipTest(f"chromium is not available: {error}")
+            try:
+                page = browser.new_page()
+                for body, content, embeds in cases:
+                    page.set_content(f"<html><head></head><body><div id='js_content'>{body}</div></body></html>")
+                    self.assertEqual(page.evaluate(_WECHAT_ARTICLE_JS), {"content": content, "embeds": embeds}, body)
+                    self.assertEqual(page.evaluate("() => document.querySelectorAll('[data-xr-skip], style').length"),
+                                     0, body)  # the page is left as it was found
+            finally:
+                browser.close()
 
 
 class TelegramRoutingTest(unittest.TestCase):

@@ -15,6 +15,58 @@ from pathlib import Path
 SESSION_DIR = Path.home() / ".x-reader" / "sessions"
 TIMEOUT_MS = 30_000
 
+# A WeChat article as the page shows it: the browser's own innerText of the
+# article (inline runs join, blocks and <br> part lines, hidden text is left
+# out), with images kept in place. Players, frames, plugins and WeChat's own
+# media components carry content this read does not take: they are counted
+# and set aside. The page is left as it was found.
+_WECHAT_ARTICLE_JS = r"""() => {
+    const container = document.querySelector('#js_content') || document.querySelector('.rich_media_content');
+    if (!container) return null; // Safe fallback to generic if not found
+
+    const embedded = /^(IFRAME|VIDEO|AUDIO|OBJECT|EMBED|CANVAS|MPVOICE|MPVIDEO|QQMUSIC|MP-.+)$/;
+    const images = [];
+    const markers = [];
+    const skipped = [];
+    let embeds = 0;
+    const walk = (element) => {
+        for (const child of element.children) {
+            if (embedded.test(child.tagName)) {
+                embeds += 1;
+                child.setAttribute('data-xr-skip', '');
+                skipped.push(child);
+            } else if (child.tagName === 'IMG') {
+                const src = child.getAttribute('data-src') || child.getAttribute('src');
+                if (src) {
+                    const marker = document.createTextNode(`\u0001${images.length}\u0001`);
+                    images.push(src);
+                    child.after(marker);
+                    markers.push(marker);
+                }
+            } else {
+                walk(child);
+            }
+        }
+    };
+    walk(container);
+    const style = document.createElement('style');
+    style.textContent = '[data-xr-skip] { display: none !important; }';
+    (document.head || document.documentElement).append(style);
+    let text;
+    try {
+        text = container.innerText;
+    } finally {
+        style.remove();
+        skipped.forEach(element => element.removeAttribute('data-xr-skip'));
+        markers.forEach(marker => marker.remove());
+    }
+    const content = text
+        .replace(/\u0001(\d+)\u0001/g, (_match, index) => `\n\n![image](${images[index]})\n\n`)
+        .split('\n').map(line => line.replace(/[ \t ]+/g, ' ').trim()).join('\n')
+        .replace(/\n{3,}/g, '\n\n').trim();
+    return {content: content, embeds: embeds};
+}"""
+
 
 async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
     """
@@ -110,31 +162,7 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
                 await page.wait_for_timeout(2000)
 
                 title = await page.title()
-                walked = await page.evaluate("""() => {
-                    const container = document.querySelector('#js_content') || document.querySelector('.rich_media_content');
-                    if (!container) return null; // Safe fallback to generic if not found
-
-                    // Players, frames, plugins and WeChat's own media components carry
-                    // content the walk does not read: they are counted, not dropped.
-                    const embedded = /^(IFRAME|VIDEO|AUDIO|OBJECT|EMBED|CANVAS|MPVOICE|MPVIDEO|QQMUSIC|MP-.+)$/;
-                    let elements = [];
-                    let embeds = 0;
-                    const walk = (node) => {
-                        if (node.tagName === 'IMG') {
-                           let src = node.getAttribute('data-src') || node.getAttribute('src');
-                           if (src) elements.push(`![image](${src})`);
-                        } else if (node.nodeType === 1 && embedded.test(node.tagName)) {
-                           embeds += 1;
-                        } else if (node.nodeType === 3) { // Text node
-                           let text = node.textContent.trim();
-                           if (text) elements.push(text);
-                        } else if (node.nodeType === 1) { // Element node
-                           for (let child of node.childNodes) walk(child);
-                        }
-                    };
-                    walk(container);
-                    return {content: elements.join('\\n\\n'), embeds: embeds};
-                }""")
+                walked = await page.evaluate(_WECHAT_ARTICLE_JS)
                 content = walked["content"] if walked else None
 
                 # Generic fallback if WeChat specific extraction yields nothing;

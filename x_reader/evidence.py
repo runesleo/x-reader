@@ -738,7 +738,10 @@ _VERIFIED_X_METHODS = {"oembed", "fxtwitter", "playwright"}
 def _article_walls(source: str, title: str, content: str, prose: int):
     """The receipt for login, bot-check, missing-page, consent and paywall
     wording in an article read (as on generic pages), or None."""
+    # (also with the lines inside a paragraph joined, by a space or not: a notice wrapped onto two lines)
     signals = set(gate_signals(title, content))
+    for joiner in (" ", ""):
+        signals |= set(gate_signals(title, re.sub(r"(?<!\n)\n(?!\n)", joiner, content)))
     thin = prose < 600
     if "auth_title" in signals or ("auth_required" in signals and thin):
         return {"status": FAIL, "reason_code": "auth_required",
