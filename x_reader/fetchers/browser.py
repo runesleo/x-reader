@@ -138,8 +138,8 @@ _WECHAT_ARTICLE_JS = r"""() => {
         for (const element of [container, ...container.querySelectorAll('*')]) {
             if (element.closest(`[${mark}]`)) continue;
             for (const pseudo of ['::before', '::after', '::marker']) {
-                const made = getComputedStyle(element, pseudo).content;
-                if (made && /["'][^"']*[^\s"'][^"']*["']/.test(made)) risks.add('generated_text');
+                const made = getComputedStyle(element, pseudo).content;  // (strings, attr(), counters...)
+                if (made && !['none', 'normal', '""', "''"].includes(made.trim())) risks.add('generated_text');
             }
         }
         // anything painted over the text: at the middle of each piece of text, page by page

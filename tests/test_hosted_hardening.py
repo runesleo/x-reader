@@ -1551,6 +1551,10 @@ class WeChatArticleReadTest(unittest.TestCase):
                 page.set_content("<html><head><style>.g::before{content:'Subscribe to continue.'}</style></head>"
                                  "<body><div id='js_content'><p class='g'>x</p></div></body></html>")
                 self.assertEqual(page.evaluate(_WECHAT_ARTICLE_JS)["risks"], ["generated_text"])  # text made by CSS
+                page.set_content("<html><head><style>.g::after{content:attr(data-note)}</style></head><body>"
+                                 "<div id='js_content'><p class='g' data-note='Sign in to continue.'>x</p></div>"
+                                 "</body></html>")
+                self.assertEqual(page.evaluate(_WECHAT_ARTICLE_JS)["risks"], ["generated_text"])
             finally:
                 browser.close()
 
