@@ -746,6 +746,27 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", "<main>" + "<div style='margin-left:-16px'>" * 320 + article + "</div>" * 320 + "</main>"),
             ("<body>", "<main>" + "<div style='font-size:400%'>" * 6 + article + "</div>" * 6 + "</main>"),
             ("<body style='height:0'>", f"<main style='height:inherit'>{article}</main><div>{article}</div>"),
+            ("<body>", "<div style='font-size:64px'>" + "<div style='padding-left:15em'>" * 2
+             + f"<main style='padding-left:15em;font-size:16px'>{article}</main>" + "</div>" * 3),
+            ("<body>", f"<main style='border:4000px solid white'>{article}</main>"),
+            ("<body>", "<main>" + "<div style='padding-inline:7px 0'>" * 300 + article + "</div>" * 300 + "</main>"),
+            ("<body>", "<main>" + "<div style='margin-inline:-7px 0'>" * 300 + article + "</div>" * 300 + "</main>"),
+            ("<body>", "<main>" + "<div style='position:relative;left:8px'>" * 300 + article + "</div>" * 300 + "</main>"),
+            ("<body>", "<main>" + "<div style='position:relative;top:5px'>" * 2 + article + "</div>" * 2 + "</main>"),
+            ("<body>", f"<div style='margin-left:900px'><main style='margin-left:inherit'>{article}</main></div>"),
+            ("<body>", "<main>" + "<div style='width:150%'>" * 3 + article + "</div>" * 3 + "</main>"),
+            ("<body>", f"<main><div style='padding-left:1000px'><div style='padding-left:900px;text-indent:900px'>"
+                       f"{article}</div></div></main>"),
+            ("<body>", "<main><p>" + "<span style='vertical-align:1.5em'>" * 4 + article + "</span>" * 4 + "</p></main>"),
+            # lines that do not wrap: preserved spaces, nowrap, max-content
+            ("<body>", f"<main style='white-space:pre'>{' ' * 1000}{ARTICLE * 2}</main>"),
+            ("<body>", f"<main><pre>{' ' * 1000}{ARTICLE * 2}</pre></main>"),
+            ("<body>", f"<main style='white-space:nowrap'><p>{ARTICLE.replace(chr(10), ' ') * 2}</p></main>"),
+            ("<body>", f"<main style='width:max-content'><p>{ARTICLE.replace(chr(10), ' ') * 2}</p></main>"),
+            # revert goes back to the browser's value, which for these is the parent's
+            ("<body>", f"<div style='font-size:1px'><main style='font-size:revert'>{article}</main></div>"),
+            ("<body>", f"<div style='color:white'><main style='color:revert'>{article}</main></div>"),
+            ("<body>", f"<div style='line-height:0'><main style='line-height:revert'>{article}</main></div>"),
             # text a set height cannot hold spills over what follows
             ("<body>", f"<main><div style='height:0'><div>{article}</div></div><div>{article}</div></main>"),
             ("<body>", f"<main style='display:grid;height:0;grid-auto-rows:minmax(0,1fr)'>{article}</main>"),
@@ -861,6 +882,23 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main><div style='position:relative;overflow:hidden;height:200px'><img src='x.jpg' "
                        f"style='position:absolute;inset:0;width:100%;height:100%'></div>{article}</main>"),
             ("<body>", f"<main style='font-family:\\5FAE\\8F6F\\96C5\\9ED1'>{article}</main>"),
+            # winners decide: geometry reset later, the webkit name of a property, tables in order
+            ("<body>", f"<main style='margin-left:1000px;margin-left:1000px;margin-left:1000px;margin-left:0'>"
+                       f"{article}</main>"),
+            ("<body>", "<main>" + "<div style='margin-left:-16px;margin-left:0'>" * 320 + article + "</div>" * 320
+             + "</main>"),
+            ("<body>", f"<div style='display:flex;-webkit-flex-direction:row-reverse;flex-direction:row'><span>a</span>"
+                       f"<span>b</span></div><main>{article}</main>"),
+            ("<body>", f"<main><table><caption>Table 1</caption><thead><tr><td>Name</td></tr></thead><tbody><tr>"
+                       f"<td>Row</td></tr></tbody><tfoot><tr><td>Sum</td></tr></tfoot></table>{article}</main>"),
+            ("<body>", f"<main><pre>    def f():\n        return 1\n</pre>{article}</main>"),
+            ("<body>", f"<main><img src='a.png' align='right' alt=''>{article}</main>"),
+            ("<body>", f"<main><p dir='rtl'>\u0645\u0631\u062d\u0628\u0627 Wikipedia \u0662\u0660\u0662\u0664</p>{article}</main>"),
+            ("<body>", f"<main style='font-size:revert;color:revert;line-height:revert'>{article}</main>"),
+            ("<body>", f"<main style='border:1px solid #ddd;padding:1em'>{article}</main>"),
+            ("<body>", f"<main>{article}<p>E=mc<sup>2</sup>, H<sub>2</sub>O, caf\u00e9 and "
+                       f"<span style='white-space:nowrap'>2024-01-01</span></p></main>"),
+            ("<body>", "<main>" + "<div style='width:100%'>" * 5 + article + "</div>" * 5 + "</main>"),
         ):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head>{head}{body}</body></html>")
             self.assertEqual(receipt["status"], "PASS", (head, body[:80]))
@@ -902,10 +940,66 @@ class GenericReadTest(unittest.TestCase):
                        "<div dir='rtl'><div dir='ltr' style='display:flex;direction:inherit'><span>continue.</span>"
                        "<span>Subscribe to </span></div></div>",
                        "<div dir='rtl'><div style='float:inline-start'>continue.</div>"
-                       "<div style='float:inline-start'>Subscribe to </div></div>"):
+                       "<div style='float:inline-start'>Subscribe to </div></div>",
+                       # hidden text and the breaks of hidden elements take no place in the layout
+                       "<div>Sub<span hidden>x</span>scribe to continue.</div>",
+                       "<div>Sub<span style='display:none'>x</span>scribe to continue.</div>",
+                       "<div>Sub<div hidden></div>scribe to continue.</div>",
+                       "<div>Please sign <br hidden>in to continue.</div>",
+                       # a value browsers drop leaves the one before it; displays as their one-word names
+                       "<div style='display:flex;flex-direction:row-reverse;flex-direction:bogus'><span>continue.</span>"
+                       "<span>Subscribe to </span></div>",
+                       "<div style='float:right;float:bogus'>continue.</div><div style='float:right'>Subscribe to </div>",
+                       "<div style='display:block flex;direction:rtl'><span>continue.</span><span>Subscribe to </span></div>",
+                       # the old flexbox, wrapping in reverse, column flow
+                       "<div style='display:-webkit-box;-webkit-box-direction:reverse'><span>continue.</span>"
+                       "<span>Subscribe to </span></div>",
+                       "<div style='display:-webkit-box'><span style='-webkit-box-ordinal-group:2'>continue.</span>"
+                       "<span>Subscribe to </span></div>",
+                       "<div style='display:flex;flex-wrap:wrap-reverse'><div style='width:100%'>continue.</div>"
+                       "<div style='width:100%'>Subscribe to</div></div>",
+                       "<div style='display:grid;grid-auto-flow:column;grid-template-rows:auto auto'><span>to</span>"
+                       "<span>continue.</span><span>Subscribe</span><span>x</span></div>",
+                       # hidden by default, shown by an inline display
+                       "<datalist style='display:block'><option>Subscribe to continue.</option></datalist>",
+                       "<ruby>x<rp style='display:inline'>Subscribe to continue.</rp><rt>y</rt></ruby>",
+                       # tables show captions, headers and footers where they belong, right-to-left cells from the right
+                       "<table><tfoot><tr><td>continue.</td></tr></tfoot><tbody><tr><td>Subscribe to</td></tr></tbody></table>",
+                       "<table><tbody><tr><td>continue.</td></tr></tbody><thead><tr><td>Subscribe to</td></tr></thead></table>",
+                       "<table><tr><td>continue.</td></tr><caption>Subscribe to</caption></table>",
+                       "<table dir='rtl'><tr><td>continue.</td><td>Subscribe to</td></tr></table>",
+                       "<table dir='rtl'><tr dir='ltr'><td>continue.</td><td>Subscribe to</td></tr></table>",
+                       "<div dir='rtl'><div style='display:table-cell'>continue.</div>"
+                       "<div style='display:table-cell'>Subscribe to</div></div>",
+                       "<table align='right'><tr><td>continue.</td></tr></table>"
+                       "<table align='right'><tr><td>Subscribe to</td></tr></table>",
+                       # right-to-left text shows left-to-right words around right-to-left letters reordered
+                       "<p dir='rtl'>continue.\u200fSubscribe to</p>", "<p dir='rtl'>continue. \u0628 Subscribe to</p>",
+                       "<p style='direction:rtl'>continue.\u200fSubscribe to</p>",
+                       "<p>\u2067continue.\u200fSubscribe to\u2069</p>", "<p><bdi>\u200fcontinue.\u200fSubscribe to</bdi></p>",
+                       "<p dir='auto'>\u200fcontinue.\u200fSubscribe to</p>",
+                       "<p dir='rtl'><span style='direction:ltr'>continue \u200fSubscribe to</span></p>",
+                       "<p style='unicode-bidi:plaintext'>\u200fcontinue.\u200fSubscribe to</p>",
+                       # characters that draw nothing, look-alike letters, accents
+                       "<div>Sub\u034fscribe to continue.</div>", "<div>Sub\u180escribe to continue.</div>",
+                       "<div>Sub\ufe0fscribe to continue.</div>", "<div>Sub\U000e0041scribe to continue.</div>",
+                       "<div>Sub\u2062scribe to continue.</div>", "<div>Sub\u200escribe to continue.</div>",
+                       "<div>Sub\u3164scribe to continue.</div>", "<div>Subscribe\u3164to\u3164continue.</div>",
+                       "<div>Subscribe\u2800to\u2800continue.</div>", "<div>\u0405ubscribe to continue.</div>",
+                       "<div>Subs\u0441ribe t\u043e \u0441\u043entinue.</div>", "<div>Subscribe t\u03bf continue.</div>",
+                       "<div>Subscri\u0301be to continue.</div>"):
             page, receipt = self._page_receipt(
                 f"<html><head><title>T</title></head><body>{notice}<main>{article}</main></body></html>")
             self.assertNotEqual(receipt["status"], "PASS", notice)
+        for shown in ("<script type='text/plain' style='display:block'>Subscribe to continue.</script>",
+                      "<style style='display:block'>Subscribe to continue.</style>"):
+            page, receipt = self._page_receipt(f"<html><head style='display:block'><title>T</title>{shown}</head>"
+                                               f"<body><main>{article}</main></body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", shown)  # a shown <head> shows what its children show
+        page, receipt = self._page_receipt(
+            "<html><head><title>T</title></head><body style='caption-side:bottom'><table><caption>continue.</caption>"
+            f"<tr><td>Subscribe to</td></tr></table><main>{article}</main></body></html>")
+        self.assertNotEqual(receipt["status"], "PASS")  # an inherited caption side puts the caption below
         page, receipt = self._page_receipt("<html><head><title>T</title></head><body><main><p>Hello <b>world</b>!</p>"
                                            f"{article}</main></body></html>")
         self.assertTrue(page["content"].startswith("Hello world!"))  # nothing added between inline runs
@@ -959,6 +1053,11 @@ class GenericReadTest(unittest.TestCase):
         self.assertEqual(receipt["status"], "PARTIAL")  # the teaser line is a line of words, not a tag
         page, receipt = read("<html><body><main>" + ARTICLE * 2 + "</main><p>unclosed", "application/xhtml+xml")
         self.assertEqual(receipt["reason_code"], "page_structure_unverified")
+        # some browsers give each plain-text line the direction of its first letter
+        page, receipt = read("\u200fcontinue.\u200fSubscribe to\n" + ARTICLE * 2, "text/plain")
+        self.assertNotEqual(receipt["status"], "PASS")
+        page, receipt = read("\u0645\u0631\u062d\u0628\u0627 Wikipedia\n" + ARTICLE * 2, "text/plain")
+        self.assertEqual(receipt["status"], "PASS")
 
     def test_button_labels_count_for_walls_not_as_page_text(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())

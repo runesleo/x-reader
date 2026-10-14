@@ -16,6 +16,8 @@ import math
 import re
 import unicodedata
 
+from x_reader.lookalikes import LOOKALIKES
+
 
 PASS = "PASS"
 PARTIAL = "PARTIAL"
@@ -183,15 +185,39 @@ def _host_in(url: str, domains: tuple) -> bool:
 _QUOTES = str.maketrans({
     "\u2018": "'", "\u2019": "'", "\u02bc": "'", "\u2032": "'", "\u201c": '"', "\u201d": '"', "\u00a0": " ",
     "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2015": "-", "\u2212": "-",
-    "\u00ad": None, "\u200b": None, "\u200c": None, "\u200d": None, "\u2060": None, "\ufeff": None,
+    "\u2800": " ",  # the blank braille cell draws as a space
 })
+# Code points that draw nothing (Unicode's default-ignorable ones): a word they
+# split reads as one word. Hangul fillers may also draw as a blank, by font
+# (see _normalized_lines).
+_IGNORABLE = re.compile(
+    "[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164"
+    "\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0000-\U000e0fff]"
+)
+_BLANK_FILLERS = re.compile("[\u115f\u1160\u3164\uffa0]")
+_MARKS = None  # combining marks (Mn, Me), filled in on first use
+
+
+def _drop_marks(text: str) -> str:
+    global _MARKS
+    if _MARKS is None:
+        _MARKS = dict.fromkeys(code for code in range(0x300, 0x20000) if unicodedata.category(chr(code)) in ("Mn", "Me"))
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFD", text).translate(_MARKS))
 
 
 def _normalize(text: str) -> str:
-    """The form wall rules match on: NFKC, casefolded, plain quotes and dashes,
-    soft hyphens and zero-width characters removed, hyphenated words split
-    ("Sign-in" -> "sign in"), whitespace collapsed."""
-    text = unicodedata.normalize("NFKC", text).casefold().translate(_QUOTES)
+    """The form wall rules match on: NFKC; letters that look like ASCII ones
+    read as those (see lookalikes); casefolded; plain quotes and dashes; code
+    points that draw nothing removed; accents and other combining marks
+    dropped; hyphenated words split ("Sign-in" -> "sign in"); whitespace
+    collapsed."""
+    if not text.isascii():
+        text = unicodedata.normalize("NFKC", text).translate(LOOKALIKES)
+    text = text.casefold()
+    if not text.isascii():
+        text = _IGNORABLE.sub("", text.translate(_QUOTES))
+        if not text.isascii():
+            text = _drop_marks(text).translate(LOOKALIKES)
     return " ".join(re.sub(r"(?<=\w)-(?=\w)", " ", text).split())
 
 
@@ -409,6 +435,13 @@ def _normalized_lines(title: str, text: str, markup: bool = True):
             raise ValueError("page too large to check")
         if line:
             yield line
+        if _BLANK_FILLERS.search(raw):  # read both ways: drawn as nothing, and as a blank
+            spaced = _normalize(_BLANK_FILLERS.sub(" ", raw))
+            budget -= len(spaced)
+            if budget < 0:
+                raise ValueError("page too large to check")
+            if spaced and spaced != line:
+                yield spaced
 
 
 def _consent_level(strong: set, weak: set) -> bool:

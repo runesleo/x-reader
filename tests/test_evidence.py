@@ -267,6 +267,18 @@ class EvidenceContractTest(unittest.TestCase):
                                    "extra": dict(VERIFIED, page_signals=["scan_budget_exceeded"])})
         self.assertEqual(result["reason_code"], "page_too_large_to_check")
 
+    def test_wall_wording_is_matched_as_people_read_it(self):
+        from x_reader import evidence
+
+        for notice in ("\u0405ubscribe to continue reading.", "Subscri\u0301be to continue reading.",
+                       "Sub\u034fscribe to continue reading.", "Sub\U000e0041scribe to continue reading.",
+                       "Sub\u3164scribe to continue reading.", "Subscribe\u3164to\u3164continue reading.",
+                       "Subscribe\u2800to\u2800continue reading.", "\U0001d412ubscribe to continue reading."):
+            self.assertIn("paywall", evidence.gate_signals("T", notice), notice)
+        self.assertEqual(evidence._normalize("Caf\u00e9 \u0421\u043e\u0440\u0443"), "cafe copy")
+        self.assertEqual(evidence._normalize("\u767b\u5f55\u540e\u9605\u8bfb\u5168\u6587"),
+                         "\u767b\u5f55\u540e\u9605\u8bfb\u5168\u6587")  # Chinese stays as written
+
     def test_known_missing_page_wording_never_passes(self):
         for opening in ("Page not found (Error 404)", "Page not found [ERROR 404]", "Page not found (HTTP 404)",
                         "Page not found, try searching our site.", "[ERROR 404]", "(HTTP 404)", "404 - Page not found",

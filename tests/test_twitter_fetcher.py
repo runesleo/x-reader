@@ -275,6 +275,14 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         one_option = twitter._structure_from_fxtwitter(dict(post, poll={"choices": [{"label": "Yes"}]}))
         self.assertEqual(one_option["poll_status"], "unknown")
         self.assertEqual(twitter._extract_author("https://x.com/i/status/123"), "")
+        # one optional "@" before a replied-to handle; post ids in URLs are ASCII with no leading zero
+        reply = {"id": "1", "text": "main", "author": {"screen_name": "a"}, "replying_to_status": "5"}
+        self.assertEqual(twitter._structure_from_fxtwitter(dict(reply, replying_to="@@a"))["structure_status"],
+                         "unknown")
+        self.assertTrue(twitter._structure_from_fxtwitter(dict(reply, replying_to="@a"))["self_reply"])
+        for url in ("https://x.com/a/status/01", "https://x.com/a/status/\u0661\u0662\u0663",
+                    "https://x.com/a/status/1\u0662"):
+            self.assertIsNone(twitter._extract_status_id(url), url)
         base = {"id": "1", "text": "main", "author": {"screen_name": "a"}}
         for replied, status in ((" ", "5"), ("a", []), ("a", False), ("a", ""), ("a", None)):
             reply = twitter._structure_from_fxtwitter(dict(base, replying_to=replied, replying_to_status=status))

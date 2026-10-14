@@ -45,11 +45,12 @@ def _normalize_x_url(url: str) -> str:
 
 # The whole path must be a status or article path (optionally a media,
 # analytics or engagement view of it); "/status/123garbage" is not post 123.
+# Post ids are ASCII numbers with no leading zero ("/status/01" names no post).
 _STATUS_PATH = re.compile(
-    r"/(?:(?P<user>[A-Za-z0-9_]{1,15})/status(?:es)?|i/web/status|i/status)/(?P<id>\d{1,20})"
-    r"(?:/(?:photo|video)/\d{1,2}|/analytics|/quotes|/retweets(?:/with_comments)?|/likes|/history)?/?"
+    r"/(?:(?P<user>[A-Za-z0-9_]{1,15})/status(?:es)?|i/web/status|i/status)/(?P<id>[1-9][0-9]{0,19})"
+    r"(?:/(?:photo|video)/[0-9]{1,2}|/analytics|/quotes|/retweets(?:/with_comments)?|/likes|/history)?/?"
 )
-_ARTICLE_PATH = re.compile(r"/(?:i|[A-Za-z0-9_]{1,15})/article/(?P<id>\d{1,20})/?")
+_ARTICLE_PATH = re.compile(r"/(?:i|[A-Za-z0-9_]{1,15})/article/(?P<id>[1-9][0-9]{0,19})/?")
 
 
 def _x_path(url: str, pattern: re.Pattern):
@@ -178,7 +179,7 @@ def _fetch_via_fxtwitter(url: str, timeout: float = 10) -> Dict[str, Any]:
     data = resp.json()
 
     tweet = data.get("tweet") if isinstance(data, dict) else None
-    if not isinstance(tweet, dict) or str(tweet.get("id") or "") != status_id:
+    if not isinstance(tweet, dict) or not _post_id(tweet.get("id")) or str(tweet.get("id")) != status_id:
         raise ValueError("FxTwitter answered with a different post")
     text = tweet.get("text", "")
     if not isinstance(text, str):
@@ -257,9 +258,10 @@ def _reply_state(tweet: dict) -> str:
     if not _post_id(status):
         return "unknown"  # a reply names the post it answers by its numeric id
     screen = _handle(tweet)
-    if not (screen and isinstance(replied, str) and _HANDLE.fullmatch(replied.strip().lstrip("@"))):
+    replied = replied.strip().removeprefix("@") if isinstance(replied, str) else ""  # (one "@" at most)
+    if not (screen and _HANDLE.fullmatch(replied)):
         return "unknown"
-    return "self" if screen.lower() == replied.strip().lstrip("@").lower() else "other"
+    return "self" if screen.lower() == replied.lower() else "other"
 
 
 _HANDLE = re.compile(r"[A-Za-z0-9_]{1,15}")
