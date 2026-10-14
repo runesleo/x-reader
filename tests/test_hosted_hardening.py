@@ -209,6 +209,21 @@ class SafeFetchTest(unittest.TestCase):
         self.assertEqual(items[0]["content_kind"], "full")
         self.assertEqual(items[1]["content_kind"], "summary")
         self.assertEqual(items[2]["content_kind"], "summary")
+        # players and audio or video enclosures in an item are unread layers, whatever its text
+        xml = self._feed(
+            b"<item><title>D</title><link>https://e.com/d</link><content:encoded><![CDATA[<p>" + body
+            + b"</p><audio src='https://e.com/a.mp3'></audio>]]></content:encoded></item>",
+            b"<item><title>E</title><link>https://e.com/e</link><enclosure url='https://e.com/e.mp3' length='1' "
+            b"type='audio/mpeg'/><content:encoded><![CDATA[<p>" + body + b"</p>]]></content:encoded></item>",
+        )
+        with patch.object(rss, "fetch_public_bytes", return_value=(xml, "application/rss+xml", "https://e.com/feed")):
+            items = asyncio.run(rss.fetch_rss("https://e.com/feed"))
+        from x_reader.evidence import build_receipt
+        from x_reader.schema import from_rss
+        for item in items:
+            self.assertEqual(item["embedded_media"], 1, item["title"])
+            receipt = build_receipt(from_rss(item).to_dict())
+            self.assertEqual(receipt["reason_code"], "embedded_media_unread", item["title"])
 
     def test_full_feed_bodies_are_checked_against_the_article(self):
         from x_reader.fetchers import rss
@@ -225,6 +240,9 @@ class SafeFetchTest(unittest.TestCase):
                 return asyncio.run(rss.verify_full_body(dict(item)))
 
         self.assertEqual(verdict(), "full")
+        noted = story_page + "\n<note " + " ".join(
+            f"Later section {i} adds detail that the feed never carried, sentence after sentence." for i in range(80)) + ">"
+        self.assertEqual(verdict(content=noted), "summary")  # the page's text is words, never markup
         longer = story_page + "\n" + "\n".join(
             f"Later section {i} adds detail that the feed never carried, sentence after sentence." for i in range(80))
         self.assertEqual(verdict(content=longer), "summary")
@@ -876,6 +894,14 @@ class GenericReadTest(unittest.TestCase):
                 self.assertNotEqual(receipt["status"], "PASS", cover)
                 self.assertIn("visibility_unknown", page["page_signals"], cover)
 
+    def test_the_page_read_directly_is_words_when_set_against_jina(self):
+        from x_reader.reader import _same_text
+
+        shown = ARTICLE * 2
+        note = "<note " + " ".join(f"Section {i} of the page adds its own detail in full." for i in range(60)) + ">"
+        self.assertTrue(_same_text(shown, shown))
+        self.assertFalse(_same_text(shown, shown + "\n" + note))  # most of the page is not in the Jina text
+
     def test_lines_that_cannot_wrap_count_every_width_they_take(self):
         article = "".join(f"<p>{line}</p>" for line in (ARTICLE * 2).splitlines())
         prose = ARTICLE.replace(chr(10), " ")
@@ -893,7 +919,10 @@ class GenericReadTest(unittest.TestCase):
                                            + "</div>" * 2 + "</main></body></html>")
         self.assertNotEqual(receipt["status"], "PASS")  # a width browsers drop leaves the one before it
         for main in ("width:calc((1000 + 1000) * 3px)", "width:150%;width:calc(var())",
-                     "border-left:4000px solid white;border-left:0 solid dotted white"):
+                     "border-left:4000px solid white;border-left:0 solid dotted white",
+                     # a variable's fallback is a value it may take
+                     "margin-left:calc(var(--missing, 6000px))", "padding-left:calc(var(--missing, 6000px))",
+                     "width:calc(var(--missing, 6000px))", "border-left:calc(var(--missing, 6000px)) solid white"):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body><main style='{main}'>"
                                                f"{article}</main></body></html>")
             self.assertNotEqual(receipt["status"], "PASS", main)  # values worked out, dropped ones left out
@@ -908,6 +937,10 @@ class GenericReadTest(unittest.TestCase):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body><main>{spaced}</main>"
                                                "</body></html>")
             self.assertNotEqual(receipt["status"], "PASS", spaced[:40])  # spacing after every word separator
+        words = "".join(f"<span>word{i} </span>" for i in range(120))
+        page, receipt = self._page_receipt("<html><head><title>T</title></head><body><main><p style='white-space:"
+                                           f"nowrap;font-size:8px'>{words}</p></main></body></html>")
+        self.assertNotEqual(receipt["status"], "PASS")  # spaces collapse across text nodes, and still take room
         page, receipt = self._page_receipt(
             f"<html><head><title>T</title></head><body><main>{article}<p style='white-space:nowrap'>"
             f"<span style='display:inline-block;width:300px;white-space:normal'>{prose}</span></p></main></body></html>")
@@ -994,6 +1027,7 @@ class GenericReadTest(unittest.TestCase):
                        f"</p><p>A <span style='display:inline-block'>badge</span> beside <bdi>Ann</bdi>.</p></main>"),
             ("<body>", f"<main><p>E = <math><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></math></p><svg width='200' "
                        f"height='40'><text x='0' y='20'>Figure 1</text></svg>{article}</main>"),
+            ("<body>", f"<main style='display:none;display:block'>{article}</main>"),
             ("<body>", f"<main style='overflow:hidden;overflow:initial;content:\"x\";content:normal;"
                        f"text-overflow:\"x\";text-overflow:ellipsis;border-left:3px solid #c00;"
                        f"margin:calc(2 * 6px) calc(10% - 50px)'>{article}</main>"),
@@ -1169,6 +1203,17 @@ class GenericReadTest(unittest.TestCase):
                        "</caption></table>",
                        "<svg style='display:none;display:initial'><text style='unicode-bidi:bidi-override;"
                        "direction:rtl'>.eunitnoc ot ebircsbuS</text></svg>",
+                       "<svg><text x='0' y='30'>continue.</text><text x='0' y='10' style='display:none;"
+                       "display:initial'>Subscribe to</text></svg>",
+                       "<svg><text x='0' y='30'>continue.</text><text x='0' y='10' display='none' "
+                       "style='display:inline'>Subscribe to</text></svg>",
+                       "<svg><text x='0' y='30'>continue.</text><text x='0' y='10' style='display:none;all:initial'>"
+                       "Subscribe to</text></svg>",
+                       "<div style=\"content:'Subscribe to continue.';content:clip\">x</div>",
+                       "<p style=\"hyphenate-character:'Subscribe to continue.';hyphenate-character:none;width:3em\">"
+                       "Super&shy;califragilistic</p>",
+                       "<p style=\"white-space:nowrap;overflow:hidden;text-overflow:'Subscribe to continue.';"
+                       "text-overflow:auto\">" + ARTICLE.replace(chr(10), " ") + "</p>",
                        # characters that draw nothing, look-alike letters, accents
                        "<div>Sub\u034fscribe to continue.</div>", "<div>Sub\u180escribe to continue.</div>",
                        "<div>Sub\ufe0fscribe to continue.</div>", "<div>Sub\U000e0041scribe to continue.</div>",
@@ -1192,6 +1237,10 @@ class GenericReadTest(unittest.TestCase):
         page, receipt = self._page_receipt(
             f"<html><head><title>\u202eni ngiS\u202c</title></head><body><main>{article}</main></body></html>")
         self.assertNotEqual(receipt["status"], "PASS")  # a reversed title can read as a wall title
+        for after in ("<p>Read the full</p><p>article here</p>", "<p>We value</p><p>your privacy</p>"):
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body><main>{article}{after}</main>"
+                                               "</body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", after)  # split wording after the body, consent too
         page, receipt = self._page_receipt("<html><head><title>T</title></head><body><main><p>Hello <b>world</b>!</p>"
                                            f"{article}</main></body></html>")
         self.assertTrue(page["content"].startswith("Hello world!"))  # nothing added between inline runs
@@ -1322,6 +1371,10 @@ class GenericReadTest(unittest.TestCase):
                 self.assertLessEqual(len(page["title"]), 200)
             else:
                 self.assertTrue(page["too_complex"], html[:40])
+        started = time.perf_counter()
+        page = jina._extract_html_page("<main>" + "<div dir=auto>" * 1400 + "1 " * 300_000 + "</div>" * 1400 + "</main>")
+        self.assertLess(time.perf_counter() - started, 8)  # letters dir=auto looks through are budgeted
+        self.assertTrue(page["layout_risk"] or page["too_complex"])
         deep = "<main>" + "<span style='display:contents'>" * 1000 + ARTICLE + "</span>" * 1000 + "</main>"
         page = jina._extract_html_page(deep)  # box trees are unwound without recursion, to a set depth
         self.assertTrue(page["layout_risk"] or page["too_complex"])
@@ -1475,11 +1528,13 @@ class WeChatArticleReadTest(unittest.TestCase):
         from x_reader.schema import from_wechat
 
         body = "读者会在这篇长文里看到一个仔细的论证。每一段都补充了背景、证据和清楚的结论。" * 30
-        for final, page_text, status in (("https://evil.example/final", body, "UNKNOWN"),
-                                         ("https://mp.weixin.qq.com/s/abc", "登录后查看全文\n" + body, "UNKNOWN"),
-                                         ("https://mp.weixin.qq.com/s/abc", body + "\n阅读原文", "PASS")):
+        for final, page_text, complete, status in (
+                ("https://evil.example/final", body, True, "UNKNOWN"),
+                ("https://mp.weixin.qq.com/s/abc", "登录后查看全文\n" + body, True, "UNKNOWN"),
+                ("https://mp.weixin.qq.com/s/abc", body + "\n阅读原文", False, "UNKNOWN"),  # page text cut short
+                ("https://mp.weixin.qq.com/s/abc", body + "\n阅读原文", True, "PASS")):
             read = {"title": "文章", "content": body, "url": final, "author": "", "extraction": "container",
-                    "embedded_media": 0, "visual_risks": [], "page_text": page_text}
+                    "embedded_media": 0, "visual_risks": [], "page_text": page_text, "page_text_complete": complete}
             with patch("x_reader.fetchers.jina.fetch_via_jina", side_effect=RuntimeError("blocked")), \
                     patch("x_reader.fetchers.browser.fetch_via_browser", AsyncMock(return_value=read)):
                 article = asyncio.run(fetch_wechat("https://mp.weixin.qq.com/s/abc"))
@@ -1530,6 +1585,14 @@ class WeChatArticleReadTest(unittest.TestCase):
              "</div></div>" + prose, None, 0, ["covered_text"]),
             (prose * 40 + "</div><div style='position:absolute;left:0;right:0;top:1500px;height:400px;background:#fff;"
              "pointer-events:none'></div><div>", None, 0, ["covered_text"]),
+            # text its own box clips, letters filled white, filters, paint hit testing does not see
+            ("<p style='height:0;overflow:hidden'>x</p>" + prose, None, 0, ["clipped_text"]),
+            ("<p style='-webkit-text-fill-color:#fff'>x</p>" + prose, None, 0, ["faint_text"]),
+            ("<p style='filter:blur(9px)'>x</p>" + prose, None, 0, ["filtered_text"]),
+            (prose * 3 + "</div><div style='position:fixed;top:0;left:0;width:1px;height:1px;outline:3000px solid #fff'>"
+             "</div><div>", None, 0, ["covered_text"]),
+            (prose * 3 + "</div><div style='position:fixed;top:0;left:0;width:1px;height:1px;box-shadow:0 0 0 3000px #fff'>"
+             "</div><div>", None, 0, ["covered_text"]),
         )
         with sync_playwright() as playwright:
             try:
@@ -1555,6 +1618,15 @@ class WeChatArticleReadTest(unittest.TestCase):
                                  "<div id='js_content'><p class='g' data-note='Sign in to continue.'>x</p></div>"
                                  "</body></html>")
                 self.assertEqual(page.evaluate(_WECHAT_ARTICLE_JS)["risks"], ["generated_text"])
+                page.set_content("<html><head><style>.c{position:relative}.c::after{content:'';position:absolute;inset:0;"
+                                 "background:#fff}</style></head><body><div id='js_content'><div class='c'>"
+                                 + prose * 3 + "</div></div></body></html>")
+                self.assertEqual(page.evaluate(_WECHAT_ARTICLE_JS)["risks"], ["covered_text"])  # a pseudo-element box
+                page.set_content("<html><head></head><body><div id='js_content' hidden>" + prose + "</div></body></html>")
+                self.assertIn("unrendered_article", page.evaluate(_WECHAT_ARTICLE_JS)["risks"])  # innerText of hidden
+                page.set_content("<html><head></head><body><div id='js_content'>" + prose + "</div>"
+                                 + "<p>Links here</p>" * 30000 + "</body></html>")
+                self.assertFalse(page.evaluate(_WECHAT_ARTICLE_JS)["page_text_complete"])  # the page text cut short
             finally:
                 browser.close()
 

@@ -445,6 +445,28 @@ def _normalized_lines(title: str, text: str, markup: bool = True):
                 yield spaced
 
 
+def _run_on(recent: list, line: str):
+    """A line read run on from the lines before it (recent): (parts, openings,
+    closes): up to two short earlier lines, or the last _RUN_ON_CHARS of a
+    longer one, then the line's first 2 * _RUN_ON_CHARS (closes: all of it);
+    openings, the part lists that start where an earlier line starts."""
+    head, closes = line[:2 * _RUN_ON_CHARS], len(line) <= 2 * _RUN_ON_CHARS
+    parts, openings = [head], []
+    for earlier in reversed(recent):
+        whole = len(earlier) <= 2 * _RUN_ON_CHARS
+        parts.insert(0, earlier if whole else earlier[-_RUN_ON_CHARS:])
+        if whole:
+            openings.append(list(parts))
+        if not whole or len(earlier) > _RUN_ON_CHARS:
+            break  # a longer line ends the run
+    return parts, openings, closes
+
+
+def _joiners(parts: list) -> tuple:
+    """Run-on lines join by a space, and beside other scripts also by nothing."""
+    return (" ",) if all(part.isascii() for part in parts) else (" ", "")
+
+
 def _consent_level(strong: set, weak: set) -> bool:
     return bool(strong) or len(strong) + len(weak) >= 3
 
@@ -453,8 +475,14 @@ def consent_signals(title: str, text: str, markup: bool = True) -> list:
     """Cookie/consent wording in the text: "consent", plus "consent_title" for a consent-style title."""
     found = set()
     try:
+        recent: list = []  # (wording split over lines reads as one, as in gate_signals)
         for line in _normalized_lines(title, text, markup):
             found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
+            parts, _openings, _closes = _run_on(recent, line)
+            if len(parts) > 1:
+                for joiner in _joiners(parts):
+                    found.update(match.group(0) for match in _CONSENT_ANY.finditer(joiner.join(parts)))
+            recent = (recent + [line])[-2:]
     except ValueError:
         return ["scan_budget_exceeded"]
     if not _consent_level(found & set(_CONSENT_PHRASES), found & set(_CONSENT_WEAK_PHRASES)):
@@ -497,11 +525,15 @@ def gate_signals(title: str, text: str, cta_text: str | None = None, markup: boo
         if _MISSING_START.match(head):
             flags["missing" + suffix] = True
 
-    def check_line(line: str, opens: bool = True, closes: bool = True) -> None:
-        # opens / closes: the line starts / ends where the text does (not a cut-off window)
+    def check_opening(line: str) -> None:
+        """Notices a line opens with (line: text that starts where a line starts)."""
         head = _LEAD.sub("", line, count=1)
-        if opens:
-            check_start(head, bool(_ACCESS_NOTE.fullmatch(line)), strong=True)
+        check_start(head, bool(_ACCESS_NOTE.fullmatch(line)), strong=True)
+        if teasers and _TEASER_START.match(head):
+            signals.add("paywall")
+
+    def check_anywhere(line: str, closes: bool = True) -> None:
+        """Wording anywhere in the text (closes: it ends where a line ends)."""
         if _HAS_SENTENCE_BREAK.search(line):
             for part in _SENTENCE_BREAK.split(line)[1:]:
                 if part:
@@ -509,31 +541,30 @@ def gate_signals(title: str, text: str, cta_text: str | None = None, markup: boo
         flags["auth_hint"] |= bool(_AUTH_ANY.search(line))
         flags["challenge_hint"] |= bool(_CHALLENGE_ANY.search(line))
         flags["missing_hint"] |= bool(_MISSING_ANY.search(line))
-        if _PAYWALL_ANY.search(line) or teasers and (
-                (opens and _TEASER_START.match(head)) or (closes and _TEASER_END.search(line))):
+        consent_found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
+        if _PAYWALL_ANY.search(line) or (teasers and closes and _TEASER_END.search(line)):
             signals.add("paywall")
 
     try:
-        # Each line is also read run on from the text before it (the last
-        # _RUN_ON_CHARS of it, into the line's first 2 * _RUN_ON_CHARS; by a
-        # space and, beside other scripts, by nothing): a notice split over
-        # lines or paragraphs reads as one to a person.
+        # Each line is also read run on from the lines before it (up to two
+        # short ones, or the last _RUN_ON_CHARS of a longer one, into the
+        # line's first 2 * _RUN_ON_CHARS; by a space and, beside other
+        # scripts, by nothing), from each place one of them starts: a notice
+        # split over lines or paragraphs reads as one to a person.
         for line in _normalized_lines(title, "", markup):  # the title, read as a line of its own
-            check_line(line)
-            consent_found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
-        before = None  # (spaced, tight, opens): the text before the line, cut to _RUN_ON_CHARS
+            check_opening(line)
+            check_anywhere(line)
+        recent: list = []
         for line in _normalized_lines("", text, markup):
-            check_line(line)
-            consent_found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
-            if before is not None:
-                spaced, tight, opens = before
-                head, closes = line[:2 * _RUN_ON_CHARS], len(line) <= 2 * _RUN_ON_CHARS
-                check_line(spaced + " " + head, opens, closes)
-                if not (tight[-1:].isascii() and head[:1].isascii()):
-                    check_line(tight + head, opens, closes)
-            spaced = line if before is None else before[0] + " " + line
-            tight = line if before is None else before[1] + line
-            before = (spaced[-_RUN_ON_CHARS:], tight[-_RUN_ON_CHARS:], len(spaced) <= _RUN_ON_CHARS)
+            check_opening(line)
+            check_anywhere(line)
+            parts, openings, closes = _run_on(recent, line)
+            if len(parts) > 1:
+                for joiner in _joiners(parts):
+                    check_anywhere(joiner.join(parts), closes)
+                    for opening in openings:
+                        check_opening(joiner.join(opening))
+            recent = (recent + [line])[-2:]
         for line in _normalized_lines("", (text if cta_text is None else cta_text) if teasers else "", markup):
             if _TEASER_LINE.match(_LEAD.sub("", line, count=1)):
                 signals.add("paywall")
@@ -759,6 +790,8 @@ def _podcast_long_audio_proof_valid(content: str, extra: dict) -> bool:
 
 
 _VERIFIED_X_METHODS = {"oembed", "fxtwitter", "playwright"}
+# Players, frames and plugins in a feed item's HTML.
+_FEED_MEDIA = re.compile(r"<(?:audio|video|iframe|embed|object)\b", re.IGNORECASE)
 
 
 def page_wall_signals(title: str, page_text: str) -> list:
@@ -821,7 +854,12 @@ def _wechat_article(url: str):
     """Which WeChat article a URL names: ("short", id) for /s/<id>, ("long",
     (__biz, mid, idx, sn)) for /s?...; None for anything else."""
     parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or (parsed.hostname or "").lower() != "mp.weixin.qq.com":
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or (parsed.hostname or "").lower() != "mp.weixin.qq.com" or (
+            port not in (None, 443 if parsed.scheme == "https" else 80)):
         return None
     if parsed.path.startswith("/s/") and parsed.path.strip("/") != "s":
         return ("short", parsed.path[3:].strip("/"))
@@ -836,7 +874,8 @@ def _classify_article(source: str, title: str, content: str, extra: dict, url: s
     """WeChat article: unavailable notices fail; walls count as on generic pages;
     image-carried, container-less reads and reads that could not count the
     article's players and frames do not pass."""
-    body = visible_text(content)
+    browser = extra.get("extraction") == "container"
+    body = visible_text(content, markup=not browser)  # (a browser read is the words shown, never markup)
     noticed_title = _wechat_notice(title)
     noticed_head = any(_wechat_notice(line) for line in body.splitlines())
     if noticed_title or (noticed_head and prose_chars(body) < 600):
@@ -863,7 +902,6 @@ def _classify_article(source: str, title: str, content: str, extra: dict, url: s
     walls = _article_walls(source, title, content, prose_chars(body), extra.get("page_signals") or ())
     if walls is not None and walls["status"] == FAIL:
         return walls  # a login, challenge or missing-page shell, wherever the browser ended
-    browser = extra.get("extraction") == "container"
     final = str(extra.get("final_url") or "")
     if browser and not (final.startswith("https://") and _wechat_article(final) is not None
                         and _wechat_article(final) == _wechat_article(url)):
@@ -876,6 +914,8 @@ def _classify_article(source: str, title: str, content: str, extra: dict, url: s
     if walls is not None:
         return walls
     risks = extra.get("visual_risks")
+    if browser and not isinstance(extra.get("page_signals"), list):
+        risks = ["page_walls_unchecked"]  # the page around the article was not looked at for walls
     if browser and (not isinstance(risks, list) or risks):
         return {
             "status": UNKNOWN,
@@ -1296,6 +1336,16 @@ def classify_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if source == "rss" and content:
         body = visible_text(content)
         lowered = body.lower()
+        media = extra.get("embedded_media") if isinstance(extra.get("embedded_media"), int) else 0
+        media = max(media, len(_FEED_MEDIA.findall(content)))
+        if extra.get("rss_content") == "full" and media:
+            return {
+                "status": PARTIAL,
+                "reason_code": "embedded_media_unread",
+                "evidence": f"the feed carries the article body, but {media} player(s), frame(s) or enclosure(s) in it "
+                            "were not read",
+                "components": {"text_body": PASS, "media": PARTIAL},
+            }
         if (
             extra.get("rss_content") == "full"
             and prose_chars(body) >= MIN_GENERIC_BODY_CHARS

@@ -147,7 +147,9 @@ def from_rss(article: dict) -> UnifiedContent:
         content_cn=article.get('summary_cn'),
         # "full" only when the feed itself carried the article body; a summary
         # or teaser must not be reported as the complete source.
-        extra={"rss_content": article.get('content_kind', 'summary')},
+        extra={"rss_content": article.get('content_kind', 'summary'),
+               **({"embedded_media": article['embedded_media']}
+                  if isinstance(article.get('embedded_media'), int) else {})},
     )
 
 

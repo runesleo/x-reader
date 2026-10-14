@@ -79,12 +79,13 @@ async def verify_full_body(article: Dict[str, Any]) -> str:
         return "unverified"
     page_receipt = classify_payload({
         "source_type": "manual", "title": page["title"], "content": page["content"], "url": page["url"],
-        "extra": {"redirects_verified": True, "body_verified": True, "embedded_media": page["embedded_media"],
-                  "page_signals": page.get("page_signals", [])},
+        "extra": {"fetch_method": "direct_html_pinned", "redirects_verified": True, "body_verified": True,
+                  "embedded_media": page["embedded_media"], "page_signals": page.get("page_signals", [])},
     })
     if page_receipt["status"] != PASS:
         return "unverified"  # gated, thin or media-carrying article: nothing solid to compare
-    shares = overlap(visible_text(article.get("summary") or ""), visible_text(page["content"]))
+    # (the page read directly is the words it shows: nothing in it is markup)
+    shares = overlap(visible_text(article.get("summary") or ""), visible_text(page["content"], markup=False))
     if shares is None:
         return "unverified"
     feed_on_page, page_in_feed = shares
@@ -119,6 +120,10 @@ async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:
         if getattr(entry, "content", None):
             full = entry.content[0].get("value", "") or ""
         summary = getattr(entry, "summary", "") or ""
+        # players, frames and audio or video enclosures the item carries (not read)
+        media = len(re.findall(r"<(?:audio|video|iframe|embed|object)\b", full or summary, re.IGNORECASE)) + sum(
+            1 for enclosure in entry.get("enclosures") or []
+            if str(enclosure.get("type") or "").lower().startswith(("audio/", "video/")))
         articles.append({
             "title": entry.get("title", ""),
             "summary": full or summary,
@@ -127,6 +132,7 @@ async def fetch_rss(url: str, limit: int = 20) -> List[Dict[str, Any]]:
             "source": source_name,
             "published": entry.get("published", ""),
             "platform": "rss",
+            "embedded_media": media,
         })
 
     logger.info(f"RSS: {len(articles)} articles from {source_name}")

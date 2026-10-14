@@ -22,7 +22,7 @@ TIMEOUT_MS = 30_000
 # this read does not take: they are counted and set aside. What innerText
 # cannot vouch for is reported as risks: text too small or faint to read,
 # turned, clipped or off the page, shown in another order, text made by CSS,
-# and anything painted over it. The page's whole text is
+# and anything outside the article painted over it. The page's whole text is
 # returned too, for walls drawn outside the article. The page is left as it
 # was found (the temporary marking uses an attribute name no page can know).
 _WECHAT_ARTICLE_JS = r"""() => {
@@ -62,6 +62,10 @@ _WECHAT_ARTICLE_JS = r"""() => {
     let text;
     try {
         text = container.innerText;
+        // (innerText of an element that is not rendered is its raw text)
+        if (!container.getClientRects().length || getComputedStyle(container).visibility !== 'visible') {
+            risks.add('unrendered_article');
+        }
         const alpha = (color) => {
             const parts = (color.match(/[\d.]+/g) || []).map(Number);
             return color.startsWith('rgba') || color.includes('/') ? (parts.length > 3 ? parts[3] : 1) : 1;
@@ -94,7 +98,11 @@ _WECHAT_ARTICLE_JS = r"""() => {
             const range = document.createRange();
             range.selectNodeContents(node);
             const boxes = [...range.getClientRects()];
-            if (!boxes.length) continue; // not laid out (display:none): left out of innerText
+            if (!boxes.length) {
+                // not laid out: left out of innerText under display:none, otherwise read but not drawn
+                if (!element.checkVisibility || element.checkVisibility()) risks.add('unrendered_text');
+                continue;
+            }
             if (++checked > 20000) { risks.add('too_much_to_check'); break; }
             const drawn = boxes.filter(box => box.width > 0.5 && box.height > 0.5);
             if (!drawn.length || parseFloat(own.fontSize) < 6) risks.add('small_text');
@@ -109,7 +117,8 @@ _WECHAT_ARTICLE_JS = r"""() => {
                     if (!m || a * d - b * c < 0.25 || turned) risks.add('transformed_text');
                 }
                 if (up.clipPath !== 'none' || (up.clip && up.clip !== 'auto')) risks.add('clipped_text');
-                if (node2 !== element && (up.overflowX !== 'visible' || up.overflowY !== 'visible')) {
+                if (up.filter && up.filter !== 'none') risks.add('filtered_text');
+                if (up.overflowX !== 'visible' || up.overflowY !== 'visible') {
                     const frame = node2.getBoundingClientRect();
                     if (drawn.some(box => box.left < frame.left - 2 || box.right > frame.right + 2
                             || box.top < frame.top - 2 || box.bottom > frame.bottom + 2)) risks.add('clipped_text');
@@ -121,12 +130,13 @@ _WECHAT_ARTICLE_JS = r"""() => {
                 }
                 if (node2 === document.body) break;
             }
-            if (opacity < 0.3 || alpha(own.color) < 0.3 || alpha(own.webkitTextFillColor || own.color) < 0.3) {
+            const fill = own.webkitTextFillColor || own.color;  // (the colour the letters are filled with)
+            if (opacity < 0.3 || alpha(own.color) < 0.3 || alpha(fill) < 0.3) {
                 risks.add('faint_text');
             } else {
                 const behind = backdrop(element);
                 if (behind) {
-                    const [light, dark] = [luminance(own.color), luminance(behind)].sort((x, y) => y - x);
+                    const [light, dark] = [luminance(fill), luminance(behind)].sort((x, y) => y - x);
                     if ((light + 0.05) / (dark + 0.05) < 1.3) risks.add('faint_text');
                 }
             }
@@ -140,6 +150,29 @@ _WECHAT_ARTICLE_JS = r"""() => {
             for (const pseudo of ['::before', '::after', '::marker']) {
                 const made = getComputedStyle(element, pseudo).content;  // (strings, attr(), counters...)
                 if (made && !['none', 'normal', '""', "''"].includes(made.trim())) risks.add('generated_text');
+            }
+        }
+        // paint hit testing does not see: wide outlines and shadows anywhere, boxes of positioned pseudo-elements
+        // (rendered, visible and nearly opaque paint, large enough to hide a line)
+        for (const element of document.querySelectorAll('*')) {
+            if (!element.getClientRects().length) continue;
+            const own = getComputedStyle(element);
+            if (own.visibility !== 'visible') continue;
+            if (own.outlineStyle !== 'none' && parseFloat(own.outlineWidth) > 3 && alpha(own.outlineColor) > 0.5) {
+                risks.add('covered_text');
+            }
+            if (own.boxShadow !== 'none' && own.boxShadow.split(/,(?![^(]*\))/).some(shadow => !/inset/.test(shadow)
+                    && alpha((shadow.match(/rgba?\([^)]*\)/) || ['rgb(0, 0, 0)'])[0]) > 0.5
+                    && (shadow.replace(/rgba?\([^)]*\)/g, '').match(/-?[\d.]+px/g) || [])
+                        .some(length => Math.abs(parseFloat(length)) > 16))) risks.add('covered_text');
+            for (const pseudo of ['::before', '::after']) {
+                const made = getComputedStyle(element, pseudo);
+                if (!['none', 'normal'].includes(made.content) && /absolute|fixed/.test(made.position)
+                        && made.visibility === 'visible'
+                        && (alpha(made.backgroundColor) > 0.5 || made.backgroundImage !== 'none')
+                        && !(parseFloat(made.width) < 50 || parseFloat(made.height) < 30)) {
+                    risks.add('covered_text');
+                }
             }
         }
         // anything painted over the text: at the middle of each piece of text, page by page
@@ -191,8 +224,9 @@ _WECHAT_ARTICLE_JS = r"""() => {
         .replace(/\u0001(\d+)\u0001/g, (_match, index) => `\n\n![image](${images[index]})\n\n`)
         .split('\n').map(line => line.replace(/[ \t ]+/g, ' ').trim()).join('\n')
         .replace(/\n{3,}/g, '\n\n').trim();
-    const page = (document.body ? document.body.innerText : '').slice(0, 300000);
-    return {content: content, embeds: embeds, risks: [...risks].sort(), page_text: page};
+    const whole = document.body ? document.body.innerText : '';
+    return {content: content, embeds: embeds, risks: [...risks].sort(), page_text: whole.slice(0, 300000),
+            page_text_complete: whole.length <= 300000};
 }"""
 
 
@@ -316,6 +350,7 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
                     result["embedded_media"] = int(walked.get("embeds") or 0)
                     result["visual_risks"] = [str(risk) for risk in walked.get("risks") or []]
                     result["page_text"] = str(walked.get("page_text") or "")
+                    result["page_text_complete"] = walked.get("page_text_complete") is True
             else:
                 # Generic fallback: a Bilibili page may navigate after the
                 # initial HTTP 412 response. Allow DOM stabilization and retry

@@ -31,7 +31,7 @@ DIRECT_TOTAL_TIMEOUT = 20
 JINA_TOTAL_TIMEOUT = 30
 IO_TIMEOUT = 5
 MAX_CONNECT_ATTEMPTS = 3
-MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+MAX_RESPONSE_BYTES = 5 * 1024 * 1024 // 2  # (a read peaks near 35 times the page's size: 3 reads in 512 MiB)
 
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _DIRECT_TYPES = {"text/html", "application/xhtml+xml", "text/plain"}
@@ -1089,9 +1089,10 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
                     prop != "quotes" and re.search(r"[\"']|\b(?:symbols|counters?|url|image-set|attr)\(", value)):
                 return True
         elif prop in ("content", "hyphenate-character", "text-overflow"):
-            # text made by CSS: replaced content, a hyphenation string, a custom ellipsis (by the value that wins)
-            won = _winner(declarations, prop, lambda value: value)
-            if won not in {"normal", "none", "auto", "clip", "ellipsis"} | _WIDE_KEYWORDS and (
+            # text made by CSS: replaced content, a hyphenation string, a custom ellipsis (by the value
+            # that wins among those browsers keep)
+            won = _kept_winner(declarations, prop, lambda value, prop=prop: _made_text_valid(prop, value))
+            if won is not None and won not in {"normal", "none", "auto", "clip", "ellipsis"} | _WIDE_KEYWORDS and (
                     prop != "text-overflow" or re.search(r"[\"']", won)):
                 return True
         if prop in _HEIGHT_LIMITS and value not in {"auto", "none", "normal"} | _WIDE_KEYWORDS:
@@ -1462,8 +1463,11 @@ def _style_context(name: str, attrs: dict, parent: dict, auto_rtl=None) -> dict:
             if won[prop][0] != "none" or prop in ("all", "font"):
                 return unknown()
         elif prop == "display":
-            if _display_value(value) not in _VISIBLE_DISPLAYS:
-                return unknown()
+            shown = _kept_winner(declarations, "display", lambda value: _display_value(value) is not None
+                                 or value in _WIDE_KEYWORDS)
+            if (_display_value(value) is None and value not in _WIDE_KEYWORDS) or (
+                    shown is not None and shown not in _WIDE_KEYWORDS and _display_value(shown) not in _VISIBLE_DISPLAYS):
+                return unknown()  # (an unknown display value, or a winner that does not show text plainly)
         elif prop == "font-family":
             if _SYMBOL_FONTS.search(value):
                 return unknown()
@@ -1869,8 +1873,16 @@ def _math_eval(value: str, font_px: float = 16.0, percent_px: float = 10.0):
                 return None
             following = take()
             if following == ("op", ")"):
-                return ("any", 0.0, 0.0)
-            return ("any", 0.0, 0.0) if following == ("op", ",") and skip_to_close() else None
+                return ("any", 0.0, 0.0)  # an outside value, judged like external CSS
+            if following != ("op", ","):
+                return None
+            # The fallback, used when the variable is not set: the value can be it or the outside one.
+            start = cursor[0]
+            fallback = sum_of(depth)
+            if fallback is not None and take() == ("op", ")"):
+                return span("any", min(0.0, fallback[1]), max(0.0, fallback[2]))
+            cursor[0] = start
+            return ("any",) + unbounded if skip_to_close() else None
         if name not in _MATH_ARGUMENTS:
             return None
         arguments, strategy = [], False
@@ -2227,9 +2239,10 @@ def _start_shift(declarations: list, font_px: float, rtl: bool, relative: bool):
     # none), and the width of any declaration x-reader cannot read (a color it
     # does not know may still be kept).
     used = _border_used(declarations, rtl).get(start)
-    unread = [token for prop, value, _important in declarations if _border_parts(prop, value, start, end) is None
-              for token in [_sides_set(prop, value, "border", start, end).get(start)] if token is not None]
-    widths = [_side_px(token, font_px, "border") for token in ([used] if used is not None else []) + unread]
+    unread = [_reach(value, font_px, combined=False) for prop, value, _important in declarations
+              if _border_parts(prop, value, start, end) is None and start in _sides_set(prop, value, "border", start, end)]
+    widths = [_side_px(used, font_px, "border")] if used is not None else []
+    widths += unread
     if None in widths:
         return None
     shift += max(widths, default=0.0)
@@ -2361,13 +2374,23 @@ def _baseline_shift(name: str, declarations: list, font_px: float) -> float:
     return amount[0] * font_px * 1.2 / 100 if amount[1] else amount[0]
 
 
-def _auto_direction(element, fallback: bool) -> bool:
+MAX_AUTO_DIRECTION_CHARS = 2_000_000  # letters dir=auto looks through, per page
+
+
+def _auto_direction(element, fallback: bool, budget: dict):
     """dir=auto: right-to-left when the first strong letter in the element's
-    text is a right-to-left one; the parent's direction when it has none."""
+    text is a right-to-left one; the parent's direction when it has none.
+    The letters looked through are charged to budget["chars"]; past it, None
+    (not worked out)."""
     for text in element.itertext():
-        match = _FIRST_STRONG.search(text)
+        if budget["chars"] <= 0:
+            return None
+        match = _FIRST_STRONG.search(text, 0, budget["chars"])  # (only as far as the budget reaches)
+        budget["chars"] -= match.end() if match else len(text)
         if match:
             return bool(match.group(1))
+        if budget["chars"] < 0:
+            return None
     return fallback
 
 
@@ -2384,6 +2407,40 @@ def _text_px(text: str, font_px: float, letter_px: float = 0.0, word_px: float =
     return ((len(text) - wide) * 0.6 + wide) * font_px + len(text) * letter_px + separators * word_px
 
 
+_QUOTE_WORDS = {"open-quote", "close-quote", "no-open-quote", "no-close-quote"}
+# Strings (with their escapes), functions (one level of nesting) and other words, in order.
+_MADE_TEXT_TOKEN = re.compile(r"""(['"])(?:\\.|(?!\1).)*\1|[a-z-]+\((?:[^()]|\([^()]*\))*\)|\S+""", re.S)
+
+
+def _made_text_valid(prop: str, value: str) -> bool:
+    """A content, hyphenate-character or text-overflow value browsers keep
+    (anything x-reader cannot place counts as kept)."""
+    if value in _WIDE_KEYWORDS:
+        return True
+    tokens = [match.group(0) for match in _MADE_TEXT_TOKEN.finditer(value)]
+    strings = [token[:1] in "'\"" for token in tokens]
+    if prop == "hyphenate-character":
+        return value == "auto" or tokens == [value] and strings[0]
+    if prop == "text-overflow":
+        return 1 <= len(tokens) <= 2 and all(token in ("clip", "ellipsis", "fade") or token.startswith("fade(")
+                                             or is_string for token, is_string in zip(tokens, strings))
+    if value in ("normal", "none"):
+        return True
+    return all(is_string or token in _QUOTE_WORDS or token == "/" or re.match(r"[a-z-]+\(", token)
+               for token, is_string in zip(tokens, strings))
+
+
+def _foreign_hidden(attrs, declarations: list) -> bool:
+    """Whether an SVG or MathML element is hidden: the hidden attribute, or a
+    display that ends up none (the style's kept winner, CSS-wide values and
+    all included, over the presentation attribute)."""
+    shown_as = _kept_winner(declarations, "display", lambda value: _display_value(value) is not None
+                            or value in _WIDE_KEYWORDS) or (attrs.get("display") or "").strip().lower()
+    if any(prop == "all" for prop, _value, _important in declarations):
+        shown_as = ""  # all resets display (to what shows)
+    return "hidden" in attrs or shown_as == "none"
+
+
 def _svg_text_pieces(svg) -> int:
     """How many pieces of text an <svg> places by coordinates, up to two: its
     text, textPath and foreignObject elements, and tspans given a position."""
@@ -2393,10 +2450,7 @@ def _svg_text_pieces(svg) -> int:
         node = stack.pop()
         if not isinstance(node.tag, str):
             continue
-        declarations = _inline_declarations(node.get("style") or "") or []
-        if node is not svg and ("hidden" in node.attrib or (node.get("display") or "").strip().lower() == "none"
-                                or _kept_winner(declarations, "display", lambda value: _display_value(value) is not None)
-                                == "none"):
+        if node is not svg and _foreign_hidden(node.attrib, _inline_declarations(node.get("style") or "") or []):
             continue  # hidden, with all it holds
         stack.extend(reversed(list(node)))
         if not node.tag.startswith(_SVG):
@@ -2994,7 +3048,7 @@ def _extract_html_page(html: str) -> dict:
     folded: list = []  # blocks that line breaks part, read with each break as a space
     shown_chars = 0
     lines = {"dropped": False, "pre_px": 0.0, "pre_text": False, "nowrap_px": 0.0, "run_px": 0.0,
-             "base_px": 0.0, "box_px": 0.0,
+             "base_px": 0.0, "box_px": 0.0, "chars": MAX_AUTO_DIRECTION_CHARS, "space_after": False,
              "run_joined": False, "foreign_letters": 0}
     # Letters, per region, on lines that do not wrap and run past 2000px: a
     # reader sees the start of such a line and scrolls to the rest; the page
@@ -3159,7 +3213,11 @@ def _extract_html_page(html: str) -> dict:
     def nowrap_overflow(chunk, state) -> int:
         """Letters past 2000px on a line that does not wrap (nowrap, max-content):
         letters at up to 0.6em, wide (CJK) ones at 1em, spaces collapsed."""
-        text = " ".join(chunk.split()) if not chunk.isspace() else " "
+        words = " ".join(chunk.split())
+        # (a run of spaces shows as one, where the text around it meets, across text nodes)
+        spaced = bool(words) and lines["nowrap_px"] > 0 and (chunk[:1].isspace() or lines["space_after"])
+        lines["space_after"] = chunk[-1:].isspace() if words else lines["space_after"] or chunk[-1:].isspace()
+        text = (" " if spaced else "") + words
         width = _text_px(text, state["font_px"], state["letter_px"], state["word_px"])
         past = past_edge(lines["nowrap_px"], text, width)
         lines["nowrap_px"] += width
@@ -3192,7 +3250,7 @@ def _extract_html_page(html: str) -> dict:
             overflowing.add("gate")  # more page text than the wall scan reads: the page is too large to check
             return
         if chunk in ("\n", _LINE_BREAK) and laid_out:  # (a hidden break starts no line)
-            lines.update(pre_px=0.0, pre_text=False, nowrap_px=0.0, run_px=0.0, run_joined=False)
+            lines.update(pre_px=0.0, pre_text=False, nowrap_px=0.0, run_px=0.0, run_joined=False, space_after=False)
             if chunk == "\n":
                 bidi.update(rtl=False, run=0, reorders=False)  # a new paragraph
         elif laid_out:
@@ -3267,13 +3325,11 @@ def _extract_html_page(html: str) -> dict:
             # SVG and MathML hide by the hidden attribute, display:none (style or
             # attribute) or visibility; reversed text comes from unicode-bidi overrides.
             declarations = _inline_declarations(attrs.get("style") or "") or []
-            shown_as = _kept_winner(declarations, "display", lambda value: _display_value(value) is not None
-                                    or value in _WIDE_KEYWORDS) or (attrs.get("display") or "").strip().lower()
             seen_as = _kept_winner(declarations, "visibility", lambda value: value in ("visible", "hidden", "collapse")
                                    or value in _WIDE_KEYWORDS) or (attrs.get("visibility") or "").strip().lower()
             if any(prop == "all" for prop, _value, _important in declarations):
-                shown_as = seen_as = ""  # all resets display and visibility (to what shows)
-            hidden_here = "hidden" in attrs or shown_as == "none"
+                seen_as = ""  # all resets visibility (to what shows)
+            hidden_here = _foreign_hidden(attrs, declarations)
             # (visibility is inherited and a descendant can set it back: its text is not settled)
             style.update(visibility="hidden" if hidden_here else "unknown" if seen_as in ("hidden", "collapse")
                          else "visible",
@@ -3291,7 +3347,11 @@ def _extract_html_page(html: str) -> dict:
         else:
             written = (attrs.get("dir") or "").strip().lower()
             auto = written == "auto" or (name == "bdi" and written not in ("ltr", "rtl"))
-            style = _style_context(name, attrs, parent, _auto_direction(element, parent["rtl"]) if auto else None)
+            direction = _auto_direction(element, parent["rtl"], lines) if auto else None
+            if auto and direction is None:
+                layout_risk = True  # nested dir=auto past what x-reader looks through
+                direction = parent["rtl"]
+            style = _style_context(name, attrs, parent, direction)
         if not (parent["skip"] or parent["hidden"]) and style["visibility"] != "hidden" and style.get("bidi_override"):
             layout_risk = True  # reversed text (a <bdo>, a bidi override) can spell what the text does not
         revealed = not foreign and name in _SKIP_TAGS and (not parent["skip"] or parent["revealed"]) \
@@ -3724,7 +3784,7 @@ def _read_bounded(
         except ValueError:
             declared_length = None
         if declared_length is not None and declared_length > MAX_RESPONSE_BYTES:
-            raise ValueError("Response exceeds 5 MiB limit")
+            raise ValueError("Response exceeds the 2.5 MiB limit")
 
     chunks = []
     total = 0
@@ -3736,7 +3796,7 @@ def _read_bounded(
             break
         total += len(chunk)
         if total > MAX_RESPONSE_BYTES:
-            raise ValueError("Response exceeds 5 MiB limit")
+            raise ValueError("Response exceeds the 2.5 MiB limit")
         chunks.append(chunk)
 
     body = b"".join(chunks)

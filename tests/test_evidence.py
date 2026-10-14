@@ -456,7 +456,7 @@ class EvidenceContractTest(unittest.TestCase):
     def test_wechat_notices_containers_and_image_posts(self):
         def wechat(content, **extra):
             if extra.get("extraction") == "container":  # a browser read that ended on the article, nothing in doubt
-                extra = {"final_url": "https://mp.weixin.qq.com/s/abc", "visual_risks": [], **extra}
+                extra = {"final_url": "https://mp.weixin.qq.com/s/abc", "visual_risks": [], "page_signals": [], **extra}
             return classify_payload({"source_type": "wechat", "title": "文章", "content": content, "extra": extra,
                                      "url": "https://mp.weixin.qq.com/s/abc"})
 
@@ -508,7 +508,19 @@ class EvidenceContractTest(unittest.TestCase):
                             (long_form.replace("idx=1", "idx=2"), "article_identity_unverified")):
             self.assertEqual(classify_payload({"source_type": "wechat", "title": "文章", "content": ARTICLE, "url": long_form,
                                                "extra": {"extraction": "container", "embedded_media": 0,
-                                                         "final_url": final, "visual_risks": []}})["reason_code"], code)
+                                                         "final_url": final, "visual_risks": [],
+                                                         "page_signals": []}})["reason_code"], code)
+        # walls around the article must have been looked for; ports other than HTTPS's are another page
+        self.assertEqual(wechat(ARTICLE, extraction="container", embedded_media=0, page_signals=None)["reason_code"],
+                         "visibility_unverified")
+        self.assertEqual(wechat(ARTICLE, extraction="container", embedded_media=0,
+                                final_url="https://mp.weixin.qq.com:444/s/abc")["reason_code"],
+                         "article_identity_unverified")
+        self.assertEqual(wechat(ARTICLE, extraction="container", embedded_media=0,
+                                page_signals=["scan_budget_exceeded"])["reason_code"], "page_too_large_to_check")
+        # a browser read's words in angle brackets are prose, not markup
+        self.assertEqual(wechat("<" + ARTICLE.replace(chr(10), " ") * 2 + ">", extraction="container",
+                                embedded_media=0)["status"], "PASS")
         # walls drawn around the article count; links around it are not teasers
         from x_reader.evidence import page_wall_signals
         self.assertNotEqual(wechat(ARTICLE, extraction="container", embedded_media=0,
@@ -527,7 +539,7 @@ class EvidenceContractTest(unittest.TestCase):
             return classify_payload({"source_type": "wechat", "title": title, "content": content,
                                      "url": "https://mp.weixin.qq.com/s/abc",
                                      "extra": {"extraction": "container", "embedded_media": 0, "visual_risks": [],
-                                               "final_url": "https://mp.weixin.qq.com/s/abc"}})
+                                               "final_url": "https://mp.weixin.qq.com/s/abc", "page_signals": []}})
 
         long_text = "读者会在这篇长文里看到一个仔细的论证。每一段都补充了背景、证据和清楚的结论。" * 30
         self.assertEqual(wechat("该内容已被发布者删除", "帮助说明。" + long_text)["status"], "FAIL")

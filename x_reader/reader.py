@@ -32,7 +32,8 @@ def _same_text(shown: str, read_directly: str) -> bool:
     from x_reader.evidence import visible_text
     from x_reader.utils.textmatch import overlap
 
-    shares = overlap(visible_text(shown), visible_text(read_directly))
+    # (the page read directly is the words it shows: nothing in it is markup)
+    shares = overlap(visible_text(shown), visible_text(read_directly, markup=False))
     return (
         shares is not None
         and shares[0] >= SHOWN_ON_PAGE_SHARE
