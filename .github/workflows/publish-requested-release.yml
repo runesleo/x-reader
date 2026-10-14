@@ -42,6 +42,25 @@ jobs:
           echo "target=$target" >> "$GITHUB_OUTPUT"
           echo "title=$title" >> "$GITHUB_OUTPUT"
 
+      - name: Verify skill bootstrap is pinned to this release
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          request = dict(
+              row.split("=", 1)
+              for row in Path(".github/release-request").read_text().splitlines()
+              if "=" in row
+          )
+          skill = Path("skills/x-reader/SKILL.md").read_text()
+          match = re.search(r'XR_CLI_COMMIT="([0-9a-f]{40})"', skill)
+          if match is None or match.group(1) != request.get("TARGET_SHA"):
+              raise SystemExit("Release blocked: Skill bootstrap commit differs from TARGET_SHA")
+          print("Verified immutable Skill commit:", match.group(1))
+          PY
+
       - name: Publish GitHub release if missing
         env:
           GH_TOKEN: ${{ github.token }}
