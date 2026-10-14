@@ -779,6 +779,25 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main><p>{ARTICLE.replace(chr(10), ' ').replace(' ', '&nbsp;') * 2}</p></main>"),
             # percentages inside math functions are of the parent's width; vertical writing is not measured
             ("<body>", "<main>" + "<div style='width:calc(150%)'>" * 2 + article + "</div>" * 2 + "</main>"),
+            # an inline box's padding leaves the width of blocks inside it; negative margins widen a block
+            ("<body>", "<main><span style='padding:0 900px'>" + "<div style='width:150%'>" * 2 + article
+             + "</div>" * 2 + "</span></main>"),
+            ("<body>", "<main>" + "<div style='margin-right:-200px'>" * 6 + article + "</div>" * 6 + "</main>"),
+            # margins browsers keep (a math margin may be negative); blocks pulled over each other
+            ("<body>", f"<main>{article}</main><div style='margin-top:calc(-300px);height:300px;background:white'>x</div>"),
+            ("<body>", f"<main>{article}</main><div style='margin-top:-300px;margin-top:bogus;height:300px;"
+                       "background:white'>x</div>"),
+            ("<body>", "<main>" + f"<div style='line-height:12px;margin:0 0 -12px;background:white'>{article}</div>" * 4
+             + "</main>"),
+            # lines that do not wrap: a hidden break starts none; sizes by piece; inline boxes take room
+            ("<body>", "<main style='white-space:nowrap'>" + "x" * 200 + "<br hidden>" + "y" * 200
+             + f"</main><main>{article}</main>"),
+            ("<body>", "<main><pre><span style='font-size:40px'>" + "W" * 80 + "</span><span style='font-size:6px'>"
+             + "z" * 400 + f"</span></pre>{article}</main>"),
+            ("<body>", f"<main style='white-space:nowrap'><span style='display:inline-block;width:1900px'></span>"
+                       f"<p>{ARTICLE.replace(chr(10), ' ')}</p></main>"),
+            ("<body>", f"<main style='width:max-content;width:calc(foo)'><p>{ARTICLE.replace(chr(10), ' ') * 2}</p>"
+                       "</main>"),
             ("<body>", "<main style='writing-mode:vertical-rl'>" + "<div style='padding-block-start:700px'>" * 3
              + article + "</div>" * 3 + "</main>"),
             # revert goes back to the browser's value, which for these is the parent's
@@ -920,6 +939,17 @@ class GenericReadTest(unittest.TestCase):
             # hidden boxes pull nothing; margins by the values that win; hidden table parts; short joined words
             ("<body>", "<div hidden style='margin:-8px'>x</div>" * 63 + f"<main>{article}</main>"),
             ("<body>", f"<main style='margin-left:-300px;margin-left:0'>{article}</main>"),
+            ("<body>", "<main>" + "<div style='padding:0 20px'>" * 5 + article + "</div>" * 5 + "</main>"),
+            # hidden SVG and MathML place nothing; risky values that lose; hidden table parts; an address
+            ("<body>", f"<svg hidden><text>Jan</text><text>Feb</text></svg><svg style='display:none'><text>Jan</text>"
+                       f"<text>Feb</text></svg><math hidden><mmultiscripts><mi>x</mi><mprescripts/><mi>y</mi><none/>"
+                       f"</mmultiscripts></math><main>{article}</main>"),
+            ("<body>", f"<main style='opacity:0;opacity:1;visibility:hidden;visibility:visible;overflow:hidden;"
+                       f"overflow:visible'>{article}</main>"),
+            ("<body>", f"<table><tr><td>Row</td></tr><caption style='visibility:hidden'>Cap</caption></table>"
+                       f"<main>{article}<address>Leo Labs<br>Somewhere 1<br>Town</address></main>"),
+            # a long code line is overflow a reader scrolls to, while it is a small part of the text
+            ("<body>", f"<main>{article}<pre>{'x' * 300}</pre></main>"),
             ("<body>", f"<table><tr><td>Row</td></tr><caption hidden>Cap</caption></table><main>{article}</main>"),
             ("<body>", f"<main>{article}<p>Price:&nbsp;10&nbsp;USD, 5&nbsp;km and https://example.com/{'a' * 300}"
                        f"</p><p>A <span style='display:inline-block'>badge</span> beside <bdi>Ann</bdi>.</p></main>"),
@@ -1038,6 +1068,27 @@ class GenericReadTest(unittest.TestCase):
                        "<span style='display:table-row'>Subscribe to</span></div>",
                        "<div dir='rtl'><div style='DISPLAY:TABLE-CELL'>continue.</div>"
                        "<div style='display:table-cell'>Subscribe to</div></div>",
+                       # each piece that may or may not draw is read kept and left out, in every combination
+                       "<div>Sub<span style='font-size:0'>x</span>scribe <span style='bogus:1'> to continue.</span></div>",
+                       "<div><span style='visibility:hidden'>x<span style='visibility:visible'>Sub</span>x</span>"
+                       "scribe to continue.</div>",
+                       # a notice a line break wraps onto two lines
+                       "<div>Subscribe to<br>continue.</div>",
+                       # isolate controls; controls laid out whole whatever their display; SVG overrides and glyph
+                       # positions; prose in SVG that is not returned as page text
+                       "<p dir='rtl'>\u2066continue.\u2069 \u2066Subscribe to\u2069</p>",
+                       "<p dir='rtl'><input style='display:inline' type='button' value='continue.'> "
+                       "<input style='display:inline' type='button' value='Subscribe to'></p>",
+                       "<svg><text style='unicode-bidi:bidi-override;direction:rtl'>.eunitnoc ot ebircsbuS</text></svg>",
+                       "<svg><text x='220 210 200 190 180 170 160 150 140 130 120 110 100 90 80 70 60 50 40 30 20 10'>"
+                       ".eunitnoc ot ebircsbuS</text></svg>",
+                       "<svg width='800' height='600'><foreignObject width='800' height='600'><div>"
+                       + ARTICLE.replace(chr(10), ' ') * 2 + "</div></foreignObject></svg>",
+                       # table parts display:contents hands on; a caption side browsers drop
+                       "<div><span style='display:table-row'>continue.</span><span style='display:contents'>"
+                       "<span style='display:table-caption'>Subscribe to</span></span></div>",
+                       "<table><tbody><tr><td>continue.</td></tr></tbody>"
+                       "<caption style='caption-side:top;caption-side:bogus'>Subscribe to</caption></table>",
                        # characters that draw nothing, look-alike letters, accents
                        "<div>Sub\u034fscribe to continue.</div>", "<div>Sub\u180escribe to continue.</div>",
                        "<div>Sub\ufe0fscribe to continue.</div>", "<div>Sub\U000e0041scribe to continue.</div>",

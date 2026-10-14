@@ -458,17 +458,33 @@ class EvidenceContractTest(unittest.TestCase):
             return classify_payload({"source_type": "wechat", "title": "文章", "content": content, "extra": extra})
 
         self.assertEqual(wechat("此内容因违规无法查看")["status"], "FAIL")
-        self.assertEqual(wechat("排查接口参数错误的三个步骤。\n" + ARTICLE * 3, extraction="container")["status"], "PASS")
+        self.assertEqual(wechat("排查接口参数错误的三个步骤。\n" + ARTICLE * 3, extraction="container",
+                                embedded_media=0)["status"], "PASS")
         self.assertEqual(wechat(ARTICLE, extraction="page_body")["reason_code"], "article_container_missing")
         images = wechat("今日分享\n![image](https://mmbiz.qpic.cn/a.jpg)\n![image](https://mmbiz.qpic.cn/b.jpg)")
         self.assertEqual(images["status"], "PARTIAL")
         self.assertEqual(images["reason_code"], "attached_media_unread")
-        self.assertEqual(wechat(ARTICLE, extraction="container")["status"], "PASS")
+        self.assertEqual(wechat(ARTICLE, extraction="container", embedded_media=0)["status"], "PASS")
+        # players and frames: counted ones are unread, uncounted ones may be there
+        self.assertEqual(wechat(ARTICLE, extraction="container", embedded_media=1)["reason_code"],
+                         "embedded_media_unread")
+        self.assertEqual(wechat(ARTICLE, extraction="container")["reason_code"], "media_presence_unknown")
+        self.assertEqual(wechat(ARTICLE, extraction="reader")["status"], "PARTIAL")
+        # walls count as on generic pages
+        long_body = ARTICLE * 3
+        self.assertEqual(classify_payload({"source_type": "wechat", "title": "Sign in to continue",
+                                           "content": "Please sign in to continue.\n" + long_body,
+                                           "extra": {"extraction": "container", "embedded_media": 0}})["status"],
+                         "FAIL")
+        self.assertEqual(wechat("Please sign in to continue.\n" + long_body, extraction="container",
+                                embedded_media=0)["status"], "UNKNOWN")
+        self.assertEqual(wechat("Subscribe to continue reading.\n" + long_body, extraction="container",
+                                embedded_media=0)["status"], "PARTIAL")
 
     def test_wechat_notice_titles_fail_and_notice_lines_beside_text_are_unknown(self):
         def wechat(title, content):
             return classify_payload({"source_type": "wechat", "title": title, "content": content,
-                                     "extra": {"extraction": "container"}})
+                                     "extra": {"extraction": "container", "embedded_media": 0}})
 
         long_text = "读者会在这篇长文里看到一个仔细的论证。每一段都补充了背景、证据和清楚的结论。" * 30
         self.assertEqual(wechat("该内容已被发布者删除", "帮助说明。" + long_text)["status"], "FAIL")

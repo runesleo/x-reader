@@ -202,13 +202,17 @@ def from_twitter(data: dict) -> UnifiedContent:
 
 
 def from_wechat(article: dict) -> UnifiedContent:
+    extra = {"extraction": article.get('extraction', '')} if article.get('extraction') else {}
+    media = article.get('embedded_media')
+    if isinstance(media, int) and not isinstance(media, bool):
+        extra["embedded_media"] = media  # players and frames counted in the article container
     return UnifiedContent(
         source_type=SourceType.WECHAT,
         source_name=article.get('author', ''),
         title=article.get('title', ''),
         content=article.get('content', ''),
         url=article.get('url', ''),
-        extra={"extraction": article.get('extraction', '')} if article.get('extraction') else {},
+        extra=extra,
     )
 
 

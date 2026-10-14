@@ -735,8 +735,46 @@ def _podcast_long_audio_proof_valid(content: str, extra: dict) -> bool:
 _VERIFIED_X_METHODS = {"oembed", "fxtwitter", "playwright"}
 
 
+def _article_walls(source: str, title: str, content: str, prose: int):
+    """The receipt for login, bot-check, missing-page, consent and paywall
+    wording in an article read (as on generic pages), or None."""
+    signals = set(gate_signals(title, content))
+    thin = prose < 600
+    if "auth_title" in signals or ("auth_required" in signals and thin):
+        return {"status": FAIL, "reason_code": "auth_required",
+                "evidence": f"{source} returned a login/authentication shell", "components": {"text_body": FAIL}}
+    if "challenge_title" in signals or ("challenge_or_error" in signals and thin) or (
+            "consent" in signals and (thin or "consent_title" in signals)):
+        return {"status": FAIL, "reason_code": "challenge_or_error",
+                "evidence": f"{source} returned an error, challenge or consent shell", "components": {"text_body": FAIL}}
+    if "missing_page" in signals:
+        return {"status": FAIL if thin else UNKNOWN, "reason_code": "source_unavailable" if thin else "possibly_missing_page",
+                "evidence": f"{source} text reports that the content is missing or removed",
+                "components": {"text_body": FAIL if thin else UNKNOWN}}
+    if "scan_budget_exceeded" in signals:
+        return {"status": UNKNOWN, "reason_code": "page_too_large_to_check",
+                "evidence": f"the {source} text is too large for x-reader to check for walls",
+                "components": {"text_body": UNKNOWN}}
+    if signals & {"auth_required", "challenge_or_error", "auth_hint", "challenge_hint"}:
+        return {"status": UNKNOWN, "reason_code": "possible_access_wall",
+                "evidence": f"{source} text shows or mentions a login, bot check or block, so it may not be the article",
+                "components": {"text_body": UNKNOWN}}
+    if signals & {"missing_hint", "consent"}:
+        return {"status": UNKNOWN, "reason_code": "possibly_missing_page" if "missing_hint" in signals
+                else "consent_text_present",
+                "evidence": f"{source} text mentions a missing page or carries consent wording",
+                "components": {"text_body": UNKNOWN}}
+    if "paywall" in signals:
+        return {"status": PARTIAL, "reason_code": "paywall_or_teaser",
+                "evidence": f"some {source} text was read, but it gates or cuts off the rest",
+                "components": {"text_body": PARTIAL}}
+    return None
+
+
 def _classify_article(source: str, title: str, content: str, extra: dict) -> dict[str, Any]:
-    """WeChat article: unavailable notices fail; image-carried or container-less reads do not pass."""
+    """WeChat article: unavailable notices fail; walls count as on generic pages;
+    image-carried, container-less reads and reads that could not count the
+    article's players and frames do not pass."""
     body = visible_text(content)
     noticed_title = _wechat_notice(title)
     noticed_head = any(_wechat_notice(line) for line in body.splitlines())
@@ -761,6 +799,9 @@ def _classify_article(source: str, title: str, content: str, extra: dict) -> dic
             "evidence": f"the {source} article container was not found; whole-page text cannot prove the body",
             "components": {"text_body": UNKNOWN},
         }
+    walls = _article_walls(source, title, content, prose_chars(body))
+    if walls is not None:
+        return walls
     images = content.count("![")
     if prose_chars(body) < MIN_GENERIC_BODY_CHARS:
         if images:
@@ -775,6 +816,21 @@ def _classify_article(source: str, title: str, content: str, extra: dict) -> dic
             "reason_code": "thin_article_body",
             "evidence": f"{source} returned too little article text to prove the body was read",
             "components": {"text_body": UNKNOWN},
+        }
+    media = extra.get("embedded_media")
+    if not isinstance(media, int) or isinstance(media, bool):
+        return {
+            "status": PARTIAL,
+            "reason_code": "media_presence_unknown",
+            "evidence": f"{source} article text retrieved; players or frames in the article could not be counted",
+            "components": {"text_body": PASS, "attached_media": UNKNOWN},
+        }
+    if media > 0:
+        return {
+            "status": PARTIAL,
+            "reason_code": "embedded_media_unread",
+            "evidence": f"{source} article text retrieved; {media} player(s) or frame(s) in it were not",
+            "components": {"text_body": PASS, "media": PARTIAL},
         }
     note = f"; {images} inline image(s) not analyzed" if images else ""
     return {

@@ -110,15 +110,21 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
                 await page.wait_for_timeout(2000)
 
                 title = await page.title()
-                content = await page.evaluate("""() => {
+                walked = await page.evaluate("""() => {
                     const container = document.querySelector('#js_content') || document.querySelector('.rich_media_content');
                     if (!container) return null; // Safe fallback to generic if not found
-                    
+
+                    // Players, frames, plugins and WeChat's own media components carry
+                    // content the walk does not read: they are counted, not dropped.
+                    const embedded = /^(IFRAME|VIDEO|AUDIO|OBJECT|EMBED|CANVAS|MPVOICE|MPVIDEO|QQMUSIC|MP-.+)$/;
                     let elements = [];
+                    let embeds = 0;
                     const walk = (node) => {
                         if (node.tagName === 'IMG') {
                            let src = node.getAttribute('data-src') || node.getAttribute('src');
                            if (src) elements.push(`![image](${src})`);
+                        } else if (node.nodeType === 1 && embedded.test(node.tagName)) {
+                           embeds += 1;
                         } else if (node.nodeType === 3) { // Text node
                            let text = node.textContent.trim();
                            if (text) elements.push(text);
@@ -127,8 +133,9 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
                         }
                     };
                     walk(container);
-                    return elements.join('\\n\\n');
+                    return {content: elements.join('\\n\\n'), embeds: embeds};
                 }""")
+                content = walked["content"] if walked else None
 
                 # Generic fallback if WeChat specific extraction yields nothing;
                 # recorded so the receipt does not treat page chrome as the article.
@@ -149,6 +156,8 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
                     "author": "",
                     "extraction": extraction,
                 }
+                if walked and extraction == "container":
+                    result["embedded_media"] = int(walked.get("embeds") or 0)
             else:
                 # Generic fallback: a Bilibili page may navigate after the
                 # initial HTTP 412 response. Allow DOM stabilization and retry

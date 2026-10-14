@@ -59,7 +59,7 @@ async def fetch_wechat(url: str) -> Dict[str, Any]:
         from x_reader.fetchers.browser import fetch_via_browser
 
         data = await fetch_via_browser(url)
-        return {
+        article = {
             "title": data["title"],
             "content": _proxy_wechat_images(data["content"]),
             "author": data.get("author", ""),
@@ -67,6 +67,9 @@ async def fetch_wechat(url: str) -> Dict[str, Any]:
             "platform": "wechat",
             "extraction": data.get("extraction", "page_body"),
         }
+        if isinstance(data.get("embedded_media"), int):
+            article["embedded_media"] = data["embedded_media"]  # players and frames the walk counted
+        return article
     except RuntimeError:
         # Playwright not installed — re-raise with original Jina error context
         raise
