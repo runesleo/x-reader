@@ -261,6 +261,20 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         odd_reply = twitter._structure_from_fxtwitter({"id": "1", "text": "main", "author": {"screen_name": "a"},
                                                        "replying_to_status": "not-a-status", "replying_to": "b"})
         self.assertEqual(odd_reply["structure_status"], "unknown")
+        # X handles are [A-Za-z0-9_]{1,15}; post ids are ASCII numbers; polls have two to four options
+        for screen in ("中", "a" * 16):
+            self.assertEqual(twitter._structure_from_fxtwitter(
+                {"id": "1", "text": "m", "author": {"screen_name": screen}})["structure_status"], "unknown", screen)
+        post = {"id": "1", "text": "main", "author": {"screen_name": "a"}}
+        for status in (10 ** 30, "١٢٣"):
+            self.assertEqual(twitter._structure_from_fxtwitter(
+                dict(post, replying_to="a", replying_to_status=status))["structure_status"], "unknown", status)
+        broken_id = twitter._structure_from_fxtwitter(
+            dict(post, quote={"id": {"broken": True}, "text": "q", "author": {"screen_name": "b"}}))
+        self.assertEqual(broken_id["quote_status"], "unknown")
+        one_option = twitter._structure_from_fxtwitter(dict(post, poll={"choices": [{"label": "Yes"}]}))
+        self.assertEqual(one_option["poll_status"], "unknown")
+        self.assertEqual(twitter._extract_author("https://x.com/i/status/123"), "")
         base = {"id": "1", "text": "main", "author": {"screen_name": "a"}}
         for replied, status in ((" ", "5"), ("a", []), ("a", False), ("a", ""), ("a", None)):
             reply = twitter._structure_from_fxtwitter(dict(base, replying_to=replied, replying_to_status=status))

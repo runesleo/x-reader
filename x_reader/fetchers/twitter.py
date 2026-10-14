@@ -68,7 +68,7 @@ def _extract_status_id(url: str) -> Optional[str]:
 def _extract_author(url: str) -> str:
     """Extract @username from tweet URL."""
     match = re.search(r'x\.com/([A-Za-z0-9_]+)/(?:status|article)', url)
-    return f"@{match.group(1)}" if match else ""
+    return f"@{match.group(1)}" if match and match.group(1).lower() != "i" else ""  # /i/status/<id> names nobody
 
 
 def _is_tweet_url(url: str) -> bool:
@@ -211,7 +211,7 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     if isinstance(quote, dict):
         quote_text = quote.get("text").strip() if isinstance(quote.get("text"), str) else ""
         quote_author = _handle(quote)
-        if not quote_author or _reply_state(quote) == "unknown":
+        if not quote_author or not _post_id(quote.get("id")) or _reply_state(quote) == "unknown":
             quote_text = ""  # no readable author handle, or an unreadable reply relation: a damaged layer
         quote_media = _media_status_from_fxtwitter(quote) if quote.get("id") else "unknown"
         if not quote_text or quote_media == "unknown":
@@ -232,8 +232,8 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     choices = poll.get("choices") if isinstance(poll, dict) else None
     labels = [str(choice.get("label")).strip() if isinstance(choice, dict) and isinstance(choice.get("label"), str)
               else "" for choice in choices] if isinstance(choices, list) else []
-    if labels and all(labels):
-        # Read only when every option came back with its wording.
+    if 2 <= len(labels) <= 4 and all(labels):
+        # Read only when every option (an X poll has two to four) came back with its wording.
         lines = []
         for choice, label in zip(choices, labels):
             pct = choice.get("percentage")
@@ -254,20 +254,32 @@ def _reply_state(tweet: dict) -> str:
     status, replied = tweet.get("replying_to_status"), tweet.get("replying_to")
     if status is None:  # FxTwitter sends null (or nothing) for a post that is not a reply
         return "none" if replied is None else "unknown"
-    if isinstance(status, bool) or not (
-            (isinstance(status, int) and status > 0) or (isinstance(status, str) and re.fullmatch(r"[1-9]\d{0,25}", status))):
+    if not _post_id(status):
         return "unknown"  # a reply names the post it answers by its numeric id
     screen = _handle(tweet)
-    if not (screen and isinstance(replied, str) and re.fullmatch(r"@?\w{1,50}", replied.strip())):
+    if not (screen and isinstance(replied, str) and _HANDLE.fullmatch(replied.strip().lstrip("@"))):
         return "unknown"
     return "self" if screen.lower() == replied.strip().lstrip("@").lower() else "other"
 
 
+_HANDLE = re.compile(r"[A-Za-z0-9_]{1,15}")
+_POST_ID = re.compile(r"[1-9][0-9]{0,19}")
+
+
+def _post_id(value) -> bool:
+    """An X post id: a positive decimal number of at most 20 ASCII digits."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return 0 < value < 10 ** 20
+    return isinstance(value, str) and bool(_POST_ID.fullmatch(value))
+
+
 def _handle(tweet: dict) -> str:
-    """The post author's handle, or "" when the author is missing or not readable."""
+    """The post author's handle, or "" when the author is missing or not an X handle."""
     author = tweet.get("author")
     screen = author.get("screen_name") if isinstance(author, dict) else None
-    return screen.strip() if isinstance(screen, str) and re.fullmatch(r"\w{1,50}", screen.strip()) else ""
+    return screen.strip() if isinstance(screen, str) and _HANDLE.fullmatch(screen.strip()) else ""
 
 
 def _is_self_reply(tweet: dict) -> bool:
@@ -501,7 +513,7 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
 
                 result = _with_structure({
                     "text": text,
-                    "author": author or data.get("author", ""),
+                    "author": structure.get("author") or author or data.get("author", ""),
                     "url": url,
                     "title": data.get("title", ""),
                     "platform": "twitter",
@@ -526,7 +538,7 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
             if text:
                 return _with_structure({
                     "text": text,
-                    "author": author or data.get("author", ""),
+                    "author": data.get("author") or author,
                     "url": url,
                     "title": data.get("title", ""),
                     "platform": "twitter",

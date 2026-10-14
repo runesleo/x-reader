@@ -541,7 +541,8 @@ class GenericReadTest(unittest.TestCase):
                        "<div style='display:none;display:var(--shown)'>Subscribe to continue reading.</div>"):
             _page, receipt = self._page_receipt(
                 f"<html><head><title>T</title></head><body>{long_main}{notice}</body></html>")
-            self.assertEqual(receipt["status"], "PARTIAL", notice)
+            # the wall counts (PARTIAL); a display x-reader cannot work out leaves the page unverified first
+            self.assertIn(receipt["status"], ("PARTIAL", "UNKNOWN"), notice)
 
     def test_hidden_markup_never_hides_a_wall(self):
         # author CSS can always show hidden markup, so a hidden wall still counts;
@@ -741,6 +742,10 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main style='display:grid;grid-auto-rows:minmax(0,0fr)'>{article}</main>"),
             ("<body>", f"<main style='color:white;background:white;background:black,none'>{article}</main>"),
             ("<body>", f"<main style='height:0;height:none'>{article}</main>"),
+            # geometry that adds up down the tree
+            ("<body>", "<main>" + "<div style='margin-left:-16px'>" * 320 + article + "</div>" * 320 + "</main>"),
+            ("<body>", "<main>" + "<div style='font-size:400%'>" * 6 + article + "</div>" * 6 + "</main>"),
+            ("<body style='height:0'>", f"<main style='height:inherit'>{article}</main><div>{article}</div>"),
             # text a set height cannot hold spills over what follows
             ("<body>", f"<main><div style='height:0'><div>{article}</div></div><div>{article}</div></main>"),
             ("<body>", f"<main style='display:grid;height:0;grid-auto-rows:minmax(0,1fr)'>{article}</main>"),
@@ -847,6 +852,8 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<nav style='position:static;left:10000px'>Home</nav><div style='display:flex;order:1;order:0'>"
                        f"Safe order</div><main>{article}</main>"),
             ("<body>", f"<main><p dir='rtl'>مرحبا بالعالم</p>{article}</main>"),
+            ("<body>", f"<nav style='position:absolute;position:static'>Home</nav><nav style='position:relative;"
+                       f"left:100px;left:0'>Home</nav><main style='float:right;float:none'>{article}</main>"),
             ("<body>", f"<main style='display:flex;grid-auto-rows:0'>{article}</main>"),  # grid tracks need a grid
             ("<body>", f"<main><p>漢<ruby>字<rt>かんじ</rt></ruby>の読み方。</p><img src='a.jpg' style='float:left' "
                        f"alt='A chart'>{article}</main>"),
@@ -886,7 +893,16 @@ class GenericReadTest(unittest.TestCase):
                        "<div style='display:flex;gap:20px'><div style='display:contents'><div>Subscribe</div>"
                        "<div>to continue.</div></div></div>",
                        "<ruby>word<rt>Subscribe <b>to</b> continue.</rt></ruby>",
-                       "<script type='text/plain' style='display:block'>Subscribe to continue reading.</script>"):
+                       "<script type='text/plain' style='display:block'>Subscribe to continue reading.</script>",
+                       # multi-keyword displays, dropped values, CSS-wide keywords, logical floats in rtl
+                       "<div style='display:block flex'><div>Sub</div><div>scribe to continue.</div></div>",
+                       "<div style='display:flex;display:bogus'><div>Sub</div><div>scribe to continue.</div></div>",
+                       "<script type='text/plain' style='display:initial'>Subscribe to continue reading.</script>",
+                       "<script type='text/plain' style='all:initial'>Subscribe to continue reading.</script>",
+                       "<div dir='rtl'><div dir='ltr' style='display:flex;direction:inherit'><span>continue.</span>"
+                       "<span>Subscribe to </span></div></div>",
+                       "<div dir='rtl'><div style='float:inline-start'>continue.</div>"
+                       "<div style='float:inline-start'>Subscribe to </div></div>"):
             page, receipt = self._page_receipt(
                 f"<html><head><title>T</title></head><body>{notice}<main>{article}</main></body></html>")
             self.assertNotEqual(receipt["status"], "PASS", notice)
@@ -996,6 +1012,7 @@ class GenericReadTest(unittest.TestCase):
             "".join(f'<p style="color:red;{"margin:0 1px;" * 1500}">x</p>' for _ in range(250)),  # style volume
             "<main>" + '<span style="color:#123456;padding:1px 2px;font-family:a,b">w </span>' * 30_000 + "</main>",
             "<main><p>" + ARTICLE + "</p></main>" + "</b>" * 399_000,  # parse errors are counted, not kept
+            "<main>" + ARTICLE + "</main><div hidden>" + "A" * 1_100_000 + "\U0001F600</div>",  # wall text budget
             "<div a=x\" " + " ".join(f"a{i}=1" for i in range(jina.MAX_TAG_ATTRIBUTES + 10)) + " \">x</div>",
             "<table>" + "x<b></b>" * 12000,  # foster-parented text copies
             "<html><head><title>" + "word " * 200_000 + "</title></head><body><main>"
