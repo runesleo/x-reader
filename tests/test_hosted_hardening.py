@@ -739,6 +739,8 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main style='color:white;color:rgb(0,0,0 / 1)'>{article}</main>"),
             ("<body>", f"<main style='color:white;background:white;background:black red'>{article}</main>"),
             ("<body>", f"<main style='display:grid;grid-auto-rows:minmax(0,0fr)'>{article}</main>"),
+            ("<body>", f"<main style='color:white;background:white;background:black,none'>{article}</main>"),
+            ("<body>", f"<main style='height:0;height:none'>{article}</main>"),
             # text a set height cannot hold spills over what follows
             ("<body>", f"<main><div style='height:0'><div>{article}</div></div><div>{article}</div></main>"),
             ("<body>", f"<main style='display:grid;height:0;grid-auto-rows:minmax(0,1fr)'>{article}</main>"),
@@ -842,6 +844,9 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main style='height:100%'>{article}</main>"),
             ("<body>", f"<main style='font-size:1px;font-size:16px;height:0;height:auto'>{article}</main>"),
             ("<body>", f"<main style='color:rgb(0 0 0 / 1)'>{article}</main>"),
+            ("<body>", f"<nav style='position:static;left:10000px'>Home</nav><div style='display:flex;order:1;order:0'>"
+                       f"Safe order</div><main>{article}</main>"),
+            ("<body>", f"<main><p dir='rtl'>مرحبا بالعالم</p>{article}</main>"),
             ("<body>", f"<main style='display:flex;grid-auto-rows:0'>{article}</main>"),  # grid tracks need a grid
             ("<body>", f"<main><p>漢<ruby>字<rt>かんじ</rt></ruby>の読み方。</p><img src='a.jpg' style='float:left' "
                        f"alt='A chart'>{article}</main>"),
@@ -872,7 +877,16 @@ class GenericReadTest(unittest.TestCase):
                        "<div style='float:right'>continue.</div><div style='float:right'>Subscribe to </div>",
                        "<ul><li style=\"list-style-type:'Subscribe '\">to continue.</li></ul>",
                        "<p><q style='quotes:\"Subscribe \" \"\"'>to continue.</q></p>",
-                       "<img src='missing.png' alt='Please sign in to continue.'>"):
+                       "<img src='missing.png' alt='Please sign in to continue.'>",
+                       # escaped layout values, inherited right-to-left, known gaps at some edges,
+                       # boxes display:contents leaves out, whole annotations, data blocks shown by CSS
+                       "<div style='display:\\66 lex;gap:20px'><div>Subscribe</div><div>to continue.</div></div>",
+                       "<div dir='rtl'><div style='display:flex'><span>continue.</span><span>Subscribe to </span></div></div>",
+                       "<div>Sub<b>scribe</b><i style='margin-left:5px'>to</i><em style='margin-left:5px'>continue.</em></div>",
+                       "<div style='display:flex;gap:20px'><div style='display:contents'><div>Subscribe</div>"
+                       "<div>to continue.</div></div></div>",
+                       "<ruby>word<rt>Subscribe <b>to</b> continue.</rt></ruby>",
+                       "<script type='text/plain' style='display:block'>Subscribe to continue reading.</script>"):
             page, receipt = self._page_receipt(
                 f"<html><head><title>T</title></head><body>{notice}<main>{article}</main></body></html>")
             self.assertNotEqual(receipt["status"], "PASS", notice)
@@ -886,10 +900,11 @@ class GenericReadTest(unittest.TestCase):
         page, receipt = self._page_receipt(
             f"<html><head><title>{'A' * 1000} | Sign in</title></head><body><main>{article}</main></body></html>")
         self.assertEqual(receipt["reason_code"], "page_too_large_to_check")  # past what x-reader checks
-        page, receipt = self._page_receipt(
-            "<html style='height:100%'><head><title>T</title></head><body style='height:100%'>"
-            f"<div style='height:0%'>{article}</div><div>{article}</div></body></html>")
-        self.assertNotEqual(receipt["status"], "PASS")  # a percentage of a set height is a set height
+        for root in ("height:100%", "block-size:100%"):
+            page, receipt = self._page_receipt(
+                f"<html style='{root}'><head><title>T</title></head><body style='height:100%'>"
+                f"<div style='height:0%'>{article}</div><div>{article}</div></body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", root)  # a percentage of a set height is a set height
         long_title = "Brand " * 60 + "| Sign in"
         page, receipt = self._page_receipt(
             f"<html><head><title>{long_title}</title></head><body><main>{article}</main></body></html>")

@@ -200,8 +200,8 @@ def _fetch_via_fxtwitter(url: str, timeout: float = 10) -> Dict[str, Any]:
 
 def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     """Quoted post, poll and X Article layers, which the post text alone does not carry."""
-    if not (tweet.get("id") and "text" in tweet) or _reply_state(tweet) == "unknown":
-        return {"structure_status": "unknown"}  # (a reply whose thread relation cannot be read)
+    if not (tweet.get("id") and "text" in tweet) or _reply_state(tweet) == "unknown" or not _handle(tweet):
+        return {"structure_status": "unknown"}  # (no readable author, or a reply relation that cannot be read)
     result: Dict[str, Any] = {"structure_status": "verified", "quote_status": "none",
                               "poll_status": "none", "article_status": "none",
                               "self_reply": _is_self_reply(tweet)}
@@ -210,11 +210,9 @@ def _structure_from_fxtwitter(tweet: dict) -> Dict[str, Any]:
     quote = tweet.get("quote")
     if isinstance(quote, dict):
         quote_text = quote.get("text").strip() if isinstance(quote.get("text"), str) else ""
-        quote_author = quote.get("author")
-        screen = quote_author.get("screen_name") if isinstance(quote_author, dict) else None
-        if ("author" in quote and not (isinstance(screen, str) and screen.strip())) or _reply_state(quote) == "unknown":
-            quote_text = ""  # an author without a readable handle, or an unreadable reply relation: a damaged layer
-        quote_author = screen.strip() if isinstance(screen, str) else ""
+        quote_author = _handle(quote)
+        if not quote_author or _reply_state(quote) == "unknown":
+            quote_text = ""  # no readable author handle, or an unreadable reply relation: a damaged layer
         quote_media = _media_status_from_fxtwitter(quote) if quote.get("id") else "unknown"
         if not quote_text or quote_media == "unknown":
             result["quote_status"] = "unknown"
@@ -256,13 +254,20 @@ def _reply_state(tweet: dict) -> str:
     status, replied = tweet.get("replying_to_status"), tweet.get("replying_to")
     if status is None:  # FxTwitter sends null (or nothing) for a post that is not a reply
         return "none" if replied is None else "unknown"
-    if isinstance(status, bool) or not isinstance(status, (str, int)) or not str(status).strip():
+    if isinstance(status, bool) or not (
+            (isinstance(status, int) and status > 0) or (isinstance(status, str) and re.fullmatch(r"[1-9]\d{0,25}", status))):
+        return "unknown"  # a reply names the post it answers by its numeric id
+    screen = _handle(tweet)
+    if not (screen and isinstance(replied, str) and re.fullmatch(r"@?\w{1,50}", replied.strip())):
         return "unknown"
+    return "self" if screen.lower() == replied.strip().lstrip("@").lower() else "other"
+
+
+def _handle(tweet: dict) -> str:
+    """The post author's handle, or "" when the author is missing or not readable."""
     author = tweet.get("author")
     screen = author.get("screen_name") if isinstance(author, dict) else None
-    if not (isinstance(screen, str) and screen.strip() and isinstance(replied, str) and replied.strip()):
-        return "unknown"
-    return "self" if screen.strip().lower() == replied.strip().lower() else "other"
+    return screen.strip() if isinstance(screen, str) and re.fullmatch(r"\w{1,50}", screen.strip()) else ""
 
 
 def _is_self_reply(tweet: dict) -> bool:
@@ -477,28 +482,36 @@ async def fetch_twitter(url: str) -> Dict[str, Any]:
                 media_probe_method = "oembed_html"
                 # oEmbed carries no structured media, quote, poll or article data.
                 structure: Dict[str, Any] = {}
+                oembed_text, fetch_method = text, "oembed"
                 try:
                     structure = _fetch_via_fxtwitter(url, timeout=3)
-                    if media_status == "unknown":
-                        media_status = structure.get("media_status", "unknown")
-                        media_probe_method = "fxtwitter"
+                    probe_media = structure.get("media_status", "unknown")
+                    if probe_media == "present" or media_status == "unknown":
+                        media_status, media_probe_method = (
+                            ("present", media_probe_method) if media_status == "present" else (probe_media, "fxtwitter"))
+                    probe_text = (structure.get("text") or "").strip()
+                    if probe_text and probe_text != text:
+                        # the structured read carries the whole post; oEmbed's text may be cut short
+                        text, fetch_method = probe_text, "fxtwitter"
                 except Exception as probe_error:
                     logger.warning(
                         f"[Twitter] Structure probe unavailable ({type(probe_error).__name__}); "
                         "media and structure stay unknown"
                     )
 
-                return _with_structure({
+                result = _with_structure({
                     "text": text,
                     "author": author or data.get("author", ""),
                     "url": url,
                     "title": data.get("title", ""),
                     "platform": "twitter",
-                    "fetch_method": "oembed",
+                    "fetch_method": fetch_method,
                     "post_id_verified": True,
                     "media_status": media_status,
                     "media_probe_method": media_probe_method,
                 }, structure)
+                result["thread_marker"] = result["thread_marker"] or _looks_like_thread(oembed_text)
+                return result
             else:
                 logger.warning("[Twitter] oEmbed returned thin or truncated content")
         except Exception as e:

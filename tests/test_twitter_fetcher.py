@@ -170,10 +170,26 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
             twitter._fetch_via_oembed = original_oembed
             twitter._fetch_via_fxtwitter = original_fx
 
-        self.assertEqual(data["fetch_method"], "oembed")
+        # the structured read's text is the post (oEmbed's may be cut short)
+        self.assertEqual(data["fetch_method"], "fxtwitter")
+        self.assertEqual(data["text"], "same")
         self.assertEqual(data["url"], "https://x.com/runesleo/status/123")
         self.assertEqual(data["media_status"], "none")
         self.assertEqual(data["media_probe_method"], "fxtwitter")
+
+    def test_a_longer_structured_text_replaces_a_cut_oembed_text(self):
+        from unittest.mock import patch
+
+        prefix = "这是一个完整的公开推文内容，长度足够，可以直接使用。"
+        with patch.object(twitter, "_fetch_via_oembed", return_value={
+                "text": prefix, "post_id": "123", "author": "Leo", "title": "t", "media_status": "none"}), \
+                patch.object(twitter, "_fetch_via_fxtwitter", return_value={
+                    "text": prefix + "\nHere is the entire argument in this thread 🧵", "media_status": "none",
+                    "structure_status": "verified", "quote_status": "none", "poll_status": "none",
+                    "article_status": "none"}):
+            data = asyncio.run(twitter.fetch_twitter("https://x.com/runesleo/status/123"))
+        self.assertIn("entire argument", data["text"])
+        self.assertTrue(data["thread_marker"])
 
     def test_fetch_twitter_keeps_oembed_media_presence_and_probes_structure(self):
         original_oembed = twitter._fetch_via_oembed
@@ -207,7 +223,7 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         self.assertEqual(data["structure_status"], "verified")
 
     def test_polls_are_read_only_with_every_option(self):
-        base = {"id": "1", "text": "post"}
+        base = {"id": "1", "text": "post", "author": {"screen_name": "a"}}
         for poll in ({"choices": []}, {"choices": [None]}, {"choices": [{}]}, {"choices": [{"label": ""}]}, {},
                      {"choices": [{"label": "Yes"}, {"label": 3}]}):
             self.assertEqual(twitter._structure_from_fxtwitter(dict(base, poll=poll))["poll_status"], "unknown", poll)
@@ -218,12 +234,14 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
     def test_text_that_is_not_a_string_is_not_read(self):
         from unittest.mock import MagicMock, patch
 
-        quoted = twitter._structure_from_fxtwitter({"id": "1", "text": "main", "quote": {"id": "2", "text": [None]}})
+        quoted = twitter._structure_from_fxtwitter({"id": "1", "text": "main", "author": {"screen_name": "a"},
+                                                     "quote": {"id": "2", "text": [None], "author": {"screen_name": "b"}}})
         self.assertEqual(quoted["quote_status"], "unknown")
         self.assertNotIn("quote_text", quoted)
         for author in ([], "alice", True, None):
             damaged = twitter._structure_from_fxtwitter(
-                {"id": "1", "text": "main", "quote": {"id": "2", "text": "q", "author": author}})
+                {"id": "1", "text": "main", "author": {"screen_name": "a"},
+                 "quote": {"id": "2", "text": "q", "author": author}})
             self.assertEqual(damaged["quote_status"], "unknown", author)
             # a reply whose author cannot be read may be a thread: the structure is unverified
             reply = twitter._structure_from_fxtwitter(
@@ -231,8 +249,18 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
             self.assertEqual(reply["structure_status"], "unknown", author)
         for quote_author in ({"screen_name": ["alice"]}, {}, {"screen_name": " "}):
             damaged = twitter._structure_from_fxtwitter(
-                {"id": "1", "text": "main", "quote": {"id": "2", "text": "q", "author": quote_author}})
+                {"id": "1", "text": "main", "author": {"screen_name": "a"},
+                 "quote": {"id": "2", "text": "q", "author": quote_author}})
             self.assertEqual(damaged["quote_status"], "unknown", quote_author)
+        missing = twitter._structure_from_fxtwitter({"id": "1", "text": "main", "author": {"screen_name": "a"},
+                                                     "quote": {"id": "2", "text": "q"}})
+        self.assertEqual(missing["quote_status"], "unknown")  # no author: no "[Quoted post by @]"
+        for top in ({}, {"author": {}}, {"author": {"screen_name": ""}}):
+            unread = twitter._structure_from_fxtwitter(dict({"id": "1", "text": "main"}, **top))
+            self.assertEqual(unread["structure_status"], "unknown", top)
+        odd_reply = twitter._structure_from_fxtwitter({"id": "1", "text": "main", "author": {"screen_name": "a"},
+                                                       "replying_to_status": "not-a-status", "replying_to": "b"})
+        self.assertEqual(odd_reply["structure_status"], "unknown")
         base = {"id": "1", "text": "main", "author": {"screen_name": "a"}}
         for replied, status in ((" ", "5"), ("a", []), ("a", False), ("a", ""), ("a", None)):
             reply = twitter._structure_from_fxtwitter(dict(base, replying_to=replied, replying_to_status=status))
@@ -292,7 +320,7 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
 
     def test_fxtwitter_structure_appends_quote_and_poll_and_flags_articles(self):
         tweet = {
-            "id": "1", "text": "My take 👇",
+            "id": "1", "text": "My take 👇", "author": {"screen_name": "leo"},
             "quote": {"id": "2", "text": "Original claim", "author": {"screen_name": "alice"}},
             "poll": {"choices": [{"label": "Yes", "percentage": 60}, {"label": "No", "percentage": 40}]},
         }
@@ -304,14 +332,16 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         self.assertIn("[Quoted post by @alice]\nOriginal claim", result["text"])
         self.assertIn("- Yes (60%)", result["text"])
         with_media = twitter._structure_from_fxtwitter({**tweet, "quote": {
-            "id": "2", "text": "chart", "media": {"photos": [{"url": "https://pbs.twimg.com/x.jpg"}]}}})
+            "id": "2", "text": "chart", "author": {"screen_name": "alice"},
+            "media": {"photos": [{"url": "https://pbs.twimg.com/x.jpg"}]}}})
         self.assertEqual(with_media["quote_status"], "media_unread")
         for layer in ({"article": {"title": "T"}}, {"poll": {"choices": []}}, {"quote": {"id": "9", "text": "q"}},
                       {"text": "1/ a thread inside the quote"}):
             nested = twitter._structure_from_fxtwitter({**tweet, "poll": None, "quote": {
-                "id": "2", "text": "Original claim", **layer}})
+                "id": "2", "text": "Original claim", "author": {"screen_name": "alice"}, **layer}})
             self.assertEqual(nested["quote_status"], "incomplete", layer)
-        article = twitter._structure_from_fxtwitter({"id": "3", "text": "x.com/i/article/3", "article": {"title": "T"}})
+        article = twitter._structure_from_fxtwitter({"id": "3", "text": "x.com/i/article/3", "author": {"screen_name": "a"},
+                                                     "article": {"title": "T"}})
         self.assertEqual(article["article_status"], "present")
         self.assertEqual(twitter._structure_from_fxtwitter({})["structure_status"], "unknown")
 
@@ -323,7 +353,8 @@ class TwitterFetcherHelpersTest(unittest.TestCase):
         reply_to_other = dict(post, replying_to="someone_else")
         structure = twitter._structure_from_fxtwitter(reply_to_other)
         self.assertFalse(twitter._with_structure({"text": post["text"]}, structure)["thread_marker"])
-        quoted = twitter._structure_from_fxtwitter({"id": "6", "text": "Look", "quote": dict(post, id="5")})
+        quoted = twitter._structure_from_fxtwitter({"id": "6", "text": "Look", "author": {"screen_name": "bo"},
+                                                     "quote": dict(post, id="5")})
         self.assertEqual(quoted["quote_status"], "incomplete")
 
     def test_text_only_fxtwitter_post_has_no_media(self):
