@@ -393,9 +393,20 @@ _BIDI_OVERRIDE = re.compile("[\u202d\u202e]")
 _RTL_LETTERS = "\u0590-\u08ff\u200f\ufb1d-\ufdff\ufe70-\ufefe\U00010800-\U00010fff\U0001e800-\U0001efff"
 _RTL_RUN = re.compile(f"[{_RTL_LETTERS}]+")
 _LTR_LETTER = re.compile(rf"[^\W\d_{_RTL_LETTERS}]")
-_FIRST_STRONG = re.compile(rf"([{_RTL_LETTERS}])|[^\W\d_]")
+_FIRST_STRONG = re.compile(rf"([{_RTL_LETTERS}])|[^\W\d_]|\u200e")
 _RTL_EMBEDDING = re.compile("[\u202b\u2067\u2068]")
 _PRE_RUN = re.compile(r"([ \t]*)([^ \t]*)")
+# Spaces a line may break at, and the ones that join words into one unbreakable run.
+_BREAKABLE = re.compile("[ \t\n\r\f\u1680\u2000-\u2006\u2008-\u200a\u205f\u3000]+")
+_NO_BREAK = re.compile("[\u00a0\u2007\u202f\u2060\ufeff]")
+# Inline boxes laid out whole (atomic): bidi treats each as one neutral object.
+_ATOMIC_TAGS = {"img", "input", "button", "select", "textarea", "video", "audio", "iframe", "object", "embed",
+                "canvas", "meter", "progress"}
+_ATOMIC_DISPLAYS = {"inline-block", "inline-flex", "inline-grid", "inline-table", "-webkit-inline-box",
+                    "-ms-inline-flexbox"}
+_TABLE_INTERNAL = {"table-row", "table-row-group", "table-header-group", "table-footer-group", "table-caption",
+                   "table-cell", "table-column", "table-column-group"}
+_HORIZONTAL_WRITING = {"horizontal-tb", "initial", "revert", "revert-layer"}
 # Letters a line gives a full em: East Asian wide and fullwidth ones.
 _WIDE_LETTERS = re.compile("[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6"
                            "\U00020000-\U0003fffd]")
@@ -772,6 +783,8 @@ def _presentational(name: str, attrs: dict, parent: dict) -> list:
         declarations.append(("float", align, False))  # an aligned table floats
     if name == "caption" and align in ("top", "bottom"):
         declarations.append(("caption-side", align, False))
+    if name in ("td", "th") and "nowrap" in attrs:
+        declarations.append(("white-space", "nowrap", False))  # <td nowrap>: its lines do not wrap
     if name == "table":
         for attr in ("cellpadding", "cellspacing", "border"):
             amount = _legacy_number(attrs.get(attr))
@@ -983,8 +996,8 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
                 break
         if value.startswith("\ufffd") and prop != "font-family":
             return True  # a value spelled with escapes: whatever browsers make of it is not known here
-        # offsets move only positioned boxes
-        exempt = prop.startswith(_REACH_EXEMPT) or "radius" in prop or (
+        # offsets move only positioned boxes; margins and padding are judged by the values that win (below)
+        exempt = prop.startswith(_REACH_EXEMPT) or "radius" in prop or prop in _MARGINS or prop in _PADDINGS or (
             prop in _OFFSETS and position in {None, "static"} | _WIDE_KEYWORDS)
         if not exempt:
             if custom and re.search(r"\b(?:var|env)\(", value):
@@ -1007,11 +1020,6 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
         elif prop == "text-shadow":
             if value not in _NO_PAINT and _reach(value, font_px, combined=False) > font_px:
                 return True
-        elif prop in _MARGINS:
-            for token in value.split():
-                amount = _box_px(token, font_px)
-                if amount is not None and amount[0] * (10 if amount[1] else 1) < -font_px:
-                    return True
         elif prop == "line-height":
             parsed = _line(value, font_px, custom)
             if isinstance(parsed, tuple) and (parsed[1] * font_px if parsed[0] == "mult" else parsed[1]) > _FAR_PX:
@@ -1032,8 +1040,20 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
             paints = True
         if prop.startswith(("padding", "border")):
             vertical = max(vertical, _vertical_box(prop, value, font_px))
+    for kind in ("margin", "padding"):
+        for token in _side_winners(declarations, kind, rtl).values():
+            if custom and re.search(r"\b(?:var|env)\(", token):
+                return True
+            if _reach(token, font_px) > _FAR_PX:
+                return True  # geometry reaching past 5000px
+            amount = _box_px(token, font_px) if kind == "margin" else None
+            if amount is not None and amount[0] * (10 if amount[1] else 1) < -font_px:
+                return True  # a negative margin past 1em pulls text over what is beside it
     if display in _FLOWING_DISPLAYS and rtl:
         return True  # flex and grid items line up from the right: shown in another order than written
+    if rtl and any(prop in ("columns", "column-count", "column-width") and value not in (
+            "auto", "initial", "unset", "revert", "revert-layer") for prop, value, _important in declarations):
+        return True  # columns line up from the right too
     inline = display == "inline" or (display is None and name in _INLINE_TAGS)
     if relative and (moved or (name not in ("html", "body") and not inline and limited
                                and not _clips_both(declarations))):
@@ -1050,7 +1070,7 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
     return False
 
 
-def _style_context(name: str, attrs: dict, parent: dict) -> dict:
+def _style_context(name: str, attrs: dict, parent: dict, auto_rtl=None) -> dict:
     """How an element's own markup affects whether its text is shown, given its
     parent's: {"visibility": "visible" | "hidden" | "unknown", "font_px", "custom",
     "color", "bg", "line", "text_ok", "sectioned", "cover", "box_shown"}.
@@ -1084,10 +1104,12 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
             "sectioned": parent["sectioned"] or name in _SECTIONING, "cover": False, "box_shown": False,
             "links": parent["links"], "clip_box": False, "display": None, "floated": False,
             "pre": parent["pre"] or name in _PRE_TAGS, "definite_h": False, "rtl": parent["rtl"], "spaced": False,
-            "gap": False, "offset_x": parent["offset_x"], "negative_margin": 0.0, "offset_y": parent["offset_y"],
+            "gap": False, "offset_x": parent["offset_x"], "offset_y": parent["offset_y"],
             "pre_nowrap": parent["pre_nowrap"] or name in _NOWRAP_PRE_TAGS, "caption_bottom": parent["caption_bottom"],
             "indent": parent["indent"], "raise": 0.0 if name in _BLOCK_TAGS else parent["raise"],
-            "width": parent["width"], "text_nowrap": parent["text_nowrap"],
+            "width": parent["width"], "text_nowrap": parent["text_nowrap"] or name == "nobr",
+            "isolate": name in ("bdi", "output") or "dir" in attrs, "bidi_override": False,
+            "pull_y": parent["pull_y"],
         }
     context = {
         "visibility": "visible", "font_px": parent["font_px"], "custom": parent["custom"],
@@ -1095,10 +1117,12 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
         "sectioned": parent["sectioned"] or name in _SECTIONING, "cover": False, "box_shown": False,
         "links": parent["links"], "clip_box": False, "display": None, "floated": False,
         "pre": parent["pre"] or name in _PRE_TAGS, "definite_h": False, "rtl": parent["rtl"], "spaced": False,
-        "gap": False, "offset_x": parent["offset_x"], "negative_margin": 0.0, "offset_y": parent["offset_y"],
+        "gap": False, "offset_x": parent["offset_x"], "offset_y": parent["offset_y"],
         "pre_nowrap": parent["pre_nowrap"] or name in _NOWRAP_PRE_TAGS, "caption_bottom": parent["caption_bottom"],
         "indent": parent["indent"], "raise": parent["raise"], "width": parent["width"],
-        "text_nowrap": parent["text_nowrap"],
+        "text_nowrap": parent["text_nowrap"] or name == "nobr",
+        "isolate": name in ("bdi", "output", "bdo") or "dir" in attrs, "bidi_override": name == "bdo",
+        "pull_y": parent["pull_y"],
     }
     if name == "body":
         # <body link/vlink> color every link; a link may show either.
@@ -1123,8 +1147,14 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
     if any(prop.startswith("--") for prop in names):
         context["custom"] = True
     displays = [value for prop, value, _important in declarations if prop == "display"]
-    if displays == ["none"] and "all" not in names:
-        return dict(context, visibility="hidden")  # not rendered, whatever else the style says
+    if _winner(declarations, "display", lambda value: value if _display_value(value) else None) == "none" \
+            and "all" not in names:
+        return dict(context, visibility="hidden")  # not rendered (the display that wins), whatever else it says
+    bidi_values = [value for prop, value, _important in declarations if prop == "unicode-bidi"]
+    if any("override" in value for value in bidi_values):
+        context["bidi_override"] = True  # reversed text can spell what the text does not
+    if any(value not in ("normal", "initial", "revert", "revert-layer") for value in bidi_values):
+        context["isolate"] = True
     until_found = (attrs.get("hidden") or "").strip().lower() == "until-found"
     custom = context["custom"]
 
@@ -1142,11 +1172,12 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
     if direction is not None:  # an inline direction beats the dir attribute
         context["rtl"] = parent["rtl"] if direction in ("inherit", "unset") else direction == "rtl" if direction in (
             "rtl", "ltr", "initial") else True  # (a value not known: may be right-to-left)
-    elif written in ("rtl", "ltr", "auto"):
-        context["rtl"] = written != "ltr"  # (auto follows the text: it may be right-to-left)
-    elif name == "bdi":
-        context["rtl"] = True  # a <bdi> takes its direction from its text: it may be right-to-left
-    if "plaintext" in (_winner(declarations, "unicode-bidi", lambda value: value) or ""):
+    elif written in ("rtl", "ltr"):
+        context["rtl"] = written == "rtl"
+    elif written == "auto" or name == "bdi":
+        # dir=auto (and a <bdi>) takes the direction of the first strong letter in its text
+        context["rtl"] = True if auto_rtl is None else auto_rtl
+    if any(prop == "unicode-bidi" and "plaintext" in value for prop, value, _important in declarations):
         context["rtl"] = True  # each paragraph takes the direction of its text
     context["cover"] = _covers(name, attrs, declarations, own_px, custom, context["rtl"])
     # A relative box that clips both axes and passed _covers (so it stays put):
@@ -1157,12 +1188,14 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
     rise = _relative_dy(declarations, own_px, context["rtl"]) if position == "relative" else 0.0
     context["offset_x"] = parent["offset_x"] + (shift or 0.0)
     context["offset_y"] = parent["offset_y"] + (rise or 0.0)
-    context["negative_margin"] = _negative_margin(declarations, own_px, context["rtl"])
+    margins = _side_winners(declarations, "margin", context["rtl"])
+    pull = _side_px(margins.get("top", "0"), own_px, "margin")
+    context["pull_y"] = parent["pull_y"] + max(0.0, -(pull or 0.0))  # negative top margins pull text up, step by step
     indent = _winner(declarations, "text-indent", lambda value: value)
     if indent is not None and _tokens(indent):
         amount = _side_px(_tokens(indent)[0], own_px, "margin")
         context["indent"] = parent["indent"] if amount is None else amount  # (inherited; it moves first lines)
-    context["width"], unwrapped = _line_width(declarations, own_px, parent["width"])
+    context["width"], unwrapped = _line_width(declarations, own_px, parent["width"], context["rtl"])
     side = _winner(declarations, "caption-side", lambda value: value)
     if side is not None and side not in ("inherit", "unset"):
         context["caption_bottom"] = side not in ("top", "block-start", "initial", "revert", "revert-layer")
@@ -1255,7 +1288,8 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
         context["line"] = line if line[0] == "mult" else ("px", line[1])
     if context["font_px"] > _WIDE_PX or not -200 <= context["offset_x"] <= _WIDE_PX or (
             not -200 <= context["offset_x"] + context["indent"] <= _WIDE_PX) or (
-            abs(context["offset_y"]) > context["font_px"] / 2) or abs(context["raise"]) > 2 * context["font_px"]:
+            abs(context["offset_y"]) > context["font_px"] / 2) or abs(context["raise"]) > 2 * context["font_px"] or (
+            context["pull_y"] > _WIDE_PX):
         # letters past 2000px, a start edge (or a first line) carried off the
         # screen, or relative offsets or baseline shifts that move text over the
         # lines around it, step by step
@@ -1272,7 +1306,7 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
                           and all(shade is not None and _readable(shade, context["bg"]) for shade in shown_colors)
                           and _MIN_LINE * context["font_px"] <= line_px <= _MAX_LINE * context["font_px"])
 
-    if name in ("bdo", "marquee"):
+    if name in ("bdo", "marquee") or context["bidi_override"]:
         return unknown()  # reversed or moving text
     if "popover" in attrs and displays:
         return unknown()  # a popover shown by inline CSS: not the stated hiding, not plain text either
@@ -1299,6 +1333,8 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
         elif prop in _WIDTHS:
             if (uses_var and custom) or _reach(value, font, combined=prop.startswith("grid")) > _WIDE_PX:
                 return unknown()
+            if prop in _LINE_WIDTHS and not _width_ok(value):
+                return unknown()  # a width x-reader does not recognize (a dropped one leaves the one before it)
             if prop in _GRID_TRACKS and display in ("grid", "inline-grid") and not _tracks_ok(value, font):
                 return unknown()  # tracks too small for their content: items pile on one another
         elif prop in _GRID_TRACKS:
@@ -1317,6 +1353,12 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
             continue  # order, floats and positioning: judged by the winners (see _covers)
         elif prop in _BOX_HEIGHTS:
             continue  # judged below, by the declarations that win
+        elif prop in _WRAP_VALUES:
+            if not _wrap_ok(prop, value):
+                return unknown()  # wrapping x-reader does not recognize (a dropped value leaves the one before it)
+        elif prop in ("writing-mode", "-webkit-writing-mode", "-ms-writing-mode"):
+            if value not in _HORIZONTAL_WRITING:
+                return unknown()  # vertical writing: block and inline sides are not where x-reader measures them
         elif prop.startswith(_INERT_PREFIXES) or prop in _INERT_PROPERTIES:
             continue
         elif prop in _NONE_ONLY or prop in ("all", "font"):
@@ -1329,8 +1371,7 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
             if _SYMBOL_FONTS.search(value):
                 return unknown()
         elif prop == "unicode-bidi":
-            if "override" in value:
-                return unknown()
+            continue  # judged above (overrides are a risk to the whole page)
         elif prop in ("tab-size", "-moz-tab-size"):
             number = _PLAIN_NUMBER.fullmatch(value)
             amount = _length_px(value, font)
@@ -1363,14 +1404,20 @@ def _style_context(name: str, attrs: dict, parent: dict) -> dict:
                     if custom or "," in token:
                         return unknown()
                     continue
-                amount = _box_px(token, font)
-                if amount is None:
-                    return unknown()
-                low, high = ((0, 50) if padding else (-20, 50)) if amount[1] else ((0, 1000) if padding else (-200, 1000))
-                if not low <= amount[0] <= high:
+                if _box_px(token, font) is None:
                     return unknown()
         else:
             return unknown()  # outside the allowlist
+    # Margins and padding that keep text on screen, by the values that win.
+    for kind in ("margin", "padding"):
+        for token in _side_winners(declarations, kind, context["rtl"]).values():
+            amount = _box_px(token, font)
+            if amount is None:
+                continue  # auto, a CSS-wide keyword or a design token (judged above)
+            low, high = ((0, 50) if kind == "padding" else (-20, 50)) if amount[1] else (
+                (0, 1000) if kind == "padding" else (-200, 1000))
+            if not low <= amount[0] <= high:
+                return unknown()
     position_won = won.get("position", ("",))[0]
     if position_won not in {"", "static", "relative", "sticky"} | _WIDE_KEYWORDS:
         return unknown()  # taken out of the flow
@@ -1704,13 +1751,20 @@ def _start_shift(declarations: list, font_px: float, rtl: bool, relative: bool):
     right-to-left text), in pixels; None when one of them is inherited."""
     start, end = ("right", "left") if rtl else ("left", "right")
     shift = 0.0
-    for kind in ("margin", "border", "padding"):
+    for kind in ("margin", "padding"):
         token = _side_winners(declarations, kind, rtl).get(start)
         if token is not None:
             amount = _side_px(token, font_px, kind)
             if amount is None:
                 return None
             shift += amount
+    # Border shorthands mix widths, styles and colors x-reader does not all
+    # recognize: the widest width any declaration gives the start side counts.
+    widths = [_side_px(token, font_px, "border") for prop, value, _important in declarations
+              for side, token in _sides_set(prop, value, "border", start, end).items() if side == start]
+    if None in widths:
+        return None
+    shift += max(widths, default=0.0)
     if relative:
         offsets = _side_winners(declarations, "inset", rtl)
         for side, sign in ((start, 1), (end, -1)):  # the start side's offset wins over the end side's
@@ -1738,30 +1792,54 @@ def _relative_dy(declarations: list, font_px: float, rtl: bool):
     return 0.0
 
 
-def _negative_margin(declarations: list, font_px: float, rtl: bool) -> float:
-    """How far an element's negative margins pull, in pixels: the sides whose
-    winning margin is negative past a hairline."""
-    total = 0.0
-    for token in _side_winners(declarations, "margin", rtl).values():
-        amount = _side_px(token, font_px, "margin")
-        if amount is not None and amount <= -8:  # (hairline adjustments do not add up to moving text)
-            total -= amount
-    return total
-
-
 _AUTO_WIDTHS = {"auto", "fit-content", "min-content", "stretch", "-webkit-fill-available", "-moz-available",
                 "fill-available"} | _WIDE_KEYWORDS
+_MAX_CONTENT = {"max-content", "-moz-max-content", "-webkit-max-content", "intrinsic"}
+_LINE_WIDTHS = {"width", "min-width", "inline-size", "min-inline-size"}
+# Wrapping properties and the values x-reader recognizes (see _wrap_ok).
+_WRAP_VALUES = {
+    "white-space": {"normal", "pre", "nowrap", "pre-wrap", "break-spaces", "pre-line"},
+    "text-wrap-mode": {"wrap", "nowrap"},
+    "text-wrap": {"wrap", "nowrap", "auto", "balance", "pretty", "stable", "avoid-orphans"},
+}
 
 
-def _line_width(declarations: list, font_px: float, parent_width: float) -> tuple:
+def _width_ok(value: str) -> bool:
+    """A width, min-width or inline size x-reader recognizes."""
+    if value in _AUTO_WIDTHS or value in _MAX_CONTENT or value in ("-webkit-min-content", "-moz-min-content",
+                                                                   "-webkit-fit-content", "-moz-fit-content",
+                                                                   "min-intrinsic"):
+        return True
+    if value.startswith(("calc(", "min(", "max(", "clamp(", "var(", "fit-content(")) and value.endswith(")"):
+        return True
+    return value == "0" or (bool(_PLAIN_LENGTH.fullmatch(value)) and not value.startswith("-"))
+
+
+def _wrap_ok(prop: str, value: str) -> bool:
+    """A white-space or text-wrap value x-reader recognizes (CSS-wide keywords and design tokens included)."""
+    if value in _WRAP_VALUES[prop] or value in _WIDE_KEYWORDS or (value.startswith("var(") and value.endswith(")")):
+        return True
+    tokens = value.split()
+    if prop == "white-space":  # <white-space-collapse> || <text-wrap-mode>
+        collapse = [token for token in tokens if token in ("collapse", "preserve", "preserve-breaks",
+                                                           "preserve-spaces", "break-spaces")]
+        modes = [token for token in tokens if token in ("wrap", "nowrap")]
+    else:  # <text-wrap-mode> || <text-wrap-style>
+        modes = [token for token in tokens if token in ("wrap", "nowrap")]
+        collapse = [token for token in tokens if token in ("auto", "balance", "pretty", "stable", "avoid-orphans")]
+    return 1 <= len(tokens) <= 2 and len(collapse) <= 1 and len(modes) <= 1 and len(collapse) + len(modes) == len(tokens)
+
+
+def _line_width(declarations: list, font_px: float, parent_width: float, rtl: bool = False) -> tuple:
     """How wide an element's lines can run, in pixels (width clamped by its
-    max- and min-width, percentages of the parent's; auto fills the parent),
-    and whether a max-content size keeps them from wrapping."""
+    max- and min-width, percentages of the parent's, also inside math
+    functions; auto fills the parent less its margins and padding, so negative
+    margins widen it), and whether a max-content size keeps them from wrapping."""
     unwrapped = False
 
     def pixels(value):
         nonlocal unwrapped
-        if value == "max-content":
+        if value in _MAX_CONTENT:
             unwrapped = True
             return None
         if value in _AUTO_WIDTHS or value.startswith(("var(", "fit-content(")):
@@ -1770,7 +1848,11 @@ def _line_width(declarations: list, font_px: float, parent_width: float) -> tupl
         if match:
             amount = float(match.group(2))
             return parent_width * amount / 100 if match.group(3) == "%" else _length_px(value, font_px)
-        return _reach(value, font_px) if value.startswith(("calc(", "min(", "max(", "clamp(")) else None
+        if value.startswith(("calc(", "min(", "max(", "clamp(")):
+            resolved = re.sub(rf"({_NUMBER})%", lambda percent: f"{float(percent.group(1)) * parent_width / 100}px",
+                              value)  # percentages of the parent's width, not of a fixed box
+            return _reach(resolved, font_px)
+        return None
 
     sizes = {}
     for group in (("width", "inline-size"), ("max-width", "max-inline-size"), ("min-width", "min-inline-size")):
@@ -1779,7 +1861,16 @@ def _line_width(declarations: list, font_px: float, parent_width: float) -> tupl
             if prop in group and (important or not won_important):
                 won, won_important = value, important
         sizes[group[0]] = pixels(won) if won is not None else None
-    width = parent_width if sizes["width"] is None else abs(sizes["width"])
+    if sizes["width"] is None:
+        width = parent_width
+        for kind in ("margin", "padding"):
+            for side in ("left", "right"):
+                token = _side_winners(declarations, kind, rtl).get(side)
+                amount = _side_px(token, font_px, kind) if token is not None else 0.0
+                width -= amount or 0.0
+        width = max(width, 0.0)
+    else:
+        width = abs(sizes["width"])
     if sizes["max-width"] is not None:
         width = min(width, abs(sizes["max-width"]))
     if sizes["min-width"] is not None:
@@ -1801,13 +1892,48 @@ def _baseline_shift(name: str, declarations: list, font_px: float) -> float:
     return amount[0] * font_px * 1.2 / 100 if amount[1] else amount[0]
 
 
+def _auto_direction(element, fallback: bool) -> bool:
+    """dir=auto: right-to-left when the first strong letter in the element's
+    text is a right-to-left one; the parent's direction when it has none."""
+    for text in element.itertext():
+        match = _FIRST_STRONG.search(text)
+        if match:
+            return bool(match.group(1))
+    return fallback
+
+
+def _text_px(text: str, font_px: float) -> float:
+    """How wide text can run on one line, in pixels: letters at up to 0.6em,
+    wide (CJK) ones at 1em."""
+    wide = len(_WIDE_LETTERS.findall(text)) if not text.isascii() else 0
+    return ((len(text) - wide) * 0.6 + wide) * font_px
+
+
+def _svg_text_pieces(svg) -> int:
+    """How many pieces of text an <svg> places by coordinates, up to two: its
+    text, textPath and foreignObject elements, and tspans given a position."""
+    count = 0
+    for node in svg.iter():
+        if not isinstance(node.tag, str) or not node.tag.startswith(_SVG):
+            continue
+        local = node.tag[len(_SVG):]
+        if local in ("text", "textPath", "foreignObject") or (
+                local == "tspan" and any(attr in node.attrib for attr in ("x", "y", "dx", "dy", "rotate"))):
+            if any(text.strip() for text in node.itertext()):
+                count += 1
+                if count > 1:
+                    break
+    return count
+
+
 def _text_cells(element) -> int:
-    """How many of an element's children are table cells with text (up to two)."""
+    """How many of an element's children are shown table cells with text (up to two)."""
     count = 0
     for child in element:
         if not isinstance(child.tag, str) or child.tag.startswith("{"):
             continue
-        if child.tag.lower() in _CELL_TAGS or "table-cell" in (child.get("style") or ""):
+        display = _child_display(child)
+        if display == "table-cell" or (display is None and child.tag.lower() in _CELL_TAGS):
             if any(text.strip() for text in child.itertext()):
                 count += 1
                 if count > 1:
@@ -1815,21 +1941,57 @@ def _text_cells(element) -> int:
     return count
 
 
+def _child_display(child):
+    """A child element's display (its inline style's, or its tag's table
+    default): "none" when it is hidden, None when nothing says."""
+    declarations = _inline_declarations(child.get("style") or "")
+    if declarations is None:
+        return "unknown"
+    display = _winner(declarations, "display", lambda value: value)
+    if display is not None:
+        return _display_value(display) or "unknown"
+    return "none" if "hidden" in child.attrib else _TABLE_DISPLAYS.get(child.tag.lower())
+
+
+def _anonymous_tables_out_of_order(element, caption_bottom: bool) -> bool:
+    """Whether runs of table parts outside a table (which browsers wrap in an
+    anonymous table) show in another order than written."""
+    run: list = []
+    for child in [*element, None]:
+        element_child = child is not None and isinstance(child.tag, str) and not child.tag.startswith("{")
+        written = (child.get("style") or "").lower() if element_child else ""
+        display = _child_display(child) if element_child and (
+            "table" in written or "none" in written or "hidden" in child.attrib) else None
+        part = "table" in written and display in _TABLE_INTERNAL  # (only CSS makes table parts outside a table)
+        if part:
+            run.append(child)
+        boxless = child is not None and not part and (not element_child or display == "none")
+        if (not part and not boxless) or (child is not None and (child.tail or "").strip()):
+            # (comments and hidden elements make no box: the run goes on past them, not past text)
+            if len(run) > 1 and _parts_out_of_order(run, caption_bottom):
+                return True
+            run = []
+    return False
+
+
 def _table_out_of_order(table, caption_bottom: bool) -> bool:
     """Whether a table shows its children in another order than written:
     captions go to its top (or bottom), the first header group to the top and
     the first footer group to the bottom, wherever they are written."""
+    return _parts_out_of_order([child for child in table if isinstance(child.tag, str)
+                                and not child.tag.startswith("{")], caption_bottom)
+
+
+def _parts_out_of_order(children: list, caption_bottom: bool) -> bool:
     ranks, header_seen, footer_seen = [], False, False
-    for child in table:
-        if not isinstance(child.tag, str) or child.tag.startswith("{"):
-            continue
-        name = child.tag.lower()
+    for child in children:
         declarations = _inline_declarations(child.get("style") or "")
         if declarations is None:
             return True
-        display = _winner(declarations, "display", lambda value: value)
-        display = _display_value(display) if display is not None else _TABLE_DISPLAYS.get(name)
-        if display == "none" or (display is None and "hidden" in child.attrib):
+        display = _child_display(child)
+        if display == "unknown":
+            return True
+        if display == "none":
             continue
         if display == "table-caption":
             side = _winner(declarations, "caption-side", lambda value: value)
@@ -2172,8 +2334,8 @@ def _extract_html_page(html: str) -> dict:
     is laid out without it; menus, text boxes, button labels and placeholders,
     text box values and option labels count only there. Right-to-left text that
     shows left-to-right words reordered, tables shown in another order than
-    written and shown default-hidden text (script, style, title, datalist, rp)
-    are layout risks. embeds
+    written, SVG text placed by coordinates, right-to-left math and shown
+    default-hidden text (script, style, title, datalist, rp) are layout risks. embeds
     counts every player, frame and plugin on the page, however small or hidden.
     visibility_unknown: content includes text whose visibility x-reader cannot
     settle (see _style_context: inline styles, presentational attributes,
@@ -2205,7 +2367,7 @@ def _extract_html_page(html: str) -> dict:
         return refused  # more inline styling than x-reader judges within its time limits
     templates = parser.saw_template or any(True for _ in root.iter("template"))
     title_element = next(iter(root.iter("title")), None)
-    title, title_truncated = "", False
+    title, title_truncated, title_reordered = "", False, False
     if title_element is not None:
         pieces, kept = [], 0
         for piece in title_element.itertext():
@@ -2214,6 +2376,10 @@ def _extract_html_page(html: str) -> dict:
             if kept >= 1000:
                 break
         title = " ".join("".join(pieces).split())
+        if _BIDI_OVERRIDE.search(title) or (_RTL_RUN.search(title) and (
+                (_FIRST_STRONG.search(title) and _FIRST_STRONG.search(title).group(1)) or _RTL_EMBEDDING.search(title))
+                and _ltr_runs_split(title)):
+            title_reordered = True  # shown reversed or reordered: it can spell what it does not say
         length = 0
         for piece in title_element.itertext():
             length += len(piece)
@@ -2227,7 +2393,6 @@ def _extract_html_page(html: str) -> dict:
     embeds = 0
     layout_risk = False
     box_regions: dict = {}  # clip box -> regions holding text inside it
-    negative_total = 0.0
     gate_chars = 0
     region_chars = {"body": 0, "main": 0, "article": 0}
     overflowing: set = set()  # wall text or regions past their budgets
@@ -2235,7 +2400,7 @@ def _extract_html_page(html: str) -> dict:
     # The text as laid out, hidden text and the breaks of hidden elements left
     # out: kept (in parts["shown"]) only for lines where it differs from "gate".
     shown_line: list = []
-    lines = {"dropped": False, "pre_columns": 0, "nowrap_px": 0.0}
+    lines = {"dropped": False, "pre_columns": 0, "nowrap_px": 0.0, "run_px": 0.0, "run_joined": False}
     # The current paragraph's direction and left-to-right runs (see bidi_step).
     bidi = {"rtl": False, "run": 0, "reorders": False}
 
@@ -2243,6 +2408,7 @@ def _extract_html_page(html: str) -> dict:
         annotations.append([])
         return len(annotations) - 1
     covered_boxes: set = set()
+    layout_risk = layout_risk or title_reordered
     client_redirect = any(
         (meta.get("http-equiv") or "").strip().lower() == "refresh" and _parse_refresh(meta.get("content") or "")
         for meta in root.iter("meta")
@@ -2254,7 +2420,7 @@ def _extract_html_page(html: str) -> dict:
             "flowing": False, "pre": False, "annotation": None, "definite_h": False, "rtl": False,
             "child_gap": False, "offset_x": 0.0, "offset_y": 0.0, "pre_nowrap": False, "caption_bottom": False,
             "revealed": False, "table_rtl": False, "para_rtl": False, "indent": 0.0, "raise": 0.0, "width": 1000.0,
-            "text_nowrap": False}
+            "text_nowrap": False, "pull_y": 0.0, "bidi_box": False}
 
     def end_shown_line(chunk) -> None:
         if lines["dropped"]:
@@ -2268,6 +2434,8 @@ def _extract_html_page(html: str) -> dict:
         embedding), left-to-right words on both sides of right-to-left letters show
         in another order, which can spell what the text does not."""
         nonlocal layout_risk
+        if not chunk.isascii() and _BIDI_OVERRIDE.search(chunk):
+            layout_risk = True  # an override shows its text reversed: it can spell what the text does not
         if state["para_rtl"] or (not chunk.isascii() and _RTL_EMBEDDING.search(chunk)):
             bidi["rtl"] = True
         if chunk.isascii():
@@ -2284,21 +2452,43 @@ def _extract_html_page(html: str) -> dict:
         if bidi["rtl"] and bidi["reorders"]:
             layout_risk = True
 
+    def bidi_separator() -> None:
+        """An isolate or an inline box laid out whole sits in the paragraph as one
+        neutral object: in right-to-left text, it parts the words on either side."""
+        if bidi["run"] == 1:
+            bidi["run"] = 2
+
     def pushed_off(chunk, state) -> bool:
-        """Text on a preformatted line that does not wrap, after more spaces and
-        tabs (as wide as monospace ones) than the screen is wide."""
+        """Text on a preformatted line that does not wrap running past 2000px:
+        spaces, tabs (16 columns at most) and letters as wide as monospace ones,
+        wide (CJK) letters two columns."""
         for spaces, word in _PRE_RUN.findall(chunk):
-            lines["pre_columns"] += len(spaces) + 15 * spaces.count("\t")
+            wide = len(_WIDE_LETTERS.findall(word)) if word and not word.isascii() else 0
+            lines["pre_columns"] += len(spaces) + 15 * spaces.count("\t") + len(word) + wide
             if word and lines["pre_columns"] * 0.6 * state["font_px"] > _WIDE_PX:
                 return True
+        return False
+
+    def unbreakable(chunk, state) -> bool:
+        """Words joined by no-break spaces into one run that cannot wrap, past 2000px."""
+        if not lines["run_joined"] and not _NO_BREAK.search(chunk):
+            tail = _BREAKABLE.split(chunk)[-1]
+            lines["run_px"] = _text_px(tail, state["font_px"]) + (lines["run_px"] if tail == chunk else 0.0)
+            return False
+        for index, piece in enumerate(_BREAKABLE.split(chunk)):
+            if index:
+                lines["run_px"], lines["run_joined"] = 0.0, False  # a place the line can break
+            if piece:
+                lines["run_px"] += _text_px(piece, state["font_px"])
+                lines["run_joined"] = lines["run_joined"] or bool(_NO_BREAK.search(piece))
+                if lines["run_joined"] and lines["run_px"] > _WIDE_PX:
+                    return True
         return False
 
     def runs_off(chunk, state) -> bool:
         """A line that does not wrap (nowrap, max-content) running past 2000px:
         letters at up to 0.6em, wide (CJK) ones at 1em, spaces collapsed."""
-        text = " ".join(chunk.split()) if not chunk.isspace() else " "
-        wide = len(_WIDE_LETTERS.findall(text)) if not text.isascii() else 0
-        lines["nowrap_px"] += ((len(text) - wide) * 0.6 + wide) * state["font_px"]
+        lines["nowrap_px"] += _text_px(" ".join(chunk.split()) if not chunk.isspace() else " ", state["font_px"])
         return lines["nowrap_px"] > _WIDE_PX
 
     def emit(text, state) -> None:
@@ -2312,6 +2502,9 @@ def _extract_html_page(html: str) -> dict:
             return
         chunk = text
         laid_out = not state["hidden"]  # (hidden text counts for walls, but takes no place in the layout)
+        # Text that may draw nothing (too small or faint, or under a style x-reader
+        # cannot settle) keeps its place, but each line is also read without it.
+        painted = laid_out and state["text_ok"] and not state["unknown"]
         if not laid_out:
             lines["dropped"] = True
         if chunk == _BOUNDARY:
@@ -2325,21 +2518,24 @@ def _extract_html_page(html: str) -> dict:
             overflowing.add("gate")  # more page text than the wall scan reads: the page is too large to check
             return
         if chunk in ("\n", _LINE_BREAK):
-            lines["pre_columns"], lines["nowrap_px"] = 0, 0.0
+            lines["pre_columns"], lines["nowrap_px"], lines["run_px"], lines["run_joined"] = 0, 0.0, 0.0, False
             if laid_out and chunk == "\n":
                 bidi.update(rtl=False, run=0, reorders=False)  # a new paragraph
         elif laid_out:
             bidi_step(chunk, state)
         if state["annotation"] is not None:
             # shown above the base text: read on its own line
-            annotations[state["annotation"]].append((chunk, laid_out))
+            annotations[state["annotation"]].append(
+                (chunk, laid_out if chunk in ("\n", _LINE_BREAK) or chunk.isspace() else painted))
             return
         parts["gate"].append(chunk)
         if laid_out:
             if chunk in ("\n", _LINE_BREAK):
                 end_shown_line(chunk)
-            else:
+            elif painted or chunk.isspace():
                 shown_line.append(chunk)
+            else:
+                lines["dropped"] = True  # the line is also read without text that may not draw
         if state["foreign"] or state["boiler"] or state["hidden"] or state["control"]:
             return
         regions = ["body"] + [region for region in ("main", "article") if state[region]]
@@ -2354,6 +2550,8 @@ def _extract_html_page(html: str) -> dict:
                     unknown_in.update(regions)  # on a line that does not wrap, past the screen's edge
             elif not state["pre"]:
                 lines["nowrap_px"] = 0.0  # text that wraps: what follows may start a new line
+                if unbreakable(chunk, state):
+                    unknown_in.update(regions)  # words joined past the screen's edge
         if shown and state["box"] is not None:
             box_regions.setdefault(state["box"], set()).update(regions)
         for region in regions:
@@ -2380,27 +2578,36 @@ def _extract_html_page(html: str) -> dict:
                                                   "links")}
             style.update(visibility="visible", cover=_foreign_cover(tag, name, attrs, parent), box_shown=False,
                          clip_box=False, display=None, floated=False, pre=parent["pre"], definite_h=False,
-                         rtl=parent["rtl"], spaced=False, gap=False, offset_x=parent["offset_x"], negative_margin=0.0,
+                         rtl=parent["rtl"], spaced=False, gap=False, offset_x=parent["offset_x"],
                          offset_y=parent["offset_y"], pre_nowrap=parent["pre_nowrap"],
                          caption_bottom=parent["caption_bottom"], indent=parent["indent"],
                          width=parent["width"], text_nowrap=parent["text_nowrap"])
             style["raise"] = parent["raise"]
         else:
-            style = _style_context(name, attrs, parent)
-        nonlocal negative_total
-        if not (parent["skip"] or parent["hidden"]):
-            negative_total += style["negative_margin"]
-            if negative_total > _WIDE_PX:
-                layout_risk = True  # negative margins that add up to pulling text across the page
+            written = (attrs.get("dir") or "").strip().lower()
+            auto = written == "auto" or (name == "bdi" and written not in ("ltr", "rtl"))
+            style = _style_context(name, attrs, parent, _auto_direction(element, parent["rtl"]) if auto else None)
+        if not (parent["skip"] or parent["hidden"]) and style["visibility"] != "hidden" and style.get("bidi_override"):
+            layout_risk = True  # reversed text (a <bdo>, a bidi override) can spell what the text does not
         revealed = not foreign and name in _SKIP_TAGS and (not parent["skip"] or parent["revealed"]) \
             and _shown_by_style(attrs)
         if revealed and name in _REVEALED_TEXT and not parent["hidden"]:
             layout_risk = True  # its text shows, but was never kept to be read
+        if foreign and not (parent["skip"] or parent["hidden"]):
+            if tag == _SVG + "svg" and not parent["in_svg"] and _svg_text_pieces(element) > 1:
+                layout_risk = True  # text an <svg> places by coordinates shows in whatever order they give
+            if tag == _MATHML + "math" and (parent["rtl"] or (attrs.get("dir") or "").strip().lower() == "rtl") \
+                    and any(text.strip() for text in element.itertext()):
+                layout_risk = True  # right-to-left math lines its pieces up from the right
+            if tag == _MATHML + "mprescripts":
+                layout_risk = True  # prescripts show before the base they follow
         table = not foreign and (name == "table" or style["display"] in ("table", "inline-table"))
         table_rtl = style["rtl"] if table else parent["table_rtl"]
         if not foreign and not (parent["skip"] or parent["hidden"]) and style["visibility"] != "hidden":
             if table and _table_out_of_order(element, style["caption_bottom"]):
                 layout_risk = True  # a caption, header or footer shown away from where it is written
+            if not table and _anonymous_tables_out_of_order(element, style["caption_bottom"]):
+                layout_risk = True  # table parts outside a table: browsers order them like a table's
             if (style["rtl"] or table_rtl) and _text_cells(element) > 1:
                 layout_risk = True  # the cells of a right-to-left table line up from the right
         if style["cover"] and not (parent["skip"] or parent["hidden"] or parent["control"]) and (
@@ -2432,6 +2639,8 @@ def _extract_html_page(html: str) -> dict:
         # boxes inside it (whatever direction they declare) stay in it.
         starts_paragraph = block or cell or parent["flowing"] or style["floated"] or style["display"] in (
             "inline-block", "inline-flex", "inline-grid", "inline-table", "flow-root", "table-caption")
+        atomic = style["display"] in _ATOMIC_DISPLAYS or (style["display"] is None and (
+            name in _ATOMIC_TAGS or tag in (_SVG + "svg", _MATHML + "math")))
         return {
             "skip": parent["skip"] or (not foreign and name in _SKIP_TAGS and not shadow_root),
             "foreign": foreign,
@@ -2458,7 +2667,9 @@ def _extract_html_page(html: str) -> dict:
             "caption_bottom": style["caption_bottom"], "revealed": revealed, "table_rtl": table_rtl,
             "para_rtl": style["rtl"] if starts_paragraph else parent["para_rtl"] or style["rtl"],
             "indent": style["indent"], "raise": style["raise"], "width": style["width"],
-            "text_nowrap": style["text_nowrap"],
+            "text_nowrap": style["text_nowrap"], "pull_y": style.get("pull_y", parent["pull_y"]),
+            # an isolate or an inline box laid out whole: one neutral object in its paragraph
+            "bidi_box": not (block or cell) and (atomic or style.get("isolate", False)),
             "control": parent["control"] or (not foreign and name in _CONTROL_TAGS),
             "collapsed": {"summary_seen": False, "outer_hidden": own_hidden} if closed and name == "details" else None,
             "font_px": style["font_px"], "custom": style["custom"], "color": style["color"], "bg": style["bg"],
@@ -2480,7 +2691,9 @@ def _extract_html_page(html: str) -> dict:
     def enter(element, parent) -> None:
         state = child_state(element, parent)
         if state["cell"]:
-            lines["nowrap_px"] = 0.0  # each cell holds its own lines
+            lines["nowrap_px"], lines["run_px"], lines["run_joined"] = 0.0, 0.0, False  # a cell holds its own lines
+        if state["bidi_box"] and not state["hidden"]:
+            bidi_separator()
         if state["block"]:
             emit("\n", state)
         elif state["line_break"]:
@@ -2502,6 +2715,8 @@ def _extract_html_page(html: str) -> dict:
         child = next(children, None)
         if child is None:
             stack.pop()
+            if state["bidi_box"] and not state["hidden"]:
+                bidi_separator()
             if state["block"]:
                 emit("\n", state)
             elif state["cell"] or state["spaced_edges"]:

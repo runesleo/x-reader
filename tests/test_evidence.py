@@ -273,7 +273,9 @@ class EvidenceContractTest(unittest.TestCase):
         for notice in ("\u0405ubscribe to continue reading.", "Subscri\u0301be to continue reading.",
                        "Sub\u034fscribe to continue reading.", "Sub\U000e0041scribe to continue reading.",
                        "Sub\u3164scribe to continue reading.", "Subscribe\u3164to\u3164continue reading.",
-                       "Subscribe\u2800to\u2800continue reading.", "\U0001d412ubscribe to continue reading."):
+                       "Subscribe\u2800to\u2800continue reading.", "\U0001d412ubscribe to continue reading.",
+                       "\ua731\u1d1c\u0299\ua731\u1d04\u0280\u026a\u0299\u1d07 to continue reading.",
+                       "\U0001f182\U0001f184\U0001f171scribe to continue reading."):
             self.assertIn("paywall", evidence.gate_signals("T", notice), notice)
         self.assertEqual(evidence._normalize("Caf\u00e9 \u0421\u043e\u0440\u0443"), "cafe copy")
         self.assertEqual(evidence._normalize("\u767b\u5f55\u540e\u9605\u8bfb\u5168\u6587"),
@@ -322,6 +324,10 @@ class EvidenceContractTest(unittest.TestCase):
                                        "extra": dict(VERIFIED, embedded_media=1, body_verified=False)})
         self.assertEqual(unverified["status"], "UNKNOWN")
         self.assertEqual(unverified["components"], {"text_body": "UNKNOWN"})
+        # a thin menu beside a player is no text body that passes
+        thin = classify_payload({"source_type": "manual", "title": "A", "content": "Home About Contact Blog Shop",
+                                 "extra": dict(VERIFIED, embedded_media=1)})
+        self.assertEqual(thin["components"], {"text_body": "UNKNOWN", "media": "PARTIAL"})
 
     def test_generic_length_alone_does_not_pass(self):
         nav = "\n".join(["Home", "About us", "Pricing", "Blog", "Careers", "Contact sales"] * 20)

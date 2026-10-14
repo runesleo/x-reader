@@ -763,6 +763,24 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main><pre>{' ' * 1000}{ARTICLE * 2}</pre></main>"),
             ("<body>", f"<main style='white-space:nowrap'><p>{ARTICLE.replace(chr(10), ' ') * 2}</p></main>"),
             ("<body>", f"<main style='width:max-content'><p>{ARTICLE.replace(chr(10), ' ') * 2}</p></main>"),
+            ("<body>", f"<main style='width:-moz-max-content'><p>{ARTICLE.replace(chr(10), ' ') * 2}</p></main>"),
+            # a value browsers drop leaves the one before it in force
+            ("<body>", f"<main style='white-space:nowrap;white-space:bogus'><p>{ARTICLE.replace(chr(10), ' ') * 2}</p>"
+                       "</main>"),
+            ("<body>", f"<main style='width:max-content;width:bogus'><p>{ARTICLE.replace(chr(10), ' ') * 2}</p></main>"),
+            ("<body>", f"<main style='text-wrap-mode:nowrap;text-wrap-mode:bogus'><p>{ARTICLE.replace(chr(10), ' ') * 2}"
+                       "</p></main>"),
+            ("<body>", f"<main style='border-left:4000px solid white;border-left:bogus'>{article}</main>"),
+            ("<body>", f"<main style='white-space:pre;white-space:bogus'>{' ' * 1000}{ARTICLE * 2}</main>"),
+            # unbreakable lines: long words in preformatted text, <nobr>, <td nowrap>, words joined by no-break spaces
+            ("<body>", f"<main><pre>{('A' * 1000 + ' ') * 6}</pre>{article}</main>"),
+            ("<body>", f"<main><nobr>{ARTICLE.replace(chr(10), ' ') * 2}</nobr></main>"),
+            ("<body>", f"<main><table><tr><td nowrap>{ARTICLE.replace(chr(10), ' ') * 2}</td></tr></table></main>"),
+            ("<body>", f"<main><p>{ARTICLE.replace(chr(10), ' ').replace(' ', '&nbsp;') * 2}</p></main>"),
+            # percentages inside math functions are of the parent's width; vertical writing is not measured
+            ("<body>", "<main>" + "<div style='width:calc(150%)'>" * 2 + article + "</div>" * 2 + "</main>"),
+            ("<body>", "<main style='writing-mode:vertical-rl'>" + "<div style='padding-block-start:700px'>" * 3
+             + article + "</div>" * 3 + "</main>"),
             # revert goes back to the browser's value, which for these is the parent's
             ("<body>", f"<div style='font-size:1px'><main style='font-size:revert'>{article}</main></div>"),
             ("<body>", f"<div style='color:white'><main style='color:revert'>{article}</main></div>"),
@@ -899,6 +917,17 @@ class GenericReadTest(unittest.TestCase):
             ("<body>", f"<main>{article}<p>E=mc<sup>2</sup>, H<sub>2</sub>O, caf\u00e9 and "
                        f"<span style='white-space:nowrap'>2024-01-01</span></p></main>"),
             ("<body>", "<main>" + "<div style='width:100%'>" * 5 + article + "</div>" * 5 + "</main>"),
+            # hidden boxes pull nothing; margins by the values that win; hidden table parts; short joined words
+            ("<body>", "<div hidden style='margin:-8px'>x</div>" * 63 + f"<main>{article}</main>"),
+            ("<body>", f"<main style='margin-left:-300px;margin-left:0'>{article}</main>"),
+            ("<body>", f"<table><tr><td>Row</td></tr><caption hidden>Cap</caption></table><main>{article}</main>"),
+            ("<body>", f"<main>{article}<p>Price:&nbsp;10&nbsp;USD, 5&nbsp;km and https://example.com/{'a' * 300}"
+                       f"</p><p>A <span style='display:inline-block'>badge</span> beside <bdi>Ann</bdi>.</p></main>"),
+            ("<body>", f"<main><p>E = <math><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></math></p><svg width='200' "
+                       f"height='40'><text x='0' y='20'>Figure 1</text></svg>{article}</main>"),
+            ("<body>", f"<main style='white-space:pre-wrap;width:800px;max-width:100%;column-count:2;"
+                       f"border:1px solid rgba(0,0,0,.1);border-left:3px solid #c00'>{article}"
+                       f"<h2 style='text-wrap:balance'>A title</h2></main>"),
         ):
             page, receipt = self._page_receipt(f"<html><head><title>T</title></head>{head}{body}</body></html>")
             self.assertEqual(receipt["status"], "PASS", (head, body[:80]))
@@ -980,6 +1009,35 @@ class GenericReadTest(unittest.TestCase):
                        "<p dir='auto'>\u200fcontinue.\u200fSubscribe to</p>",
                        "<p dir='rtl'><span style='direction:ltr'>continue \u200fSubscribe to</span></p>",
                        "<p style='unicode-bidi:plaintext'>\u200fcontinue.\u200fSubscribe to</p>",
+                       "<p style='unicode-bidi:plaintext;unicode-bidi:bogus'>\u200fcontinue.\u200fSubscribe to</p>",
+                       "<div dir='rtl' style='column-count:2'><p>continue.</p><p>Subscribe to</p></div>",
+                       # SVG text placed by coordinates; right-to-left math; prescripts before their base
+                       "<svg width='600' height='40'><text x='300' y='20'>continue.</text>"
+                       "<text x='0' y='20'>Subscribe to</text></svg>",
+                       "<svg width='600' height='40'><text y='20'><tspan x='300'>continue.</tspan>"
+                       "<tspan x='0'>Subscribe to</tspan></text></svg>",
+                       "<div dir='rtl'><math><mi>continue.</mi><mi>Subscribe to</mi></math></div>",
+                       "<math><mmultiscripts><mi>continue.</mi><mprescripts/><mi>Subscribe to</mi><none/>"
+                       "</mmultiscripts></math>",
+                       # text that may draw nothing: the display that wins, a zero font size
+                       "<div>Sub<span style='display:block;display:none'>x</span>scribe to continue.</div>",
+                       "<div>Sub<span style='font-size:0'>x</span>scribe to continue.</div>",
+                       # reversed text: <bdo>, bidi overrides, override characters in annotations
+                       "<bdo dir='rtl'>.eunitnoc ot ebircsbuS</bdo>",
+                       "<span style='unicode-bidi:bidi-override;direction:rtl'>.eunitnoc ot ebircsbuS</span>",
+                       "<ruby>x<rt>\u202e.eunitnoc ot ebircsbuS</rt></ruby>",
+                       # isolates and inline boxes laid out whole sit in right-to-left text as one object each
+                       "<p dir='rtl'><bdi>continue.</bdi> <bdi>Subscribe to</bdi></p>",
+                       "<p dir='rtl'><span style='display:inline-block'>continue.</span> "
+                       "<span style='display:inline-block'>Subscribe to</span></p>",
+                       "<p dir='rtl'>continue. <bdi>Subscribe to</bdi></p>",
+                       # table parts outside a table are ordered like a table's; displays are CSS, not raw text
+                       "<div><span style='display:table-row'>continue.</span>"
+                       "<span style='display:table-caption'>Subscribe to</span></div>",
+                       "<div><span style='display:table-footer-group'>continue.</span>"
+                       "<span style='display:table-row'>Subscribe to</span></div>",
+                       "<div dir='rtl'><div style='DISPLAY:TABLE-CELL'>continue.</div>"
+                       "<div style='display:table-cell'>Subscribe to</div></div>",
                        # characters that draw nothing, look-alike letters, accents
                        "<div>Sub\u034fscribe to continue.</div>", "<div>Sub\u180escribe to continue.</div>",
                        "<div>Sub\ufe0fscribe to continue.</div>", "<div>Sub\U000e0041scribe to continue.</div>",
@@ -1000,6 +1058,9 @@ class GenericReadTest(unittest.TestCase):
             "<html><head><title>T</title></head><body style='caption-side:bottom'><table><caption>continue.</caption>"
             f"<tr><td>Subscribe to</td></tr></table><main>{article}</main></body></html>")
         self.assertNotEqual(receipt["status"], "PASS")  # an inherited caption side puts the caption below
+        page, receipt = self._page_receipt(
+            f"<html><head><title>\u202eni ngiS\u202c</title></head><body><main>{article}</main></body></html>")
+        self.assertNotEqual(receipt["status"], "PASS")  # a reversed title can read as a wall title
         page, receipt = self._page_receipt("<html><head><title>T</title></head><body><main><p>Hello <b>world</b>!</p>"
                                            f"{article}</main></body></html>")
         self.assertTrue(page["content"].startswith("Hello world!"))  # nothing added between inline runs

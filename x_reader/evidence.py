@@ -926,11 +926,14 @@ def _classify_generic(payload: dict[str, Any], content: str, extra: dict) -> dic
         }
     page_url = str(payload.get("url") or "")
     if media_count > 0 or _host_in(page_url, _MEDIA_PAGE_HOSTS):
+        substantial = prose >= MIN_GENERIC_BODY_CHARS
         return {
             "status": PARTIAL,
             "reason_code": "embedded_media_unread",
-            "evidence": "page text was read, but the page embeds players, frames or plugins whose content was not",
-            "components": {"text_body": PASS, "media": PARTIAL},
+            "evidence": ("page text was read, but the page embeds players, frames or plugins whose content was not"
+                         if substantial else "the page embeds players, frames or plugins whose content was not read, "
+                         "and its text is too thin to prove source coverage"),
+            "components": {"text_body": PASS if substantial else UNKNOWN, "media": PARTIAL},
         }
     if prose < MIN_GENERIC_BODY_CHARS:
         return {
