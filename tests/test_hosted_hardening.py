@@ -836,6 +836,7 @@ class GenericReadTest(unittest.TestCase):
             "<div style='display:grid'><div style='grid-area:1/1;background:#fff'></div></div>",
             "<div style='margin-top:-300px;height:300px;background:#fff'></div>",
             "<div style='margin-top:-300px;margin-top:calc(1px +);height:300px;background:white'>x</div>",
+            "<div style='margin-top:-300px;margin-top:calc(var());height:300px;background:white'>x</div>",
             "<img src='w.png' style='margin-top:-300px' width='900' height='300'>",
             "<div style='height:99999px'></div>", "<div style='height:calc(100px * 1000)'></div>",
             "<div style='margin-top:1e6px'></div>", "<img src='x' vspace='99999'>",
@@ -891,6 +892,22 @@ class GenericReadTest(unittest.TestCase):
                                            + "<div style='width:150%;width:calc(1px +)'>" * 2 + article
                                            + "</div>" * 2 + "</main></body></html>")
         self.assertNotEqual(receipt["status"], "PASS")  # a width browsers drop leaves the one before it
+        for main in ("width:calc((1000 + 1000) * 3px)", "width:150%;width:calc(var())",
+                     "border-left:4000px solid white;border-left:0 solid dotted white"):
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body><main style='{main}'>"
+                                               f"{article}</main></body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", main)  # values worked out, dropped ones left out
+        page, receipt = self._page_receipt(
+            "<html><head><title>T</title></head><body><p style='white-space:nowrap'><span style='display:inline-block;"
+            f"width:2000px'></span><span style='display:inline-block;width:300px;white-space:normal'>{prose}</span>"
+            "</p></body></html>")
+        self.assertNotEqual(receipt["status"], "PASS")  # a box laid out whole starts where the line has got to
+        line = "This is a complete ordinary sentence with enough prose for the reader to see. " * 2
+        for spaced in (f"<pre style='word-spacing:32px'>{(line.strip() + chr(10)) * 8}</pre>",
+                       "<p style='white-space:nowrap;word-spacing:40px'>" + "a\u00a0" * 300 + f"</p>{article}"):
+            page, receipt = self._page_receipt(f"<html><head><title>T</title></head><body><main>{spaced}</main>"
+                                               "</body></html>")
+            self.assertNotEqual(receipt["status"], "PASS", spaced[:40])  # spacing after every word separator
         page, receipt = self._page_receipt(
             f"<html><head><title>T</title></head><body><main>{article}<p style='white-space:nowrap'>"
             f"<span style='display:inline-block;width:300px;white-space:normal'>{prose}</span></p></main></body></html>")
@@ -977,6 +994,9 @@ class GenericReadTest(unittest.TestCase):
                        f"</p><p>A <span style='display:inline-block'>badge</span> beside <bdi>Ann</bdi>.</p></main>"),
             ("<body>", f"<main><p>E = <math><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></math></p><svg width='200' "
                        f"height='40'><text x='0' y='20'>Figure 1</text></svg>{article}</main>"),
+            ("<body>", f"<main style='overflow:hidden;overflow:initial;content:\"x\";content:normal;"
+                       f"text-overflow:\"x\";text-overflow:ellipsis;border-left:3px solid #c00;"
+                       f"margin:calc(2 * 6px) calc(10% - 50px)'>{article}</main>"),
             ("<body>", f"<svg><text style='display:none'>Jan</text><text style='display:none'>Feb</text></svg>"
                        f"<main style='overflow:hidden;overflow-x:visible;overflow-y:visible;"
                        f"border-left:4000px solid white;border-left:0;margin:calc(10px + 2px)'>{article}</main>"),
@@ -1100,6 +1120,13 @@ class GenericReadTest(unittest.TestCase):
                        # a notice a line break wraps onto two lines
                        "<div>Subscribe to<br>continue.</div>", "<div>Subscribe<br>to<br>continue.</div>",
                        "<pre>Subscribe\nto\ncontinue.</pre>",
+                       # a notice split over paragraphs or list items reads as one
+                       "<p>Subscribe to</p><p>continue.</p>", "<p>Subscribe</p><p>to</p><p>continue.</p>",
+                       "<p>Please sign</p><p>in to continue.</p>", "<p>登录后</p><p>查看全文</p>",
+                       # spacing a math value works out to; a border whose style draws nothing
+                       "<div>Sub<span style='margin-right:calc(10px - 5px)'>scribe</span>to continue.</div>",
+                       "<div>Sub<span style='border-left-width:10px;border-left-style:none'>scribe</span>"
+                       " to continue.</div>",
                        # a piece that may not draw beside a line break; space set at one edge only
                        "<div>Sub<span style='font-size:0'>x</span>scribe to<br>continue.</div>",
                        "<div>Sub<span style='margin-right:10px'>scribe</span>to continue.</div>",
@@ -1134,6 +1161,11 @@ class GenericReadTest(unittest.TestCase):
                        "continue.</span></span><span style='display:table-row'>Subscribe to</span></div>",
                        "<table><tr><td>continue.</td></tr><caption style='visibility:hidden'>"
                        "<span style='visibility:visible'>Subscribe to</span></caption></table>",
+                       # wording a control shows from its attributes; an SVG a CSS-wide display shows again
+                       "<table><tr><td>continue.</td></tr><caption><input type='button' value='Subscribe to'>"
+                       "</caption></table>",
+                       "<svg style='display:none;display:initial'><text style='unicode-bidi:bidi-override;"
+                       "direction:rtl'>.eunitnoc ot ebircsbuS</text></svg>",
                        # characters that draw nothing, look-alike letters, accents
                        "<div>Sub\u034fscribe to continue.</div>", "<div>Sub\u180escribe to continue.</div>",
                        "<div>Sub\ufe0fscribe to continue.</div>", "<div>Sub\U000e0041scribe to continue.</div>",
@@ -1433,6 +1465,24 @@ class GenericReadTest(unittest.TestCase):
 class WeChatArticleReadTest(unittest.TestCase):
     """The WeChat article read runs in a browser: skipped where Playwright or its Chromium is missing."""
 
+    def test_the_article_is_the_page_the_browser_ended_on(self):
+        from unittest.mock import AsyncMock
+        from x_reader.evidence import build_receipt
+        from x_reader.fetchers.wechat import fetch_wechat
+        from x_reader.schema import from_wechat
+
+        body = "读者会在这篇长文里看到一个仔细的论证。每一段都补充了背景、证据和清楚的结论。" * 30
+        for final, page_text, status in (("https://evil.example/final", body, "UNKNOWN"),
+                                         ("https://mp.weixin.qq.com/s/abc", "登录后查看全文\n" + body, "UNKNOWN"),
+                                         ("https://mp.weixin.qq.com/s/abc", body + "\n阅读原文", "PASS")):
+            read = {"title": "文章", "content": body, "url": final, "author": "", "extraction": "container",
+                    "embedded_media": 0, "visual_risks": [], "page_text": page_text}
+            with patch("x_reader.fetchers.jina.fetch_via_jina", side_effect=RuntimeError("blocked")), \
+                    patch("x_reader.fetchers.browser.fetch_via_browser", AsyncMock(return_value=read)):
+                article = asyncio.run(fetch_wechat("https://mp.weixin.qq.com/s/abc"))
+            receipt = build_receipt(from_wechat(article).to_dict())
+            self.assertEqual(receipt["status"], status, (final, page_text[:10]))
+
     def test_article_text_is_read_as_the_page_shows_it(self):
         try:
             from playwright.sync_api import sync_playwright
@@ -1440,19 +1490,38 @@ class WeChatArticleReadTest(unittest.TestCase):
             self.skipTest("playwright is not installed")
         from x_reader.fetchers.browser import _WECHAT_ARTICLE_JS
 
+        prose = "<p>正文段落，用来占位的普通文字，读者可以正常看到它。</p>"
         cases = (
             # inline runs join and <br> parts lines; hidden text is left out, text shown again is kept
             ("<p>Please sign <span>in to continue.</span></p><p>Body text.</p>",
-             "Please sign in to continue.\n\nBody text.", 0),
-            ("<p>Subscribe to<br>continue.</p>", "Subscribe to\ncontinue.", 0),
+             "Please sign in to continue.\n\nBody text.", 0, []),
+            ("<p>Subscribe to<br>continue.</p>", "Subscribe to\ncontinue.", 0, []),
             ("<p style='display:none'>gone</p><p style='visibility:hidden'>gone <span style='visibility:visible'>"
-             "back</span></p>", "back", 0),
+             "back</span></p>", "back", 0, []),
             # players, frames and WeChat's media components are counted, not read
             ("<p>Text</p><mpvoice>voice</mpvoice><iframe></iframe><mp-common-profile>Profile</mp-common-profile>"
-             "<section><video><iframe></iframe></video></section><p>more</p>", "Text\n\nmore", 4),
-            # images stay where they are
+             "<section><video><iframe></iframe></video></section><p>more</p>", "Text\n\nmore", 4, []),
+            # images stay where they are, if shown; the page's own attributes are not the read's markers
             ("<p>before<img data-src='https://e.test/a.png'>after</p>",
-             "before\n\n![image](https://e.test/a.png)\n\nafter", 0),
+             "before\n\n![image](https://e.test/a.png)\n\nafter", 0, []),
+            ("<p>Sub<img hidden src='https://e.test/a.png'>scribe to continue.</p>", "Subscribe to continue.", 0, []),
+            ("<p data-xr-skip>Please sign in to continue.</p>", "Please sign in to continue.", 0, []),
+            # what innerText cannot vouch for
+            ("<p style='opacity:0.1'>x</p>" + prose, None, 0, ["faint_text"]),
+            ("<p style='color:#fff'>x</p>" + prose, None, 0, ["faint_text"]),
+            ("<p style='font-size:0'>x</p>" + prose, None, 0, ["small_text"]),
+            ("<p style='transform:scaleX(-1)'>x</p>" + prose, None, 0, ["transformed_text"]),
+            ("<div style='height:20px;overflow:hidden'><p>a</p><p>b</p><p>c</p></div>" + prose, None, 0,
+             ["clipped_text"]),
+            ("<p style='margin-left:-9999px'>x</p>" + prose, None, 0, ["offscreen_text"]),
+            ("<p dir='rtl'>continue. Subscribe to</p>" + prose, None, 0, ["reordered_text"]),
+            ("<div style='display:flex;flex-direction:row-reverse'><span>a</span><span>b</span></div>" + prose, None,
+             0, ["reordered_text"]),
+            ("<p>\u202econtinue\u202c</p>" + prose, None, 0, ["reordered_text"]),
+            (prose * 3 + "</div><div style='position:fixed;inset:0;background:#fff'>Sign in</div><div>", None, 0,
+             ["covered_text"]),
+            (prose * 3 + "</div><div style='position:fixed;left:0;right:0;bottom:0;height:40px'>Like</div><div>", None,
+             0, []),
         )
         with sync_playwright() as playwright:
             try:
@@ -1461,11 +1530,19 @@ class WeChatArticleReadTest(unittest.TestCase):
                 self.skipTest(f"chromium is not available: {error}")
             try:
                 page = browser.new_page()
-                for body, content, embeds in cases:
+                for body, content, embeds, risks in cases:
                     page.set_content(f"<html><head></head><body><div id='js_content'>{body}</div></body></html>")
-                    self.assertEqual(page.evaluate(_WECHAT_ARTICLE_JS), {"content": content, "embeds": embeds}, body)
-                    self.assertEqual(page.evaluate("() => document.querySelectorAll('[data-xr-skip], style').length"),
-                                     0, body)  # the page is left as it was found
+                    before = page.evaluate("() => document.documentElement.outerHTML")
+                    read = page.evaluate(_WECHAT_ARTICLE_JS)
+                    if content is not None:
+                        self.assertEqual(read["content"], content, body)
+                    self.assertEqual((read["embeds"], read["risks"]), (embeds, risks), body)
+                    self.assertIn(read["content"].split("\n")[0].replace("![image](https://e.test/a.png)", ""),
+                                  read["page_text"], body)  # the whole page's text comes back too
+                    self.assertEqual(page.evaluate("() => document.documentElement.outerHTML"), before, body)
+                page.set_content("<html><head><style>.g::before{content:'Subscribe to continue.'}</style></head>"
+                                 "<body><div id='js_content'><p class='g'>x</p></div></body></html>")
+                self.assertEqual(page.evaluate(_WECHAT_ARTICLE_JS)["risks"], ["generated_text"])  # text made by CSS
             finally:
                 browser.close()
 

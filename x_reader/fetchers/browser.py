@@ -15,16 +15,22 @@ from pathlib import Path
 SESSION_DIR = Path.home() / ".x-reader" / "sessions"
 TIMEOUT_MS = 30_000
 
-# A WeChat article as the page shows it: the browser's own innerText of the
-# article (inline runs join, blocks and <br> part lines, hidden text is left
-# out), with images kept in place. Players, frames, plugins and WeChat's own
-# media components carry content this read does not take: they are counted
-# and set aside. The page is left as it was found.
+# A WeChat article as the browser lays it out: the browser's own innerText of
+# the article (inline runs join, blocks and <br> part lines, display:none and
+# visibility:hidden text left out), with the images it shows kept in place.
+# Players, frames, plugins and WeChat's own media components carry content
+# this read does not take: they are counted and set aside. What innerText
+# cannot vouch for is reported as risks: text too small or faint to read,
+# turned, clipped or off the page, shown in another order, text made by CSS,
+# and anything outside the article painted over it. The page's whole text is
+# returned too, for walls drawn outside the article. The page is left as it
+# was found (the temporary marking uses an attribute name no page can know).
 _WECHAT_ARTICLE_JS = r"""() => {
     const container = document.querySelector('#js_content') || document.querySelector('.rich_media_content');
     if (!container) return null; // Safe fallback to generic if not found
 
     const embedded = /^(IFRAME|VIDEO|AUDIO|OBJECT|EMBED|CANVAS|MPVOICE|MPVIDEO|QQMUSIC|MP-.+)$/;
+    const mark = 'data-xr-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
     const images = [];
     const markers = [];
     const skipped = [];
@@ -33,11 +39,11 @@ _WECHAT_ARTICLE_JS = r"""() => {
         for (const child of element.children) {
             if (embedded.test(child.tagName)) {
                 embeds += 1;
-                child.setAttribute('data-xr-skip', '');
+                child.setAttribute(mark, '');
                 skipped.push(child);
             } else if (child.tagName === 'IMG') {
                 const src = child.getAttribute('data-src') || child.getAttribute('src');
-                if (src) {
+                if (src && child.getClientRects().length && getComputedStyle(child).visibility === 'visible') {
                     const marker = document.createTextNode(`\u0001${images.length}\u0001`);
                     images.push(src);
                     child.after(marker);
@@ -50,21 +56,120 @@ _WECHAT_ARTICLE_JS = r"""() => {
     };
     walk(container);
     const style = document.createElement('style');
-    style.textContent = '[data-xr-skip] { display: none !important; }';
+    style.textContent = `[${mark}] { display: none !important; }`;
     (document.head || document.documentElement).append(style);
+    const risks = new Set();
     let text;
     try {
         text = container.innerText;
+        const alpha = (color) => {
+            const parts = (color.match(/[\d.]+/g) || []).map(Number);
+            return color.startsWith('rgba') || color.includes('/') ? (parts.length > 3 ? parts[3] : 1) : 1;
+        };
+        const luminance = (color) => {
+            const [r, g, b] = (color.match(/[\d.]+/g) || [0, 0, 0]).map(Number).map(value => {
+                const c = value / 255;
+                return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+            });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const backdrop = (element) => {
+            for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+                const own = getComputedStyle(node);
+                if (own.backgroundImage !== 'none') return null; // an image behind the text: not judged
+                if (alpha(own.backgroundColor) > 0.5) return own.backgroundColor;
+            }
+            return 'rgb(255, 255, 255)';
+        };
+        const pageWidth = Math.max(document.documentElement.scrollWidth, window.innerWidth);
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+        let checked = 0;
+        const placed = new Set(markers);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            if (!node.data.trim() || placed.has(node)) continue;
+            const element = node.parentElement;
+            if (!element || element.closest(`[${mark}]`)) continue;
+            const own = getComputedStyle(element);
+            if (own.visibility !== 'visible') continue; // left out of innerText
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const boxes = [...range.getClientRects()];
+            if (!boxes.length) continue; // not laid out (display:none): left out of innerText
+            if (++checked > 20000) { risks.add('too_much_to_check'); break; }
+            const drawn = boxes.filter(box => box.width > 0.5 && box.height > 0.5);
+            if (!drawn.length || parseFloat(own.fontSize) < 6) risks.add('small_text');
+            let opacity = 1;
+            for (let node2 = element; node2 && node2.nodeType === 1; node2 = node2.parentElement) {
+                const up = getComputedStyle(node2);
+                opacity *= parseFloat(up.opacity);
+                if (up.transform !== 'none') {
+                    const m = up.transform.match(/matrix\(([^)]+)\)/);
+                    const [a, b, c, d] = m ? m[1].split(',').map(Number) : [0, 0, 0, 0];
+                    const turned = Math.abs(Math.atan2(b, a)) > Math.PI / 4;
+                    if (!m || a * d - b * c < 0.25 || turned) risks.add('transformed_text');
+                }
+                if (up.clipPath !== 'none' || (up.clip && up.clip !== 'auto')) risks.add('clipped_text');
+                if (node2 !== element && (up.overflowX !== 'visible' || up.overflowY !== 'visible')) {
+                    const frame = node2.getBoundingClientRect();
+                    if (drawn.some(box => box.left < frame.left - 2 || box.right > frame.right + 2
+                            || box.top < frame.top - 2 || box.bottom > frame.bottom + 2)) risks.add('clipped_text');
+                }
+                if (node2 !== container && node2.parentElement) {
+                    const holder = getComputedStyle(node2.parentElement);
+                    if (/flex|grid/.test(holder.display) && (up.order !== '0' || /reverse/.test(holder.flexDirection)
+                            || holder.flexWrap === 'wrap-reverse')) risks.add('reordered_text');
+                }
+                if (node2 === document.body) break;
+            }
+            if (opacity < 0.3 || alpha(own.color) < 0.3 || alpha(own.webkitTextFillColor || own.color) < 0.3) {
+                risks.add('faint_text');
+            } else {
+                const behind = backdrop(element);
+                if (behind) {
+                    const [light, dark] = [luminance(own.color), luminance(behind)].sort((x, y) => y - x);
+                    if ((light + 0.05) / (dark + 0.05) < 1.3) risks.add('faint_text');
+                }
+            }
+            if (own.direction === 'rtl' || /override|plaintext/.test(own.unicodeBidi)) risks.add('reordered_text');
+            if (drawn.some(box => box.right + window.scrollX < 0 || box.bottom + window.scrollY < 0
+                    || box.left + window.scrollX > pageWidth)) risks.add('offscreen_text');
+        }
+        if (/[‪-‮⁦-⁩]/.test(text)) risks.add('reordered_text');
+        for (const element of [container, ...container.querySelectorAll('*')]) {
+            if (element.closest(`[${mark}]`)) continue;
+            for (const pseudo of ['::before', '::after', '::marker']) {
+                const made = getComputedStyle(element, pseudo).content;
+                if (made && /["'][^"']*[^\s"'][^"']*["']/.test(made)) risks.add('generated_text');
+            }
+        }
+        // anything outside the article painted over it
+        const area = container.getBoundingClientRect();
+        const left = Math.max(area.left, 0), right = Math.min(area.right, window.innerWidth);
+        const top = Math.max(area.top, 0), bottom = Math.min(area.bottom, window.innerHeight);
+        const seen = (right - left) * (bottom - top);
+        for (const fx of [0.1, 0.5, 0.9]) {
+            for (const fy of [0.1, 0.5, 0.9]) {
+                if (seen <= 0) break;
+                let hit = document.elementFromPoint(left + (right - left) * fx, top + (bottom - top) * fy);
+                if (!hit || container.contains(hit) || hit.contains(container)) continue;
+                while (hit.parentElement && !hit.parentElement.contains(container)) hit = hit.parentElement;
+                const over = hit.getBoundingClientRect();  // (bars and badges over a corner of it do not count)
+                const shared = Math.max(0, Math.min(over.right, right) - Math.max(over.left, left))
+                    * Math.max(0, Math.min(over.bottom, bottom) - Math.max(over.top, top));
+                if (shared >= 0.3 * seen) risks.add('covered_text');
+            }
+        }
     } finally {
         style.remove();
-        skipped.forEach(element => element.removeAttribute('data-xr-skip'));
+        skipped.forEach(element => element.removeAttribute(mark));
         markers.forEach(marker => marker.remove());
     }
     const content = text
         .replace(/\u0001(\d+)\u0001/g, (_match, index) => `\n\n![image](${images[index]})\n\n`)
         .split('\n').map(line => line.replace(/[ \t ]+/g, ' ').trim()).join('\n')
         .replace(/\n{3,}/g, '\n\n').trim();
-    return {content: content, embeds: embeds};
+    const page = (document.body ? document.body.innerText : '').slice(0, 300000);
+    return {content: content, embeds: embeds, risks: [...risks].sort(), page_text: page};
 }"""
 
 
@@ -186,6 +291,8 @@ async def fetch_via_browser(url: str, storage_state: str = None) -> dict:
                 }
                 if walked and extraction == "container":
                     result["embedded_media"] = int(walked.get("embeds") or 0)
+                    result["visual_risks"] = [str(risk) for risk in walked.get("risks") or []]
+                    result["page_text"] = str(walked.get("page_text") or "")
             else:
                 # Generic fallback: a Bilibili page may navigate after the
                 # initial HTTP 412 response. Allow DOM stabilization and retry

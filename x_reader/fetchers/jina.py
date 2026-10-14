@@ -407,7 +407,7 @@ _MATH_LEX = re.compile(
     r"|(?P<function>[a-z][a-z-]*)\(|(?P<name>--[\w-]+|[a-z][a-z-]*)|(?P<op>[-+*/,()])",
     re.IGNORECASE)
 _MATH_ARGUMENTS = {"calc": (1, 1), "min": (1, 99), "max": (1, 99), "clamp": (3, 3), "abs": (1, 1), "sign": (1, 1),
-                   "round": (1, 3), "mod": (2, 2), "rem": (2, 2)}
+                   "round": (1, 2), "mod": (2, 2), "rem": (2, 2)}  # (round's strategy is not counted)
 _MATH_CONSTANTS = {"e", "pi", "infinity", "nan"}
 _ROUNDING = {"nearest", "up", "down", "to-zero"}
 _PRE_RUN = re.compile(r"([ \t]*)([^ \t]*)")
@@ -511,10 +511,24 @@ def _unit_px(unit: str, font_px: float):
 
 def _reach(value: str, font_px: float, combined: bool = True) -> float:
     """How far a value's lengths reach, in CSS pixels: their sum (or the largest
-    one), times any factor a math function multiplies them by. Exponents count;
-    numbers inside colors, URLs and strings do not."""
+    one); a math function by the furthest value it can come to (one x-reader
+    cannot work out: its lengths times any factor it multiplies them by).
+    Exponents count; numbers inside colors, URLs and strings do not."""
     if not any(char.isdigit() for char in value):
         return 0.0
+    if any(function in value for function in _MATH_FUNCTIONS):
+        total = largest = 0.0
+        rest = []
+        for token in _tokens(value):
+            found = _math_span(token, font_px) if token.startswith(_MATH_FUNCTIONS) else None
+            if found is None:
+                rest.append(token)
+                continue
+            size = max(abs(found[0]), abs(found[1]))
+            total, largest = total + size, max(largest, size)
+        if len(rest) < len(_tokens(value)):
+            others = _reach(" ".join(rest), font_px, combined) if rest else 0.0
+            return total + others if combined else max(largest, others)
     text = " ".join(_COLOR_OR_URL.sub(" ", _QUOTED.sub(" ", value)).split()) if "(" in value or "'" in value \
         or '"' in value else value
     total = largest = 0.0
@@ -866,10 +880,10 @@ def _overflow_shows(declarations: list) -> bool:
     for prop, value, important in declarations:
         if prop not in _OVERFLOW_AXES:
             continue
-        parts = value.split()
+        parts = ["visible"] if value in ("initial", "unset") else value.split()  # (overflow is not inherited)
         if not 1 <= len(parts) <= len(_OVERFLOW_AXES[prop]) or any(part not in _CLIP_VALUES | {"visible"}
                                                                    for part in parts):
-            if value in _WIDE_KEYWORDS - {"initial", "unset"}:
+            if value in _WIDE_KEYWORDS:
                 return False  # taken from elsewhere
             continue  # dropped by browsers
         for index, axis in enumerate(_OVERFLOW_AXES[prop]):
@@ -1074,9 +1088,11 @@ def _covers(name: str, attrs: dict, declarations: list, font_px: float, custom: 
             if (prop == "quotes" and value not in {"auto", "none"} | _WIDE_KEYWORDS) or (
                     prop != "quotes" and re.search(r"[\"']|\b(?:symbols|counters?|url|image-set|attr)\(", value)):
                 return True
-        elif prop in ("content", "hyphenate-character") or (prop == "text-overflow" and re.search(r"[\"']", value)):
-            # text made by CSS: replaced content, a hyphenation string, a custom ellipsis
-            if value not in {"normal", "none", "auto", "clip", "ellipsis"} | _WIDE_KEYWORDS:
+        elif prop in ("content", "hyphenate-character", "text-overflow"):
+            # text made by CSS: replaced content, a hyphenation string, a custom ellipsis (by the value that wins)
+            won = _winner(declarations, prop, lambda value: value)
+            if won not in {"normal", "none", "auto", "clip", "ellipsis"} | _WIDE_KEYWORDS and (
+                    prop != "text-overflow" or re.search(r"[\"']", won)):
                 return True
         if prop in _HEIGHT_LIMITS and value not in {"auto", "none", "normal"} | _WIDE_KEYWORDS:
             limited = True
@@ -1260,7 +1276,8 @@ def _style_context(name: str, attrs: dict, parent: dict, auto_rtl=None) -> dict:
     starts, ends = ("right", "left") if context["rtl"] else ("left", "right")
     advance = [0.0, 0.0]
     for kind in ("margin", "border", "padding"):
-        sides = _side_winners(declarations, kind, context["rtl"])
+        sides = _border_used(declarations, context["rtl"]) if kind == "border" else _side_winners(
+            declarations, kind, context["rtl"])
         for index, side in enumerate((starts, ends)):
             amount = _side_px(sides[side], own_px, kind) if side in sides else 0.0
             advance[index] += max(amount or 0.0, 0.0)
@@ -1493,6 +1510,10 @@ def _style_context(name: str, attrs: dict, parent: dict, auto_rtl=None) -> dict:
         for token in _side_winners(declarations, kind, context["rtl"]).values():
             amount = _box_px(token, font)
             if amount is None:
+                found = _math_span(token, font) if token.startswith(_MATH_FUNCTIONS) else None
+                if found is not None and (found[0] != found[1] or not (
+                        (0 if kind == "padding" else -200) <= found[0] <= 1000)):
+                    return unknown()  # a math value that may come to more than one value, or off the screen
                 continue  # auto, a CSS-wide keyword or a design token (judged above)
             low, high = ((0, 50) if kind == "padding" else (-20, 50)) if amount[1] else (
                 (0, 1000) if kind == "padding" else (-200, 1000))
@@ -1702,12 +1723,15 @@ def _definite_height(name: str, declarations: list, parent_definite: bool) -> bo
 _HEIGHT_WORDS = {"auto", "min-content", "max-content", "fit-content", "stretch", "-webkit-fill-available"}
 
 
-def _math_type(value: str):
-    """The type a math function (calc, min, max, clamp and the functions they
-    hold) comes out as: "length" (lengths and percentages), "number", or "any"
-    with a variable in it; None when browsers drop it (a word, a unit or an
-    operator out of place, the wrong number of arguments, or adding a length
-    to a number)."""
+def _math_eval(value: str, font_px: float = 16.0, percent_px: float = 10.0):
+    """A math function (calc, min, max, clamp and the functions they hold)
+    worked out as browsers would: (kind, low, high) with kind "length" (in CSS
+    pixels; percent_px per percent), "number" or "any" (a variable in it, read
+    as an outside value of 0), and the range the value can take (one value
+    unless rounding, a remainder or a division by a range spreads it); None
+    when browsers drop it (a word, a unit or an operator out of place, an empty
+    var(), the wrong number of arguments, adding a length to a number,
+    rounding a length with no step)."""
     tokens, position = [], 0
     while position < len(value):
         match = _MATH_LEX.match(value, position)
@@ -1716,10 +1740,16 @@ def _math_type(value: str):
         if match.group("space"):
             tokens.append(("space", " "))
         elif match.group("number") is not None:
-            unit = (match.group("unit") or "").lower()
-            if unit and unit != "%" and _unit_px(unit, 16.0) is None:
-                return None  # (an angle, a time or no unit at all: not a length)
-            tokens.append(("value", "length" if unit else "number"))
+            amount, unit = float(match.group("number")), (match.group("unit") or "").lower()
+            if unit == "%":
+                tokens.append(("value", ("length", amount * percent_px, amount * percent_px)))
+            elif unit:
+                scale = _unit_px(unit, font_px)
+                if scale is None:
+                    return None  # (an angle, a time or no unit at all: not a length)
+                tokens.append(("value", ("length", amount * scale, amount * scale)))
+            else:
+                tokens.append(("value", ("number", amount, amount)))
         elif match.group("function"):
             tokens.append(("function", match.group("function").lower()))
         elif match.group("name"):
@@ -1728,6 +1758,12 @@ def _math_type(value: str):
             tokens.append(("op", match.group("op")))
         position = match.end()
     cursor = [0]
+    unbounded = (float("-inf"), float("inf"))
+
+    def span(kind, low, high):
+        if low != low or high != high:  # NaN: anything
+            low, high = unbounded
+        return kind, min(low, high), max(low, high)
 
     def peek(skip=True):
         index = cursor[0]
@@ -1743,12 +1779,26 @@ def _math_type(value: str):
     def combine(first, second, operator):
         if None in (first, second):
             return None
+        (kind_a, low_a, high_a), (kind_b, low_b, high_b) = first, second
         if operator in "+-":
-            return first if second in (first, "any") else second if first == "any" else None
+            kind = kind_a if kind_b in (kind_a, "any") else kind_b if kind_a == "any" else None
+            if kind is None:
+                return None
+            return span(kind, low_a + low_b, high_a + high_b) if operator == "+" else span(
+                kind, low_a - high_b, high_a - low_b)
         if operator == "*":
-            return second if first == "number" else first if second in ("number", "any") else (
-                "any" if first == "any" else None)
-        return first if second in ("number", "any") else None  # (dividing by a length: not kept everywhere)
+            kind = kind_b if kind_a == "number" else kind_a if kind_b in ("number", "any") else (
+                "any" if kind_a == "any" else None)
+            if kind is None:
+                return None
+            products = [x * y for x in (low_a, high_a) for y in (low_b, high_b)]
+            return span(kind, min(products), max(products))
+        if kind_b not in ("number", "any"):
+            return None  # (dividing by a length: not kept everywhere)
+        if low_b <= 0 <= high_b:
+            return (kind_a,) + unbounded  # a division by zero (or by a range around it) is infinite
+        quotients = [x / y for x in (low_a, high_a) for y in (low_b, high_b)]
+        return span(kind_a, min(quotients), max(quotients))
 
     def value_of(depth):
         if depth > 32:
@@ -1756,20 +1806,27 @@ def _math_type(value: str):
         kind, text = take()
         if kind == "value":
             return text
-        if kind == "op" and text in "+-":  # a sign written against its number
+        if kind == "op" and text in "+-":  # a sign written against its number or constant
             nxt, index = peek(skip=False)
-            if nxt[0] == "value" and index == cursor[0]:
+            if index == cursor[0] and nxt[0] in ("value", "name"):
                 cursor[0] = index + 1
-                return nxt[1]
+                inner = nxt[1] if nxt[0] == "value" else constant(nxt[1])
+                return None if inner is None else inner if text == "+" else span(inner[0], -inner[2], -inner[1])
             return None
         if kind == "op" and text == "(":
             inner = sum_of(depth + 1)
             return inner if take() == ("op", ")") else None
         if kind == "function":
             return function_of(text, depth + 1)
-        if kind == "name" and text in _MATH_CONSTANTS:
-            return "number"
+        if kind == "name":
+            return constant(text)
         return None
+
+    def constant(name):
+        values = {"e": 2.718281828459045, "pi": 3.141592653589793, "infinity": float("inf")}
+        if name == "nan":
+            return ("number",) + unbounded
+        return ("number", values[name], values[name]) if name in values else None
 
     def product_of(depth):
         result = value_of(depth)
@@ -1795,23 +1852,33 @@ def _math_type(value: str):
             else:
                 return result
 
+    def skip_to_close():
+        level = 1
+        while level:
+            kind, text = take(skip=False)
+            if kind == "end":
+                return False
+            level += kind == "function" or (kind == "op" and text == "(")
+            level -= kind == "op" and text == ")"
+        return True
+
     def function_of(name, depth):
         if name in ("var", "env"):
-            level = 1
-            while level:
-                kind, text = take(skip=False)
-                if kind == "end":
-                    return None
-                level += kind == "function" or (kind == "op" and text == "(")
-                level -= kind == "op" and text == ")"
-            return "any"
+            token = take()  # var(--name[, fallback]) and env(name[, fallback]): a name must come first
+            if token[0] != "name" or token[1].startswith("--") != (name == "var"):
+                return None
+            following = take()
+            if following == ("op", ")"):
+                return ("any", 0.0, 0.0)
+            return ("any", 0.0, 0.0) if following == ("op", ",") and skip_to_close() else None
         if name not in _MATH_ARGUMENTS:
             return None
-        arguments = []
+        arguments, strategy = [], False
         while True:
             token, index = peek()
-            if name == "round" and not arguments and token[0] == "name" and token[1] in _ROUNDING:
+            if name == "round" and not arguments and not strategy and token[0] == "name" and token[1] in _ROUNDING:
                 cursor[0] = index + 1
+                strategy = True
                 if take() != ("op", ","):
                     return None
             arguments.append(sum_of(depth))
@@ -1823,16 +1890,53 @@ def _math_type(value: str):
         low, high = _MATH_ARGUMENTS[name]
         if not low <= len(arguments) <= high or None in arguments:
             return None
-        kinds = set(arguments) - {"any"}
+        kinds = {argument[0] for argument in arguments} - {"any"}
         if len(kinds) > 1:
             return None
-        return "number" if name == "sign" else (kinds.pop() if kinds else "any")
+        kind = kinds.pop() if kinds else "any"
+        lows, highs = [argument[1] for argument in arguments], [argument[2] for argument in arguments]
+        if name == "calc":
+            return arguments[0]
+        if name == "min":
+            return span(kind, min(lows), min(highs))
+        if name == "max":
+            return span(kind, max(lows), max(highs))
+        if name == "clamp":
+            return span(kind, max(lows[0], min(lows[1], lows[2])), max(highs[0], min(highs[1], highs[2])))
+        if name == "abs":
+            if lows[0] >= 0:
+                return arguments[0]
+            return span(kind, -highs[0], -lows[0]) if highs[0] <= 0 else span(kind, 0.0, max(-lows[0], highs[0]))
+        if name == "sign":
+            return span("number", -1.0 if lows[0] < 0 else 0.0 if lows[0] == 0 else 1.0,
+                        1.0 if highs[0] > 0 else 0.0 if highs[0] == 0 else -1.0)
+        if name == "round" and len(arguments) == 1 and kind != "number":
+            return None  # only a number may leave out the step it rounds to
+        step = max(abs(lows[-1]), abs(highs[-1])) if len(arguments) > 1 else 1.0
+        if name == "round":
+            return span(kind, lows[0] - step, highs[0] + step)
+        if lows[1] <= 0 <= highs[1]:
+            return (kind,) + unbounded  # a remainder of a division by zero
+        return span(kind, -step, step)  # mod() and rem(): smaller than the step
 
     first = take()
     if first[0] != "function" or first[1] not in _MATH_ARGUMENTS:
         return None
     result = function_of(first[1], 1)
     return result if peek()[0][0] == "end" else None
+
+
+def _math_type(value: str):
+    """The kind a math function comes out as ("length", "number" or "any"), or None when browsers drop it."""
+    result = _math_eval(value)
+    return None if result is None else result[0]
+
+
+def _math_span(value: str, font_px: float, percent_px: float = 10.0):
+    """The range of CSS pixels a length math function can come to (an outside
+    variable read as 0), or None when it is not one browsers keep."""
+    result = _math_eval(value, font_px, percent_px)
+    return None if result is None or result[0] == "number" else (result[1], result[2])
 
 
 def _math_ok(value: str) -> bool:
@@ -1976,6 +2080,95 @@ def _border_read(prop: str, value: str) -> bool:
     return True
 
 
+_COLOR_FUNCTIONS = ("rgb(", "rgba(", "hsl(", "hsla(", "hwb(", "lab(", "lch(", "oklab(", "oklch(", "color(",
+                    "color-mix(", "light-dark(")
+
+
+def _border_width_ok(token: str) -> bool:
+    return token in _BORDER_WIDTHS or _math_ok(token) or (
+        bool(_CSS_DIMENSION.fullmatch(token)) and not token.startswith("-") and not token.endswith("%"))
+
+
+def _border_parts(prop: str, value: str, start: str, end: str):
+    """What one border declaration sets, as {side: (width, style)} (None for a
+    part it leaves alone; a shorthand resets the parts it does not name), {}
+    when it sets neither or browsers drop it (two widths, two styles, two
+    colors, a token in the wrong place), None when x-reader cannot read all
+    of it (a variable, a value it does not know)."""
+    rest = prop[7:] if prop.startswith("border-") else "" if prop == "border" else None
+    if rest is None:
+        return {}
+    logical = {"inline": (start, end), "block": ("top", "bottom"), "inline-start": (start,),
+               "inline-end": (end,), "block-start": ("top",), "block-end": ("bottom",)}
+    if rest == "" or rest in _PHYSICAL_SIDES or rest in logical:
+        sides, part = _PHYSICAL_SIDES if rest == "" else (rest,) if rest in _PHYSICAL_SIDES else logical[rest], "all"
+    elif rest in ("width", "style"):
+        sides, part = None, rest
+    elif rest.endswith(("-width", "-style")) and (rest.rsplit("-", 1)[0] in _PHYSICAL_SIDES
+                                                   or rest.rsplit("-", 1)[0] in logical):
+        base, part = rest.rsplit("-", 1)
+        sides = (base,) if base in _PHYSICAL_SIDES else logical[base]
+    else:
+        return {}  # colors, images, radii, spacing: no width or style
+    if re.search(r"\b(?:var|env)\(", value):
+        return None  # judged like external CSS
+    if value in _WIDE_KEYWORDS:
+        pair = (value, value) if part == "all" else (value, None) if part == "width" else (None, value)
+        return dict.fromkeys(sides or _PHYSICAL_SIDES, pair)
+    tokens = _tokens(value)
+    if part == "all":
+        width = style = color = None
+        for token in tokens:
+            if _border_width_ok(token) and width is None:
+                width = token
+            elif token in _BORDER_STYLES and style is None:
+                style = token
+            elif (token in _SYSTEM_COLORS or token in _NAMED_RGB or _HEX_COLOR.fullmatch(token) or (
+                    token.startswith(_COLOR_FUNCTIONS) and token.endswith(")"))) and color is None:
+                color = token
+            elif _border_width_ok(token) or token in _BORDER_STYLES or token in _SYSTEM_COLORS or token in _NAMED_RGB:
+                return {}  # a second width, style or color: browsers drop the declaration
+            else:
+                return None
+        return dict.fromkeys(sides, (width or "medium", style or "none"))
+    valid = _border_width_ok if part == "width" else (lambda token: token in _BORDER_STYLES)
+    if not tokens or not all(valid(token) for token in tokens):
+        return {}
+    if sides is None:
+        values = _expand_sides(tokens)
+    elif len(tokens) <= len(sides):
+        values = {side: tokens[min(index, len(tokens) - 1)] for index, side in enumerate(sides)}
+    else:
+        return {}
+    return {side: (token, None) if part == "width" else (None, token) for side, token in values.items()}
+
+
+def _border_used(declarations: list, rtl: bool) -> dict:
+    """{side: width token} for each side a border declaration reaches, by the
+    cascade of widths and styles apart (later beats earlier, !important beats
+    both): a side whose style ends up none or hidden (the initial style) has
+    no border ("0"); "inherit" when a part is inherited (not followed).
+    Declarations browsers drop, or that x-reader cannot read, set nothing."""
+    start, end = ("right", "left") if rtl else ("left", "right")
+    widths: dict = {}
+    styles: dict = {}
+    for prop, value, important in declarations:
+        for side, (width, style) in (_border_parts(prop, value, start, end) or {}).items():
+            for won, part in ((widths, width), (styles, style)):
+                if part is not None and (important or not won.get(side, ("", False))[1]):
+                    won[side] = (part, important)
+    used = {}
+    for side in set(widths) | set(styles):
+        width, style = widths.get(side, ("medium", False))[0], styles.get(side, ("none", False))[0]
+        if "inherit" in (width, style):
+            used[side] = "inherit"
+        elif style in ("none", "hidden") or style in _WIDE_KEYWORDS:
+            used[side] = "0"
+        else:
+            used[side] = "medium" if width in _WIDE_KEYWORDS else width
+    return used
+
+
 def _side_winners(declarations: list, kind: str, rtl: bool) -> dict:
     """{side: token} each side ends up with for kind, by the cascade:
     physical, logical and shorthand declarations of a side set one value,
@@ -2002,7 +2195,10 @@ def _side_px(token: str, font_px: float, kind: str):
     if kind == "border":
         return _BORDER_WIDTHS.get(token, _reach(token, font_px))
     if token.startswith(_MATH_FUNCTIONS):
-        reach = _reach(token, font_px)  # (a math function with a minus may come out negative)
+        found = _math_span(token, font_px)  # (the lowest value it can come to)
+        if found is not None:
+            return found[0]
+        reach = _reach(token, font_px)  # (one x-reader cannot work out, with a minus, may come out negative)
         return -reach if "-" in token else reach
     amount = _box_px(token, font_px)
     if amount is None and _CSS_DIMENSION.fullmatch(token):
@@ -2027,19 +2223,13 @@ def _start_shift(declarations: list, font_px: float, rtl: bool, relative: bool):
             if amount is None:
                 return None
             shift += amount
-    # Borders: the width that wins among declarations x-reader reads in full,
-    # and the width of any it cannot read (a color it does not know may still be kept).
-    won, won_important, unread = None, False, []
-    for prop, value, important in declarations:
-        token = _sides_set(prop, value, "border", start, end).get(start)
-        if token is None:
-            continue
-        if _border_read(prop, value) and _side_token_ok(token, "border"):
-            if important or not won_important:
-                won, won_important = token, important
-        else:
-            unread.append(token)
-    widths = [_side_px(token, font_px, "border") for token in ([won] if won is not None else []) + unread]
+    # Borders: the width the start side ends up with (none when its style is
+    # none), and the width of any declaration x-reader cannot read (a color it
+    # does not know may still be kept).
+    used = _border_used(declarations, rtl).get(start)
+    unread = [token for prop, value, _important in declarations if _border_parts(prop, value, start, end) is None
+              for token in [_sides_set(prop, value, "border", start, end).get(start)] if token is not None]
+    widths = [_side_px(token, font_px, "border") for token in ([used] if used is not None else []) + unread]
     if None in widths:
         return None
     shift += max(widths, default=0.0)
@@ -2128,10 +2318,9 @@ def _line_width(declarations: list, font_px: float, parent_width: float, rtl: bo
         if match:
             amount = float(match.group(2))
             return parent_width * amount / 100 if match.group(3) == "%" else _length_px(value, font_px)
-        if value.startswith(("calc(", "min(", "max(", "clamp(")):
-            resolved = re.sub(rf"({_NUMBER})%", lambda percent: f"{float(percent.group(1)) * parent_width / 100}px",
-                              value)  # percentages of the parent's width, not of a fixed box
-            return _reach(resolved, font_px)
+        if value.startswith(_MATH_FUNCTIONS):
+            found = _math_span(value, font_px, parent_width / 100)  # percentages of the parent's width
+            return None if found is None else max(abs(found[0]), abs(found[1]))
         return None
 
     sizes = {}
@@ -2182,11 +2371,17 @@ def _auto_direction(element, fallback: bool) -> bool:
     return fallback
 
 
+# Characters word-spacing widens: spaces, no-break spaces and other scripts' word separators.
+_WORD_SEPARATORS = re.compile("[ \u00a0\u1361\U00010100\U00010101\U0001039f\U0001091f]")
+
+
 def _text_px(text: str, font_px: float, letter_px: float = 0.0, word_px: float = 0.0) -> float:
     """How wide text can run on one line, in pixels: letters at up to 0.6em,
-    wide (CJK) ones at 1em, plus the spacing set between letters and words."""
+    wide (CJK) ones at 1em, plus the spacing set between letters and after
+    each word separator."""
     wide = len(_WIDE_LETTERS.findall(text)) if not text.isascii() else 0
-    return ((len(text) - wide) * 0.6 + wide) * font_px + len(text) * letter_px + text.count(" ") * word_px
+    separators = text.count(" ") if text.isascii() else len(_WORD_SEPARATORS.findall(text))
+    return ((len(text) - wide) * 0.6 + wide) * font_px + len(text) * letter_px + separators * word_px
 
 
 def _svg_text_pieces(svg) -> int:
@@ -2282,6 +2477,19 @@ def _box_items(element, caption_bottom: bool = False):
             yield "text", child.tail, inherited
 
 
+def _attribute_wording(element) -> bool:
+    """Whether an element shows wording from its attributes: a button's or a
+    text field's value, a placeholder, an option label, alt text."""
+    name = element.tag.rsplit("}", 1)[-1].lower()
+    kind = (element.get("type") or "").strip().lower() if name == "input" else ""
+    return any((label or "").strip() for label in (
+        element.get("value") if name == "input" and kind not in _NON_TEXT_INPUTS - _BUTTON_INPUTS else "",
+        element.get("placeholder") if name in ("input", "textarea") else "",
+        element.get("label") if name in ("option", "optgroup") else "",
+        element.get("alt") if name == "img" or kind == "image" else "",
+        "Submit" if name == "input" and kind in ("submit", "reset") else ""))
+
+
 def _shows_text(element) -> bool:
     """Whether an element lays out any text: hidden and display:none parts
     (and what they hold) left out; visibility is inherited, and a part can set
@@ -2296,7 +2504,7 @@ def _shows_text(element) -> bool:
                             or value in _WIDE_KEYWORDS)
         if seen in ("visible", "hidden", "collapse", "initial", "revert", "revert-layer"):
             invisible = seen in ("hidden", "collapse")
-        if not invisible and (node.text or "").strip():
+        if not invisible and ((node.text or "").strip() or _attribute_wording(node)):
             return True
         for child in node:
             if not invisible and (child.tail or "").strip():
@@ -2785,6 +2993,7 @@ def _extract_html_page(html: str) -> dict:
     folded: list = []  # blocks that line breaks part, read with each break as a space
     shown_chars = 0
     lines = {"dropped": False, "pre_px": 0.0, "pre_text": False, "nowrap_px": 0.0, "run_px": 0.0,
+             "base_px": 0.0, "box_px": 0.0,
              "run_joined": False, "foreign_letters": 0}
     # Letters, per region, on lines that do not wrap and run past 2000px: a
     # reader sees the start of such a line and scrolls to the rest; the page
@@ -2893,23 +3102,26 @@ def _extract_html_page(html: str) -> dict:
         before it (pushed off the screen by spaces), and how many of its
         letters sit past 2000px (overflow a reader scrolls to)."""
         column = 0.6 * state["font_px"] + state["letter_px"]  # (each piece at its own size and spacing)
+        base = lines["base_px"]  # (inside a box laid out whole: where the box starts)
         pushed, past = False, 0
         for spaces, word in _PRE_RUN.findall(chunk):
-            lines["pre_px"] += (len(spaces) + 15 * spaces.count("\t")) * column
+            lines["pre_px"] += (len(spaces) + 15 * spaces.count("\t")) * column + spaces.count(" ") * state["word_px"]
             if not word:
                 continue
-            start = lines["pre_px"]
-            lines["pre_px"] += (len(word) + (len(_WIDE_LETTERS.findall(word)) if not word.isascii() else 0)) * column
+            start = base + lines["pre_px"]
+            lines["pre_px"] += (len(word) + (len(_WIDE_LETTERS.findall(word)) if not word.isascii() else 0)) * column \
+                + (len(_WORD_SEPARATORS.findall(word)) if not word.isascii() else 0) * state["word_px"]
             if start > _WIDE_PX:
                 pushed = pushed or not lines["pre_text"]
                 past += len(word)
-            elif lines["pre_px"] > _WIDE_PX:
-                past += int((lines["pre_px"] - _WIDE_PX) / column)
+            elif base + lines["pre_px"] > _WIDE_PX:
+                past += min(len(word), int((base + lines["pre_px"] - _WIDE_PX) / column))
             lines["pre_text"] = True
         return pushed, past
 
     def past_edge(width_before: float, text: str, width: float) -> int:
         """How many of text's letters sit past 2000px on a line that does not wrap."""
+        width_before += lines["base_px"]  # (inside a box laid out whole: where the box starts)
         end = width_before + width
         if end <= _WIDE_PX or not width:
             return 0
@@ -3008,6 +3220,11 @@ def _extract_html_page(html: str) -> dict:
             elif not state["pre"]:
                 lines["nowrap_px"] = 0.0  # text that wraps: what follows may start a new line
                 past = joined_overflow(chunk, state)
+            if lines["box_px"] and not state["pre_nowrap"] and not (state["text_nowrap"] and not state["pre"]):
+                # text wrapping inside a box laid out whole: it fills the box, as far as the box reaches
+                reach = lines["base_px"] + lines["box_px"]
+                if reach > _WIDE_PX:
+                    past = max(past, int(len("".join(chunk.split())) * min(1.0, (reach - _WIDE_PX) / lines["box_px"])))
             for region in regions:
                 overflow[region] += past  # letters on lines that run past the screen's edge
         if shown and state["box"] is not None:
@@ -3040,10 +3257,12 @@ def _extract_html_page(html: str) -> dict:
             # SVG and MathML hide by the hidden attribute, display:none (style or
             # attribute) or visibility; reversed text comes from unicode-bidi overrides.
             declarations = _inline_declarations(attrs.get("style") or "") or []
-            shown_as = _kept_winner(declarations, "display", lambda value: _display_value(value) is not None) or (
-                attrs.get("display") or "").strip().lower()
-            seen_as = _kept_winner(declarations, "visibility", lambda value: value in ("visible", "hidden", "collapse")) \
-                or (attrs.get("visibility") or "").strip().lower()
+            shown_as = _kept_winner(declarations, "display", lambda value: _display_value(value) is not None
+                                    or value in _WIDE_KEYWORDS) or (attrs.get("display") or "").strip().lower()
+            seen_as = _kept_winner(declarations, "visibility", lambda value: value in ("visible", "hidden", "collapse")
+                                   or value in _WIDE_KEYWORDS) or (attrs.get("visibility") or "").strip().lower()
+            if any(prop == "all" for prop, _value, _important in declarations):
+                shown_as = seen_as = ""  # all resets display and visibility (to what shows)
             hidden_here = "hidden" in attrs or shown_as == "none"
             # (visibility is inherited and a descendant can set it back: its text is not settled)
             style.update(visibility="hidden" if hidden_here else "unknown" if seen_as in ("hidden", "collapse")
@@ -3184,8 +3403,11 @@ def _extract_html_page(html: str) -> dict:
             lines["nowrap_px"] += start_advance  # its margin, border and padding come first
             lines["pre_px"] += start_advance
             if state["atomic"] and state["box_px"]:
-                # a box laid out whole with a set width: its own lines are its own, and it takes that width
-                boxes.append((lines["nowrap_px"], lines["pre_px"]))
+                # a box laid out whole with a set width: its own lines are its own, and it takes that width;
+                # they start where the box starts
+                boxes.append((lines["nowrap_px"], lines["pre_px"], lines["base_px"], lines["box_px"]))
+                lines["base_px"] += lines["nowrap_px"] if parent["text_nowrap"] else lines["pre_px"]
+                lines["box_px"] = state["box_px"]
                 lines["nowrap_px"] = lines["pre_px"] = 0.0
         if state["block"]:
             emit("\n", state)
@@ -3213,7 +3435,7 @@ def _extract_html_page(html: str) -> dict:
             if not (state["block"] or state["cell"] or state["hidden"]) and (
                     parent["text_nowrap"] or parent["pre_nowrap"]):
                 if state["atomic"] and state["box_px"] and boxes:
-                    outer_nowrap, outer_pre = boxes.pop()
+                    outer_nowrap, outer_pre, lines["base_px"], lines["box_px"] = boxes.pop()
                     lines["nowrap_px"], lines["pre_px"] = outer_nowrap + state["box_px"], outer_pre + state["box_px"]
                 end_advance = state["advance"][1]
                 lines["nowrap_px"] += end_advance

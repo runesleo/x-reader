@@ -69,6 +69,13 @@ async def fetch_wechat(url: str) -> Dict[str, Any]:
         }
         if isinstance(data.get("embedded_media"), int):
             article["embedded_media"] = data["embedded_media"]  # players and frames the walk counted
+        article["final_url"] = str(data.get("url") or "")  # where the browser ended up
+        if isinstance(data.get("visual_risks"), list):
+            article["visual_risks"] = data["visual_risks"]  # what the page's text read cannot vouch for
+        if data.get("page_text"):
+            # walls drawn anywhere on the page (overlays, prompts outside the article)
+            from x_reader.evidence import page_wall_signals
+            article["page_signals"] = page_wall_signals(data["title"], data["page_text"])
         return article
     except RuntimeError:
         # Playwright not installed — re-raise with original Jina error context

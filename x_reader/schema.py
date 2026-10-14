@@ -206,6 +206,9 @@ def from_wechat(article: dict) -> UnifiedContent:
     media = article.get('embedded_media')
     if isinstance(media, int) and not isinstance(media, bool):
         extra["embedded_media"] = media  # players and frames counted in the article container
+    for key in ("final_url", "visual_risks", "page_signals"):
+        if key in article:
+            extra[key] = article[key]  # where the browser ended up, what it could not vouch for, walls around
     return UnifiedContent(
         source_type=SourceType.WECHAT,
         source_name=article.get('author', ''),

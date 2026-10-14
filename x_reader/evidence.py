@@ -416,6 +416,7 @@ _ACCESS_NOTE = re.compile(
     r" (?:is )?required[)\]][.,;]?"
 )
 _HAS_SENTENCE_BREAK = re.compile(r"[.!?…:;。！？：；]")
+_RUN_ON_CHARS = 80  # a short line (up to twice this) is also read run on from this much of the text before it
 
 
 def _normalized_lines(title: str, text: str, markup: bool = True):
@@ -462,7 +463,8 @@ def consent_signals(title: str, text: str, markup: bool = True) -> list:
     return ["consent", "consent_title"] if any(m in title_n for m in _CONSENT_TITLES) else ["consent"]
 
 
-def gate_signals(title: str, text: str, cta_text: str | None = None, markup: bool = True) -> list:
+def gate_signals(title: str, text: str, cta_text: str | None = None, markup: bool = True,
+                 teasers: bool = True) -> list:
     """Walls a page announces, wherever they appear: login, challenge, consent,
     missing page, paywall or teaser.
 
@@ -475,7 +477,8 @@ def gate_signals(title: str, text: str, cta_text: str | None = None, markup: boo
     shown; default text). The fetcher runs this over every visible block of the
     page, nav and footer included, with markup=False: its text is already what
     the page shows, so nothing in it is taken for a tag. Past the scan budget
-    the only signal is scan_budget_exceeded.
+    the only signal is scan_budget_exceeded. teasers=False leaves out "Read
+    more"-style teasers (for text around an article, whose links are not it).
     """
     title_n = _normalize(title[:1000])
     segments = _title_segments(title_n)
@@ -494,21 +497,41 @@ def gate_signals(title: str, text: str, cta_text: str | None = None, markup: boo
         if _MISSING_START.match(head):
             flags["missing" + suffix] = True
 
-    try:
-        for line in _normalized_lines(title, text, markup):
-            head = _LEAD.sub("", line, count=1)
+    def check_line(line: str, opens: bool = True) -> None:
+        # opens: the line starts where the text starts a line (not a cut-off window)
+        head = _LEAD.sub("", line, count=1)
+        if opens:
             check_start(head, bool(_ACCESS_NOTE.fullmatch(line)), strong=True)
-            if _HAS_SENTENCE_BREAK.search(line):
-                for part in _SENTENCE_BREAK.split(line)[1:]:
-                    if part:
-                        check_start(_LEAD.sub("", part, count=1), bool(_ACCESS_NOTE.fullmatch(part)), strong=False)
-            flags["auth_hint"] |= bool(_AUTH_ANY.search(line))
-            flags["challenge_hint"] |= bool(_CHALLENGE_ANY.search(line))
-            flags["missing_hint"] |= bool(_MISSING_ANY.search(line))
+        if _HAS_SENTENCE_BREAK.search(line):
+            for part in _SENTENCE_BREAK.split(line)[1:]:
+                if part:
+                    check_start(_LEAD.sub("", part, count=1), bool(_ACCESS_NOTE.fullmatch(part)), strong=False)
+        flags["auth_hint"] |= bool(_AUTH_ANY.search(line))
+        flags["challenge_hint"] |= bool(_CHALLENGE_ANY.search(line))
+        flags["missing_hint"] |= bool(_MISSING_ANY.search(line))
+        if _PAYWALL_ANY.search(line) or teasers and ((opens and _TEASER_START.match(head)) or _TEASER_END.search(line)):
+            signals.add("paywall")
+
+    try:
+        # A short line is also read run on from the text before it (its last
+        # _RUN_ON_CHARS, by a space and, beside other scripts, by nothing): a
+        # notice split over lines or paragraphs reads as one to a person.
+        for line in _normalized_lines(title, "", markup):  # the title, read as a line of its own
+            check_line(line)
             consent_found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
-            if _PAYWALL_ANY.search(line) or _TEASER_START.match(head) or _TEASER_END.search(line):
-                signals.add("paywall")
-        for line in _normalized_lines("", text if cta_text is None else cta_text, markup):
+        before = None  # (spaced, tight, opens): the text before the line, cut to _RUN_ON_CHARS
+        for line in _normalized_lines("", text, markup):
+            check_line(line)
+            consent_found.update(match.group(0) for match in _CONSENT_ANY.finditer(line))
+            if before is not None and len(line) <= 2 * _RUN_ON_CHARS:
+                spaced, tight, opens = before
+                check_line(spaced + " " + line, opens)
+                if not (tight[-1:].isascii() and line[:1].isascii()):
+                    check_line(tight + line, opens)
+            spaced = line if before is None else before[0] + " " + line
+            tight = line if before is None else before[1] + line
+            before = (spaced[-_RUN_ON_CHARS:], tight[-_RUN_ON_CHARS:], len(spaced) <= _RUN_ON_CHARS)
+        for line in _normalized_lines("", (text if cta_text is None else cta_text) if teasers else "", markup):
             if _TEASER_LINE.match(_LEAD.sub("", line, count=1)):
                 signals.add("paywall")
     except ValueError:
@@ -735,13 +758,30 @@ def _podcast_long_audio_proof_valid(content: str, extra: dict) -> bool:
 _VERIFIED_X_METHODS = {"oembed", "fxtwitter", "playwright"}
 
 
-def _article_walls(source: str, title: str, content: str, prose: int):
+def page_wall_signals(title: str, page_text: str) -> list:
+    """Walls anywhere in a page's text as the browser shows it (an overlay, a
+    prompt outside the article): login, bot-check, missing-page, consent and
+    paywall wording and the WeChat unavailable notices; not teasers, since the
+    links around an article are not the article."""
+    signals = set(gate_signals(title, page_text, markup=False, teasers=False))
+    if any(_wechat_notice(line) for line in page_text.splitlines()):
+        signals.add("unavailable_notice")
+    return sorted(signals)
+
+
+def _article_walls(source: str, title: str, content: str, prose: int, around=()):
     """The receipt for login, bot-check, missing-page, consent and paywall
-    wording in an article read (as on generic pages), or None."""
-    # (also with the lines inside a paragraph joined, by a space or not: a notice wrapped onto two lines)
-    signals = set(gate_signals(title, content))
+    wording in an article read (as on generic pages), or around it (around:
+    the signals page_wall_signals found on the whole page), or None."""
+    # the text read both as markup and as the words a browser shows (a DOM read is
+    # never markup), also with the lines inside a paragraph joined, by a space or not
+    signals = set(gate_signals(title, content)) | set(gate_signals(title, content, markup=False)) | set(around)
     for joiner in (" ", ""):
-        signals |= set(gate_signals(title, re.sub(r"(?<!\n)\n(?!\n)", joiner, content)))
+        signals |= set(gate_signals(title, re.sub(r"(?<!\n)\n(?!\n)", joiner, content), markup=False))
+    if "unavailable_notice" in signals:
+        return {"status": UNKNOWN, "reason_code": "possible_unavailable_notice",
+                "evidence": f"the {source} page shows a removed, blocked or verification notice",
+                "components": {"text_body": UNKNOWN}}
     thin = prose < 600
     if "auth_title" in signals or ("auth_required" in signals and thin):
         return {"status": FAIL, "reason_code": "auth_required",
@@ -802,9 +842,30 @@ def _classify_article(source: str, title: str, content: str, extra: dict) -> dic
             "evidence": f"the {source} article container was not found; whole-page text cannot prove the body",
             "components": {"text_body": UNKNOWN},
         }
-    walls = _article_walls(source, title, content, prose_chars(body))
+    walls = _article_walls(source, title, content, prose_chars(body), extra.get("page_signals") or ())
+    if walls is not None and walls["status"] == FAIL:
+        return walls  # a login, challenge or missing-page shell, wherever the browser ended
+    browser = extra.get("extraction") == "container"
+    final = urlparse(str(extra.get("final_url") or ""))
+    if browser and not (final.scheme == "https" and (final.hostname or "").lower() == "mp.weixin.qq.com"
+                        and final.path.startswith("/s")):
+        return {
+            "status": UNKNOWN,
+            "reason_code": "article_identity_unverified",
+            "evidence": f"the browser did not end on a {source} article page, so the text cannot be tied to it",
+            "components": {"text_body": UNKNOWN},
+        }
     if walls is not None:
         return walls
+    risks = extra.get("visual_risks")
+    if browser and (not isinstance(risks, list) or risks):
+        return {
+            "status": UNKNOWN,
+            "reason_code": "visibility_unverified",
+            "evidence": f"the {source} text read cannot vouch that readers see it as read"
+                        + (f" ({', '.join(map(str, risks))})" if isinstance(risks, list) else " (not checked)"),
+            "components": {"text_body": UNKNOWN},
+        }
     images = content.count("![")
     if prose_chars(body) < MIN_GENERIC_BODY_CHARS:
         if images:

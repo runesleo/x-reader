@@ -455,6 +455,8 @@ class EvidenceContractTest(unittest.TestCase):
 
     def test_wechat_notices_containers_and_image_posts(self):
         def wechat(content, **extra):
+            if extra.get("extraction") == "container":  # a browser read that ended on the article, nothing in doubt
+                extra = {"final_url": "https://mp.weixin.qq.com/s/abc", "visual_risks": [], **extra}
             return classify_payload({"source_type": "wechat", "title": "文章", "content": content, "extra": extra})
 
         self.assertEqual(wechat("此内容因违规无法查看")["status"], "FAIL")
@@ -485,11 +487,38 @@ class EvidenceContractTest(unittest.TestCase):
                                 embedded_media=0)["status"], "UNKNOWN")
         self.assertNotEqual(wechat("登录后\n查看全文\n\n" + long_body, extraction="container",
                                    embedded_media=0)["status"], "PASS")
+        # the browser read is plain text: wording in angle brackets is words, not markup
+        self.assertNotEqual(wechat("<Please sign in to continue>\n" + long_body, extraction="container",
+                                   embedded_media=0)["status"], "PASS")
+        # the page the browser ended on must be the article
+        for final in ("https://evil.example/final", "", "http://mp.weixin.qq.com/s/abc",
+                      "https://mp.weixin.qq.com/mp/profile_ext"):
+            self.assertEqual(wechat(ARTICLE, extraction="container", embedded_media=0, final_url=final)["reason_code"],
+                             "article_identity_unverified", final)
+        # what the browser read cannot vouch for, or did not check
+        self.assertEqual(wechat(ARTICLE, extraction="container", embedded_media=0,
+                                visual_risks=["faint_text"])["reason_code"], "visibility_unverified")
+        self.assertEqual(classify_payload({"source_type": "wechat", "title": "文章", "content": ARTICLE, "extra": {
+            "extraction": "container", "embedded_media": 0, "final_url": "https://mp.weixin.qq.com/s/abc"}})[
+            "reason_code"], "visibility_unverified")
+        # walls drawn around the article count; links around it are not teasers
+        from x_reader.evidence import page_wall_signals
+        self.assertNotEqual(wechat(ARTICLE, extraction="container", embedded_media=0,
+                                   page_signals=page_wall_signals("文章", "登录后查看全文\n" + ARTICLE))["status"], "PASS")
+        self.assertNotEqual(wechat(ARTICLE, extraction="container", embedded_media=0,
+                                   page_signals=page_wall_signals("文章", "Please sign in to continue.\n" + ARTICLE))[
+            "status"], "PASS")
+        self.assertNotEqual(wechat(ARTICLE, extraction="container", embedded_media=0,
+                                   page_signals=page_wall_signals("文章", "完成验证后即可继续访问"))["status"], "PASS")
+        self.assertEqual(wechat(ARTICLE, extraction="container", embedded_media=0,
+                                page_signals=page_wall_signals("文章", ARTICLE + "\n阅读原文\n赞 分享 推荐 写留言"))[
+            "status"], "PASS")
 
     def test_wechat_notice_titles_fail_and_notice_lines_beside_text_are_unknown(self):
         def wechat(title, content):
             return classify_payload({"source_type": "wechat", "title": title, "content": content,
-                                     "extra": {"extraction": "container", "embedded_media": 0}})
+                                     "extra": {"extraction": "container", "embedded_media": 0, "visual_risks": [],
+                                               "final_url": "https://mp.weixin.qq.com/s/abc"}})
 
         long_text = "读者会在这篇长文里看到一个仔细的论证。每一段都补充了背景、证据和清楚的结论。" * 30
         self.assertEqual(wechat("该内容已被发布者删除", "帮助说明。" + long_text)["status"], "FAIL")
