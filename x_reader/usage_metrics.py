@@ -8,6 +8,7 @@ The operator may query the same private SQLite file through this module's CLI.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 import sqlite3
@@ -134,13 +135,17 @@ def record_response(
     try:
         path = Path(configured)
         _private_database(path)
-        with sqlite3.connect(path, timeout=2) as conn:
-            conn.execute(_SCHEMA)
-            conn.execute(_UPSERT, (
-                now.isoformat(), route, code, status, source, error,
-                _latency_bucket(latency_ms), latency_ms,
-            ))
-            conn.execute("DELETE FROM daily_usage WHERE day < ?", (cutoff.isoformat(),))
+        # A sqlite connection context commits/rolls back but does NOT close FDs.
+        # Do not hold up an HTTP response when another writer owns the DB.
+        # Zero busy timeout makes this explicitly lossy under contention.
+        with closing(sqlite3.connect(path, timeout=0.0)) as conn:
+            with conn:
+                conn.execute(_SCHEMA)
+                conn.execute(_UPSERT, (
+                    now.isoformat(), route, code, status, source, error,
+                    _latency_bucket(latency_ms), latency_ms,
+                ))
+                conn.execute("DELETE FROM daily_usage WHERE day < ?", (cutoff.isoformat(),))
     except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
         global _WARNED_STORAGE
         if not _WARNED_STORAGE:
@@ -161,7 +166,9 @@ def read_summary(path: Path, *, days: int = 14) -> dict:
     if metadata.st_mode & 0o077:
         raise ValueError("unsafe_usage_storage_mode")
     start = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
-    with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2) as conn:
+    # Path.as_uri percent-escapes '?' and '#'; a literal file path must not
+    # become a SQLite URI query string or silently read/create a different DB.
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.2)) as conn:
         ready = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'daily_usage'"
         ).fetchone()

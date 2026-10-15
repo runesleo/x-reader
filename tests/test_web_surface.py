@@ -53,6 +53,16 @@ class WebSurfaceProductTest(unittest.TestCase):
         self.assertIn('href="/en"', self.app)
         self.assertIn('href="/zh"', self.app)
 
+    def test_hosted_usage_aggregate_privacy_is_disclosed(self):
+        self.assertIn("90 days", self.app)
+        self.assertIn("IP addresses", self.app)
+        self.assertIn("No source storage", self.app)
+        self.assertNotIn("<strong>No persistence</strong>", self.app)
+        self.assertIn("90 days", self.en)
+        self.assertIn("IP", self.en)
+        self.assertIn("90 天", self.zh)
+        self.assertIn("IP", self.zh)
+
     def test_app_has_output_native_distribution_actions(self):
         self.assertIn('id="copyReceipt"', self.app)
         self.assertIn('id="copyJson"', self.app)

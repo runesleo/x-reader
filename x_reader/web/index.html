@@ -33,6 +33,7 @@
 <div class="box">
   <form id="form"><label class="sr-only" for="url">Public source URL</label><input id="url" name="url" type="url" inputmode="url" autocomplete="off" placeholder="https://x.com/... or https://example.com/..." required /><button id="submit" type="submit">Read source</button></form>
   <div class="micro"><p class="note">Public URLs only. No login, saved sessions, private cookies, or persistent inbox.</p><button id="tryExample" class="try" type="button">Try a mixed-media X example</button></div>
+  <p class="note">Privacy: if usage metrics are enabled, only daily aggregate page and read-result counts are retained for up to 90 days—not submitted URLs, IP addresses, cookies, or source content.</p>
 </div>
 <div id="error" class="error" role="alert"></div>
 <section id="result" class="result" aria-live="polite">
@@ -43,7 +44,7 @@
 </section>
 <section class="install"><div><h2>Put the same evidence check inside your agent.</h2><p>Agent Skill, CLI and MCP use the same source-first contract.</p><div class="code">npx skills add runesleo/x-reader --skill x-reader</div></div><a class="button-link" href="https://github.com/runesleo/x-reader" target="_blank" rel="noreferrer">View source</a></section>
 <section><div class="section-title">Where this catches bad research</div><div class="cases"><div class="case"><strong>X + attached media</strong><p>Post text may be PASS while an unread video remains PARTIAL.</p></div><div class="case"><strong>Video pages</strong><p>Title and description are metadata, not spoken content.</p></div><div class="case"><strong>Web research</strong><p>Search previews are discovery, not the original page.</p></div></div></section>
-<div class="section-title">Hosted beta policy</div><div class="policy"><div><strong>Public-only</strong>SSRF-safe destination validation</div><div><strong>No sessions</strong>Fresh temporary HOME per request</div><div><strong>No secret inheritance</strong>Minimal child environment</div><div><strong>No persistence</strong>Temporary inbox destroyed after read</div></div>
+<div class="section-title">Hosted beta policy</div><div class="policy"><div><strong>Public-only</strong>SSRF-safe destination validation</div><div><strong>No sessions</strong>Fresh temporary HOME per request</div><div><strong>No secret inheritance</strong>Minimal child environment</div><div><strong>No source storage</strong>Temporary inbox deleted; optional daily counts only</div></div>
 </main>
 <footer class="footer"><div>MIT licensed · source-first by design</div><div><a href="/en">Product</a> · <a href="/zh">中文</a> · <a href="https://github.com/runesleo/x-reader" target="_blank" rel="noreferrer">GitHub</a></div></footer>
 </div>

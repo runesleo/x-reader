@@ -42,7 +42,10 @@ Do not enable or deploy this in a code-review-only task.
 - The SQLite file must be private (0600) inside an existing writable directory.
   Rows older than 90 days are removed during ordinary writes; there is no new
   service, scheduler, public metrics endpoint or tracking cookie. Failures of
-  the optional writer must not block source reading.
+  the optional writer must not block source reading. A locked/busy database
+  causes that metric observation to be skipped immediately (nonblocking
+  SQLite busy timeout), so totals are best-effort and may undercount under
+  storage contention; do not label them exact visits or unique people.
 - For an operator-only read after a separately authorized deployment:
 
   ```bash

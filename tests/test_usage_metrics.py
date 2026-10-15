@@ -1,11 +1,13 @@
 """Privacy and correctness acceptance for hosted opt-in aggregate metrics."""
 
 import json
+import http.client
 import os
 import sqlite3
 import stat
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -60,6 +62,81 @@ class UsageAggregatesTest(unittest.TestCase):
         self.assertTrue(result["configured"])
         self.assertEqual(result["rows"], [])
 
+    def test_existing_connections_are_closed(self):
+        opened = []
+        closed = []
+        original_connect = sqlite3.connect
+
+        class TrackedConnection(sqlite3.Connection):
+            def close(self):
+                closed.append(id(self))
+                return super().close()
+
+        def traced_connect(*args, **kwargs):
+            conn = original_connect(*args, factory=TrackedConnection, **kwargs)
+            opened.append(id(conn))
+            return conn
+
+        with patch.object(usage_metrics.sqlite3, "connect", side_effect=traced_connect):
+            usage_metrics.record_response(method="GET", request_target="/app", http_status=200)
+            self.assertEqual(len(usage_metrics.read_summary(self.db)["rows"]), 1)
+        self.assertEqual(opened, closed)
+
+    def test_locked_database_does_not_block_http_response(self):
+        usage_metrics.record_response(method="GET", request_target="/app", http_status=200)
+        locker = sqlite3.connect(self.db)
+        try:
+            locker.execute("BEGIN EXCLUSIVE")
+            start = time.monotonic()
+            usage_metrics.record_response(method="GET", request_target="/app", http_status=200)
+            self.assertLess(time.monotonic() - start, 0.2)
+        finally:
+            locker.rollback()
+            locker.close()
+
+    def test_special_character_database_path_uses_exact_file(self):
+        special = Path(self.temp.name) / "usage#private?metrics.sqlite3"
+        with patch.dict(os.environ, {"X_READER_USAGE_DB": str(special)}):
+            usage_metrics.record_response(method="GET", request_target="/app", http_status=200)
+            result = usage_metrics.read_summary(special)
+        self.assertEqual(sum(row["count"] for row in result["rows"]), 1)
+        self.assertEqual(sorted(p.name for p in Path(self.temp.name).iterdir()), [special.name])
+
+    def test_locked_metrics_never_occupy_reader_slots(self):
+        # Four sequential readers must keep returning 200 even while a separate
+        # SQLite connection prevents telemetry persistence entirely.
+        usage_metrics.record_response(method="GET", request_target="/app", http_status=200)
+        locker = sqlite3.connect(self.db)
+        server = web_app.BoundedThreadingHTTPServer(
+            ("127.0.0.1", 0), web_app.EvidenceRequestHandler, max_threads=4,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join, 2)
+        self.addCleanup(server.shutdown)
+        result = {"ok": True, "receipt": {"status": "PASS", "source_type": "manual"}}
+        statuses = []
+        try:
+            locker.execute("BEGIN EXCLUSIVE")
+            with patch.object(web_app, "read_public_url", return_value=result):
+                started = time.monotonic()
+                for _ in range(4):
+                    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+                    try:
+                        client.request("POST", "/api/read", body=b'{"url":"https://example.com"}',
+                                       headers={"Content-Type": "application/json"})
+                        response = client.getresponse()
+                        statuses.append(response.status)
+                        self.assertEqual(json.loads(response.read())["receipt"]["status"], "PASS")
+                    finally:
+                        client.close()
+                self.assertLess(time.monotonic() - started, 1.0)
+        finally:
+            locker.rollback()
+            locker.close()
+        self.assertEqual(statuses, [200] * 4)
+
     def test_nonproduct_requests_do_not_create_db(self):
         for method, target in (("GET", "/healthz"), ("GET", "/robots.txt"),
                                ("POST", "/random"), ("GET", "/invalid?url=secret")):
@@ -95,7 +172,7 @@ class UsageAggregatesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             usage_metrics.read_summary(self.db)
 
-    def test_parallel_upserts_are_atomic(self):
+    def test_parallel_upserts_are_at_most_once_and_best_effort(self):
         failures = []
         def write():
             try:
@@ -111,7 +188,10 @@ class UsageAggregatesTest(unittest.TestCase):
         for thread in threads:
             thread.join()
         self.assertFalse(failures)
-        self.assertEqual(sum(x["count"] for x in usage_metrics.read_summary(self.db)["rows"]), 12)
+        total = sum(x["count"] for x in usage_metrics.read_summary(self.db)["rows"])
+        # Busy SQLite storage is deliberately skipped rather than blocking HTTP.
+        self.assertGreaterEqual(total, 1)
+        self.assertLessEqual(total, 12)
 
     def test_http_handler_counts_page_and_one_success_not_health(self):
         server = web_app.BoundedThreadingHTTPServer(
