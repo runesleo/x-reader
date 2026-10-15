@@ -5,6 +5,8 @@ import http.client
 import os
 import sqlite3
 import stat
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -137,6 +139,18 @@ class UsageAggregatesTest(unittest.TestCase):
             locker.close()
         self.assertEqual(statuses, [200] * 4)
 
+    def test_relative_summary_cli_reads_exact_private_file(self):
+        usage_metrics.record_response(method="GET", request_target="/app", http_status=200)
+        proc = subprocess.run(
+            [sys.executable, "-m", "x_reader.usage_metrics", "--db", "usage.sqlite3", "--json"],
+            cwd=self.temp.name, capture_output=True, text=True, timeout=8, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["configured"])
+        self.assertEqual(sum(row["count"] for row in result["rows"]), 1)
+        self.assertEqual(sorted(p.name for p in Path(self.temp.name).iterdir()), [self.db.name])
+
     def test_nonproduct_requests_do_not_create_db(self):
         for method, target in (("GET", "/healthz"), ("GET", "/robots.txt"),
                                ("POST", "/random"), ("GET", "/invalid?url=secret")):
@@ -190,8 +204,17 @@ class UsageAggregatesTest(unittest.TestCase):
         self.assertFalse(failures)
         total = sum(x["count"] for x in usage_metrics.read_summary(self.db)["rows"])
         # Busy SQLite storage is deliberately skipped rather than blocking HTTP.
-        self.assertGreaterEqual(total, 1)
+        # Under zero-busy-timeout contention even all 12 can be skipped.
+        self.assertGreaterEqual(total, 0)
         self.assertLessEqual(total, 12)
+        # But an uncontended follow-up must be persisted exactly once.
+        usage_metrics.record_response(
+            method="POST", request_target="/api/read", http_status=200,
+            receipt={"status": "PASS", "source_type": "manual"}, elapsed_ms=100,
+        )
+        self.assertEqual(
+            sum(x["count"] for x in usage_metrics.read_summary(self.db)["rows"]), total + 1,
+        )
 
     def test_http_handler_counts_page_and_one_success_not_health(self):
         server = web_app.BoundedThreadingHTTPServer(

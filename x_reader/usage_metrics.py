@@ -160,6 +160,8 @@ def read_summary(path: Path, *, days: int = 14) -> dict:
     """Operator-only read; never creates a new database or exposes user inputs."""
     if not 1 <= days <= _RETENTION_DAYS:
         raise ValueError("days_out_of_range")
+    # Support CLI-relative --db paths without following a symlink target.
+    path = path.absolute()
     if not path.is_file() or path.is_symlink():
         return {"configured": False, "rows": []}
     metadata = path.stat()
