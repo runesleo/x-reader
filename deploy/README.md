@@ -22,6 +22,37 @@ Per request, in code (`x_reader/web_app.py`, `x_reader/utils/proc.py`):
 - at most 3 concurrent reads and 24 connection threads; a request not fully read
   within 20 s is cut off.
 
+## Optional private aggregate usage (not enabled by this source change)
+
+The existing hosted HTTP server can count product-page GETs and `/api/read`
+responses in **daily aggregate buckets** when the service is explicitly
+configured with an absolute `X_READER_USAGE_DB` path. Without the setting, no
+metrics database is created and request behavior is unchanged. On an approved
+production rollout, the existing `StateDirectory=xreader` is the appropriate
+writable location: `Environment=X_READER_USAGE_DB=/var/lib/xreader/usage-aggregates.sqlite3`.
+Do not enable or deploy this in a code-review-only task.
+
+- Counts include page requests, HTTP errors including 429, PASS/PARTIAL/FAIL/UNKNOWN
+  read outcomes, source category and coarse latency buckets. They are **not**
+  unique users, installs or human-only visits; bots may be counted. The first
+  observation starts when enabled; no historical backfill is inferred.
+- Only the calendar day and enumerated aggregate categories/counts/latency sums
+  are saved. Never save submitted URLs, query strings, IPs, user agents,
+  referrers, content, cookies, account IDs or per-request records.
+- The SQLite file must be private (0600) inside an existing writable directory.
+  Rows older than 90 days are removed during ordinary writes; there is no new
+  service, scheduler, public metrics endpoint or tracking cookie. Failures of
+  the optional writer must not block source reading.
+- For an operator-only read after a separately authorized deployment:
+
+  ```bash
+  python3 -m x_reader.usage_metrics --db /var/lib/xreader/usage-aggregates.sqlite3 --days 14 --json
+  ```
+
+The result is an aggregate histogram. p50/p95 can only be estimated to the
+reported bucket; exact latency percentiles and unique visitor counts are
+**not** available without additional instrumentation and review.
+
 ## Verify a deployment
 
 ```bash

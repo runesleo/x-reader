@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 from x_reader.evidence import build_receipt, failure_receipt
 from x_reader.routing import ALLOWED_PLATFORMS_ENV, HOSTED_ENV, detect_platform, host_matches
+from x_reader.usage_metrics import record_response
 from x_reader.utils.proc import run_bounded
 
 
@@ -335,6 +336,7 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
     def setup(self) -> None:
         super().setup()
         self._read_aborted = False
+        self._usage_started_at = time.monotonic()
         _READ_DEADLINES.add(self, REQUEST_READ_DEADLINE_SECONDS)
 
     def _abort_slow_read(self) -> None:
@@ -375,10 +377,21 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
         for name, value in (*SECURITY_HEADERS, *extra):
             self.send_header(name, value)
         self.end_headers()
+        record_response(
+            method=getattr(self, "command", ""),
+            request_target=getattr(self, "path", ""),
+            http_status=status,
+            receipt=getattr(self, "_usage_receipt", None),
+            elapsed_ms=int((time.monotonic() - getattr(
+                self, "_usage_started_at", time.monotonic(),
+            )) * 1000),
+        )
 
     def _json(self, status: int, payload: dict[str, Any],
               extra: tuple[tuple[str, str], ...] = ()) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        receipt = payload.get("receipt")
+        self._usage_receipt = receipt if isinstance(receipt, dict) else None
         self._headers(status, "application/json; charset=utf-8", len(body), extra)
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -398,6 +411,7 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
     do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed  # noqa: N815
 
     def do_GET(self) -> None:  # noqa: N802
+        self._usage_started_at = time.monotonic()
         if not self._request_read():
             return
         path = self._path()
@@ -423,6 +437,7 @@ class EvidenceRequestHandler(BaseHTTPRequestHandler):
         self._json(404, {"ok": False, "error": "not_found"})
 
     def do_POST(self) -> None:  # noqa: N802
+        self._usage_started_at = time.monotonic()
         try:
             path = urlparse(self.path).path
         except ValueError:

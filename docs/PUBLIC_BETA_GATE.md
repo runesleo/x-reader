@@ -37,7 +37,7 @@ Status (v0.5.0): the hosted surface runs as a **public beta** for public X, YouT
 
 ## Still open
 
-- Aggregate counters (requests, status class, platform, latency, timeouts, 429s, server errors) without collecting content.
+- **Production activation and readback** of the optional private request-aggregate counters (candidate code in `x_reader/usage_metrics.py`). The code alone does not prove deployed usage metrics or retrospective visitor counts. A separately approved service configuration must opt in; only daily aggregate categories and coarse latency buckets are retained, no IP/URL/content.
 - A short privacy notice on the site explaining request and log retention.
 - A global daily request budget in addition to per-IP limits.
 - Per-request cgroups, needed before the hosted surface may start external tools (yt-dlp, ffmpeg, browsers).
