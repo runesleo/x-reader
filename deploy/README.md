@@ -42,7 +42,7 @@ Do not enable or deploy this in a code-review-only task.
 - The SQLite file must be private (0600) inside an existing writable directory.
   The active retention window is **90 UTC calendar dates**: today plus the
   preceding 89 dates. Ordinary writes prune older rows; in addition, the
-  existing HTTP server's `serve_forever()` lifecycle performs a cleanup on
+  existing HTTP server's `serve_forever()` lifecycle attempts cleanup on
   startup and once per hour **even with no product requests**. There is no
   additional scheduler, process, public metrics endpoint or tracking cookie.
 - **This is not an unconditional 90-day deletion deadline.** When the service
