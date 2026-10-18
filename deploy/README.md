@@ -65,6 +65,23 @@ Do not enable or deploy this in a code-review-only task.
   python3 -m x_reader.usage_metrics --db /var/lib/xreader/usage-aggregates.sqlite3 --days 14 --json
   ```
 
+- To delete expired rows explicitly, including after disabling the telemetry
+  environment variable, run (as the authorized database owner):
+
+  ```bash
+  python3 -m x_reader.usage_metrics --db /var/lib/xreader/usage-aggregates.sqlite3 --prune-expired --json
+  ```
+
+  This does not create a missing database. Check the exit status and
+  `pruned_rows`, and inspect the stored date bounds rather than mistaking
+  the filtered `--days` summary for proof of physical row deletion.
+- **Production enablement gate:** approval and separate deployment are still
+  required. Verify on the installed service that startup/idle cleanup works
+  without traffic, document who prunes or erases the database after shutdown
+  or opt-out, and account for backup copies before making any hard deletion
+  promise. The current source change alone does not prove production is
+  enabled, or that offline deletion is guaranteed.
+
 The result is an aggregate histogram. p50/p95 can only be estimated to the
 reported bucket; exact latency percentiles and unique visitor counts are
 **not** available without additional instrumentation and review.
