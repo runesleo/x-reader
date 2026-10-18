@@ -107,6 +107,11 @@ class UsageAggregatesTest(unittest.TestCase):
             self._stored_days(), {today.isoformat(), oldest.isoformat()},
         )
 
+    def test_operator_prune_does_not_create_missing_database(self):
+        missing = Path(self.temp.name) / "missing.sqlite3"
+        self.assertEqual(usage_metrics.prune_expired(missing), 0)
+        self.assertFalse(missing.exists())
+
     def test_operator_prune_works_with_telemetry_disabled(self):
         self._seed_days(date(2000, 1, 1))
         with patch.dict(os.environ, {"X_READER_USAGE_DB": ""}):
