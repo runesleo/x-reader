@@ -14,7 +14,7 @@ import os
 import sqlite3
 import stat
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -63,6 +63,33 @@ ON CONFLICT (
     latency_ms_total = latency_ms_total + excluded.latency_ms_total
 """
 _WARNED_STORAGE = False
+
+
+def _window_start(days: int, *, today: date | None = None) -> str:
+    """Inclusive UTC start: today and the preceding (days - 1) dates."""
+    today = today if today is not None else datetime.now(timezone.utc).date()
+    return (today - timedelta(days=days - 1)).isoformat()
+
+
+def prune_expired(path: Path) -> int:
+    """Prune an existing private DB; never create one just for maintenance."""
+    path = path.absolute()
+    if path.is_symlink():
+        raise ValueError("unsafe_usage_storage_mode")
+    if not path.exists():
+        return 0
+    _private_database(path)
+    with closing(sqlite3.connect(path, timeout=0.0)) as conn:
+        with conn:
+            if not conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_usage'"
+            ).fetchone():
+                return 0
+            conn.execute("PRAGMA secure_delete = ON")
+            return conn.execute(
+                "DELETE FROM daily_usage WHERE day < ?",
+                (_window_start(_RETENTION_DAYS),),
+            ).rowcount
 
 
 def _private_database(path: Path) -> None:
@@ -131,7 +158,7 @@ def record_response(
     code = str(http_status) if http_status in _HTTP_CODES else "other"
     latency_ms = min(max(0, int(elapsed_ms)), 300000)
     now = datetime.now(timezone.utc).date()
-    cutoff = now - timedelta(days=_RETENTION_DAYS)
+    cutoff = _window_start(_RETENTION_DAYS, today=now)
     try:
         path = Path(configured)
         _private_database(path)
@@ -145,7 +172,7 @@ def record_response(
                     now.isoformat(), route, code, status, source, error,
                     _latency_bucket(latency_ms), latency_ms,
                 ))
-                conn.execute("DELETE FROM daily_usage WHERE day < ?", (cutoff.isoformat(),))
+                conn.execute("DELETE FROM daily_usage WHERE day < ?", (cutoff,))
     except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
         global _WARNED_STORAGE
         if not _WARNED_STORAGE:
@@ -167,7 +194,7 @@ def read_summary(path: Path, *, days: int = 14) -> dict:
     metadata = path.stat()
     if metadata.st_mode & 0o077:
         raise ValueError("unsafe_usage_storage_mode")
-    start = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+    start = _window_start(days)
     # Path.as_uri percent-escapes '?' and '#'; a literal file path must not
     # become a SQLite URI query string or silently read/create a different DB.
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.2)) as conn:
@@ -200,11 +227,25 @@ def main() -> None:
     parser.add_argument("--db", type=Path, default=None)
     parser.add_argument("--days", type=int, default=14)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--prune-expired", action="store_true",
+        help="Delete expired daily rows from an existing private SQLite database",
+    )
     args = parser.parse_args()
     configured = args.db or Path(os.environ[_DB_ENV]) if os.environ.get(_DB_ENV) else args.db
-    result = read_summary(configured, days=args.days) if configured else {
-        "configured": False, "rows": [],
-    }
+    if args.prune_expired:
+        if not configured:
+            parser.error("--prune-expired requires --db or X_READER_USAGE_DB")
+        db_path = Path(configured)
+        result = {
+            "configured": db_path.exists(),
+            "pruned_rows": prune_expired(db_path),
+            "retention_days": _RETENTION_DAYS,
+        }
+    else:
+        result = read_summary(configured, days=args.days) if configured else {
+            "configured": False, "rows": [],
+        }
     print(json.dumps(result, ensure_ascii=False, indent=2 if args.json else None))
 
 
