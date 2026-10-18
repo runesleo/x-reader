@@ -78,8 +78,11 @@ def prune_expired(path: Path) -> int:
         raise ValueError("unsafe_usage_storage_mode")
     if not path.exists():
         return 0
-    _private_database(path)
-    with closing(sqlite3.connect(path, timeout=0.0)) as conn:
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
+        raise ValueError("unsafe_usage_storage_mode")
+    # mode=rw prevents a concurrent removal from recreating a database.
+    with closing(sqlite3.connect(path.as_uri() + "?mode=rw", uri=True, timeout=0.0)) as conn:
         with conn:
             if not conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_usage'"
