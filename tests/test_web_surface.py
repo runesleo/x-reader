@@ -62,6 +62,12 @@ class WebSurfaceProductTest(unittest.TestCase):
         self.assertIn("IP", self.en)
         self.assertIn("90 天", self.zh)
         self.assertIn("IP", self.zh)
+        self.assertIn("private database may remain", self.app)
+        self.assertIn("may persist until operator cleanup", self.en)
+        self.assertIn("停服或关闭统计后", self.zh)
+        self.assertNotIn("retained for up to 90 days", self.app)
+        self.assertNotIn("retained for up to 90 days", self.en)
+        self.assertNotIn("最多 90 天", self.zh)
 
     def test_app_has_output_native_distribution_actions(self):
         self.assertIn('id="copyReceipt"', self.app)
