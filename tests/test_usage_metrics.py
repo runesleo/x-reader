@@ -112,6 +112,19 @@ class UsageAggregatesTest(unittest.TestCase):
         self.assertEqual(usage_metrics.prune_expired(missing), 0)
         self.assertFalse(missing.exists())
 
+    def test_operator_prune_does_not_recreate_database_removed_during_open(self):
+        self._seed_days(date(2000, 1, 1))
+        original_connect = sqlite3.connect
+
+        def remove_just_before_open(*args, **kwargs):
+            self.db.unlink()
+            return original_connect(*args, **kwargs)
+
+        with patch.object(usage_metrics.sqlite3, "connect", side_effect=remove_just_before_open):
+            with self.assertRaises(sqlite3.OperationalError):
+                usage_metrics.prune_expired(self.db)
+        self.assertFalse(self.db.exists())
+
     def test_operator_prune_works_with_telemetry_disabled(self):
         self._seed_days(date(2000, 1, 1))
         with patch.dict(os.environ, {"X_READER_USAGE_DB": ""}):
