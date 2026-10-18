@@ -33,7 +33,7 @@
 <div class="box">
   <form id="form"><label class="sr-only" for="url">Public source URL</label><input id="url" name="url" type="url" inputmode="url" autocomplete="off" placeholder="https://x.com/... or https://example.com/..." required /><button id="submit" type="submit">Read source</button></form>
   <div class="micro"><p class="note">Public URLs only. No login, saved sessions, private cookies, or persistent inbox.</p><button id="tryExample" class="try" type="button">Try a mixed-media X example</button></div>
-  <p class="note">Privacy: if usage metrics are enabled, only daily aggregate page and read-result counts are retained for up to 90 days—not submitted URLs, IP addresses, cookies, or source content.</p>
+  <p class="note">Privacy: if enabled, only daily aggregate page and read-result counts are stored—not submitted URLs, IP addresses, cookies, or source content. While running, the service prunes outside a rolling 90 days (UTC calendar dates), including hourly without requests. After shutdown or disabling metrics, the private database may remain until an operator cleans it up; a fixed deletion deadline is not guaranteed.</p>
 </div>
 <div id="error" class="error" role="alert"></div>
 <section id="result" class="result" aria-live="polite">
