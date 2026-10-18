@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -25,9 +26,11 @@ from urllib.parse import urlparse
 
 from x_reader.evidence import build_receipt, failure_receipt
 from x_reader.routing import ALLOWED_PLATFORMS_ENV, HOSTED_ENV, detect_platform, host_matches
-from x_reader.usage_metrics import record_response
+from x_reader.usage_metrics import prune_expired, record_response
 from x_reader.utils.proc import run_bounded
 
+
+_USAGE_PRUNE_INTERVAL_SECONDS = 60 * 60
 
 MAX_BODY_BYTES = 4096
 MAX_URL_CHARS = 2048
@@ -513,6 +516,25 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     def __init__(self, *args: Any, max_threads: int = MAX_CONNECTION_THREADS, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._thread_slots = threading.BoundedSemaphore(max_threads)
+        self._next_usage_prune_at = 0.0
+
+    def service_actions(self) -> None:
+        """Prune during the existing serve_forever loop, including idle periods."""
+        now = time.monotonic()
+        if now < self._next_usage_prune_at:
+            return
+        self._next_usage_prune_at = now + _USAGE_PRUNE_INTERVAL_SECONDS
+        configured = os.environ.get("X_READER_USAGE_DB", "").strip()
+        if not configured:
+            return
+        try:
+            prune_expired(Path(configured))
+        except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+            # Optional metrics maintenance must never prevent HTTP serving.
+            print(
+                f"x-reader aggregate_usage_cleanup_skipped error_type={type(exc).__name__}",
+                file=sys.stderr,
+            )
 
     def process_request(self, request: Any, client_address: Any) -> None:
         if not self._thread_slots.acquire(blocking=False):
