@@ -2,6 +2,7 @@
 
 import json
 import http.client
+from datetime import date, datetime, timedelta, timezone
 import os
 import sqlite3
 import stat
@@ -27,6 +28,119 @@ class UsageAggregatesTest(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
         usage_metrics._WARNED_STORAGE = False
+
+    @staticmethod
+    def _clock(day: date):
+        class FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+        return patch.object(usage_metrics, "datetime", FrozenDatetime)
+
+    def _seed_days(self, *days: date) -> None:
+        usage_metrics.record_response(method="GET", request_target="/app", http_status=200)
+        with sqlite3.connect(self.db) as conn:
+            for day in days:
+                conn.execute(usage_metrics._UPSERT, (
+                    day.isoformat(), "app", "200", "NA", "NA",
+                    "none", "lt_500ms", 1,
+                ))
+
+    def _stored_days(self) -> set[str]:
+        with sqlite3.connect(self.db) as conn:
+            return {row[0] for row in conn.execute("SELECT DISTINCT day FROM daily_usage")}
+
+    def test_exact_ninety_calendar_dates_not_ninety_prior_dates(self):
+        today = date(2026, 10, 18)
+        oldest = today - timedelta(days=89)
+        expired = today - timedelta(days=90)
+        older = today - timedelta(days=91)
+        with self._clock(today):
+            self._seed_days(oldest, expired, older)
+            usage_metrics.record_response(method="GET", request_target="/app", http_status=200)
+            summary_days = {row["day"] for row in usage_metrics.read_summary(self.db, days=90)["rows"]}
+        expected = {today.isoformat(), oldest.isoformat()}
+        self.assertEqual(self._stored_days(), expected)
+        self.assertEqual(summary_days, expected)
+
+    def test_next_utc_day_advances_retention_boundary(self):
+        today = date(2026, 10, 18)
+        oldest = today - timedelta(days=89)
+        with self._clock(today):
+            self._seed_days(oldest)
+            self.assertIn(oldest.isoformat(), self._stored_days())
+        with self._clock(today + timedelta(days=1)):
+            usage_metrics.record_response(method="GET", request_target="/app", http_status=200)
+        self.assertNotIn(oldest.isoformat(), self._stored_days())
+        self.assertIn((today + timedelta(days=1)).isoformat(), self._stored_days())
+
+    def test_idle_http_server_prunes_without_new_requests(self):
+        today = date(2026, 10, 18)
+        expired = today - timedelta(days=90)
+        oldest = today - timedelta(days=89)
+        with self._clock(today):
+            self._seed_days(expired, oldest)
+            cleaned = threading.Event()
+            real_prune = web_app.prune_expired
+
+            def signal_prune(path):
+                removed = real_prune(path)
+                cleaned.set()
+                return removed
+
+            server = web_app.BoundedThreadingHTTPServer(
+                ("127.0.0.1", 0), web_app.EvidenceRequestHandler, max_threads=4,
+            )
+            thread = threading.Thread(
+                target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True,
+            )
+            try:
+                with patch.object(web_app, "prune_expired", side_effect=signal_prune):
+                    thread.start()
+                    self.assertTrue(cleaned.wait(2), "idle serve_forever never ran retention")
+            finally:
+                if thread.is_alive():
+                    server.shutdown()
+                    thread.join(2)
+                server.server_close()
+        self.assertEqual(
+            self._stored_days(), {today.isoformat(), oldest.isoformat()},
+        )
+
+    def test_operator_prune_works_with_telemetry_disabled(self):
+        self._seed_days(date(2000, 1, 1))
+        with patch.dict(os.environ, {"X_READER_USAGE_DB": ""}):
+            proc = subprocess.run(
+                [sys.executable, "-m", "x_reader.usage_metrics", "--db",
+                 str(self.db), "--prune-expired", "--json"],
+                capture_output=True, text=True, timeout=8, check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["pruned_rows"], 1)
+        self.assertNotIn(date(2000, 1, 1).isoformat(), self._stored_days())
+
+    def test_idle_cleanup_is_nonblocking_if_database_locked(self):
+        today = date(2026, 10, 18)
+        expired = today - timedelta(days=90)
+        with self._clock(today):
+            self._seed_days(expired)
+            server = web_app.BoundedThreadingHTTPServer(
+                ("127.0.0.1", 0), web_app.EvidenceRequestHandler,
+            )
+            locker = sqlite3.connect(self.db)
+            try:
+                locker.execute("BEGIN EXCLUSIVE")
+                start = time.monotonic()
+                server.service_actions()
+                self.assertLess(time.monotonic() - start, 0.2)
+            finally:
+                locker.rollback()
+                locker.close()
+            self.assertIn(expired.isoformat(), self._stored_days())
+            server._next_usage_prune_at = 0.0
+            server.service_actions()
+            server.server_close()
+        self.assertNotIn(expired.isoformat(), self._stored_days())
 
     def test_only_aggregate_fields_and_private_file(self):
         secret = "private-user-submitted-token-123"
