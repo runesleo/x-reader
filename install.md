@@ -28,6 +28,8 @@ If it asks which agent, add `-a claude-code`, `-a codex` or `-a cursor` — whic
 
 Run the **First-use bootstrap** block from the installed skill (`SKILL.md`, usually under `~/.agents/skills/x-reader/` or your agent's own skills folder). It installs a pinned, verified x-reader revision into its own cache environment and sets `XR_BIN`, without touching the user's projects.
 
+If installation was interrupted, run that bootstrap block again; it checks the cached CLI with `doctor --json` and force-reinstalls the same pinned revision and its dependencies if the core check fails, including when pip metadata still claims a damaged dependency is installed. A healthy cache is reused without reinstalling, and a repair keeps the cached interpreter only if its Python and pip module can actually run. If either is unusable, it clears and rebuilds only this dedicated pinned x-reader cache venv (any extra packages manually installed inside that cache will need reinstalling). The self-check is **not** a real link read — step 5 is still required.
+
 Your shell commands may each start in a fresh shell, so `XR_BIN` will not carry over. Print it once (`echo "$XR_BIN"`) and use that full path in steps 4–5, or run steps 3–5 in one shell session.
 
 Without the skill, install from GitHub into an environment the user agrees to:

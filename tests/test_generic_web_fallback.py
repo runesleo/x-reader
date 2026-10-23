@@ -260,12 +260,13 @@ class GenericWebFallbackTest(unittest.TestCase):
             "x_reader.reader.fetch_via_jina",
             side_effect=RuntimeError("jina down"),
         ), patch(
-            "x_reader.fetchers.jina.fetch_direct_html",
+            "x_reader.fetchers.jina.fetch_html_page",
             return_value={
                 "title": "Fallback",
                 "content": "A sufficiently long direct HTML body for the fallback contract.",
                 "url": "https://example.com",
                 "fetch_method": "direct_html_pinned",
+                "embedded_media": 0,
             },
         ):
             content = asyncio.run(

@@ -1,0 +1,19 @@
+#!/usr/sbin/nft -f
+# Outbound policy for the service account: the hosted reader may reach the
+# public internet and the local DNS stub only. New connections to loopback,
+# private, CGNAT/tailnet, link-local/metadata, multicast and class E ranges
+# are rejected for sockets owned by "xreader" (the reader's own address check
+# refuses the other non-public ranges). Re-loading replaces the table.
+table inet xreader_egress
+delete table inet xreader_egress
+table inet xreader_egress {
+	chain output {
+		type filter hook output priority 0; policy accept;
+		meta skuid != "xreader" accept
+		ct state established,related accept
+		ip daddr { 127.0.0.53, 127.0.0.54 } udp dport 53 accept
+		ip daddr { 127.0.0.53, 127.0.0.54 } tcp dport 53 accept
+		ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/4, 240.0.0.0/4 } counter reject
+		ip6 daddr { ::1, ::ffff:0:0/96, fc00::/7, fe80::/10, ff00::/8 } counter reject
+	}
+}

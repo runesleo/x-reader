@@ -17,6 +17,7 @@ async def fetch_telegram(
     limit: int = 20,
     hours: int = 24,
     session_path: str = None,
+    message_id: int | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Fetch recent messages from a Telegram channel.
@@ -67,6 +68,21 @@ async def fetch_telegram(
         logger.info(f"Fetching TG channel: {channel}")
         entity = await client.get_entity(channel)
 
+        if message_id is not None:
+            # An explicit message URL must return that exact message, never the latest one.
+            msg = await client.get_messages(entity, ids=message_id)
+            if not isinstance(msg, Message) or not msg.text:
+                raise ValueError(f"Telegram message {channel}/{message_id} not found or has no text")
+            return [{
+                "text": msg.text,
+                "views": msg.views or 0,
+                "date": msg.date.isoformat(),
+                "url": f"https://t.me/{channel}/{msg.id}",
+                "message_id": msg.id,
+                "media_status": "present" if msg.media else "none",
+                "platform": "telegram",
+            }]
+
         async for msg in client.iter_messages(entity, limit=limit):
             if not isinstance(msg, Message) or not msg.text:
                 continue
@@ -78,6 +94,8 @@ async def fetch_telegram(
                 "views": msg.views or 0,
                 "date": msg.date.isoformat(),
                 "url": f"https://t.me/{channel}/{msg.id}",
+                "message_id": msg.id,
+                "media_status": "present" if msg.media else "none",
                 "platform": "telegram",
             })
 

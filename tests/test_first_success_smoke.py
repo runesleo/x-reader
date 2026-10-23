@@ -21,7 +21,7 @@ class FirstSuccessSmokeTest(unittest.TestCase):
                 "content": "post text",
                 "media_type": "text",
                 "extra": {
-                    "fetch_method": "oembed",
+                    "fetch_method": "oembed", "post_id_verified": True,
                     "media_status": "present",
                 },
             }
@@ -40,13 +40,18 @@ class FirstSuccessSmokeTest(unittest.TestCase):
                 "content": "plain public post text",
                 "media_type": "text",
                 "extra": {
-                    "fetch_method": "oembed",
+                    "fetch_method": "oembed", "post_id_verified": True,
                     "media_status": "none",
+                    "structure_status": "verified",
+                    "quote_status": "none",
+                    "poll_status": "none",
+                    "article_status": "none",
+                    "thread_marker": False,
                 },
             }
         )
         self.assertEqual(coverage, "READ")
-        self.assertIn("no media reported", evidence)
+        self.assertIn("no media", evidence)
         self.assertEqual(components, {"post_text": "READ"})
 
     def test_twitter_media_unknown_is_conservatively_partial(self):
@@ -56,7 +61,7 @@ class FirstSuccessSmokeTest(unittest.TestCase):
                 "content": "plain public post text",
                 "media_type": "text",
                 "extra": {
-                    "fetch_method": "oembed",
+                    "fetch_method": "oembed", "post_id_verified": True,
                     "media_status": "unknown",
                 },
             }
@@ -92,11 +97,23 @@ class FirstSuccessSmokeTest(unittest.TestCase):
             {
                 "source_type": "manual",
                 "title": "Example Domain",
-                "content": "This is a real public document body with enough content to read.",
-                "extra": {"fetch_method": "direct_html_pinned"},
+                "content": "This is a real public document body with enough content to read. " * 6,
+                "extra": {"fetch_method": "direct_html_pinned", "redirects_verified": True,
+                          "embedded_media": 0, "page_signals": [], "body_verified": True},
             }
         )
         self.assertEqual(coverage, "READ")
+
+    def test_generic_thin_body_is_not_read(self):
+        coverage, _evidence, _components = smoke.classify(
+            {
+                "source_type": "manual",
+                "title": "Example Domain",
+                "content": "This domain is for use in documentation examples.",
+                "extra": {"fetch_method": "direct_html_pinned"},
+            }
+        )
+        self.assertEqual(coverage, "PARTIAL")
 
     def test_auth_detection_requires_explicit_login_language(self):
         self.assertTrue(smoke.looks_auth_required("Try: x-reader login twitter"))

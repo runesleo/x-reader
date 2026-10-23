@@ -9,7 +9,7 @@ import queue
 import socket
 import threading
 import time
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, urlsplit, urlunsplit
 
 from urllib3 import HTTPSConnectionPool, Timeout
 import idna
@@ -110,6 +110,31 @@ def _canonical_hostname(hostname: str) -> str:
             raise ValueError("Blocked: hostname is reserved or blocked")
 
     return hostname_lower
+
+
+def canonical_url(url: str) -> str:
+    """The URL with its hostname in the ASCII form x-reader connects to.
+
+    "x。com", "ｘ.com" and "youtube．com" connect to x.com and youtube.com, so
+    routing and policy must see those names too. IP literals are kept as they
+    are; anything that is not valid IDNA fails closed.
+    """
+    parts = urlsplit(url)
+    hostname = parts.hostname
+    if not hostname:
+        return url
+    try:
+        ipaddress.ip_address(hostname)
+        host = hostname
+    except ValueError:
+        host = _canonical_hostname(hostname)
+    netloc = f"[{host}]" if ":" in host else host
+    if parts.port is not None:
+        netloc = f"{netloc}:{parts.port}"
+    if parts.username is not None:
+        userinfo = parts.username + (f":{parts.password}" if parts.password is not None else "")
+        netloc = f"{userinfo}@{netloc}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def _is_globally_routable(ip: ipaddress._BaseAddress) -> bool:

@@ -32,6 +32,7 @@ CORE_LIBRARIES = (
     ("dotenv", "python-dotenv"),
     ("loguru", "loguru"),
     ("idna", "idna"),
+    ("html5lib", "html5lib"),
 )
 
 # Where `npx skills add runesleo/x-reader --skill x-reader` puts the skill.
@@ -175,6 +176,28 @@ def collect_checks(
             else "see https://ffmpeg.org/download.html",
         ))
 
+    if which("ffprobe"):
+        checks.append(Check("ffprobe", "optional", "OK", "ffprobe", detail="Audio duration checks for podcast transcription"))
+    else:
+        checks.append(Check(
+            "ffprobe", "optional", "MISSING", "ffprobe",
+            detail="Needed by the podcast --media-* modes to measure audio duration (ships with ffmpeg).",
+            fix_by="agent",
+            next="brew install ffmpeg" if mac
+            else "sudo apt install ffmpeg  (or the distro's package manager; ask the user before using sudo)" if linux
+            else "see https://ffmpeg.org/download.html",
+        ))
+
+    if has_module("faster_whisper"):
+        checks.append(Check("local-asr", "optional", "OK", "Local transcription (faster-whisper)",
+                            detail="podcast --media-* modes; model weights download on first use"))
+    else:
+        checks.append(Check(
+            "local-asr", "optional", "MISSING", "Local transcription (faster-whisper)",
+            detail="Only needed for the opt-in podcast --media-preview-seconds / --media-full-* modes.",
+            fix_by="agent", next=pip("media"),
+        ))
+
     if is_set("GROQ_API_KEY"):
         checks.append(Check("groq", "optional", "OK", "GROQ_API_KEY", detail="set (value not shown)"))
     else:
@@ -290,9 +313,10 @@ def format_report(checks: list[Check]) -> str:
 
 def run_doctor(json_output: bool = False, stream=None) -> int:
     """Print the report and return the exit code (0 = core ready)."""
-    try:  # Match the CLI, which reads .env; optional so this stays stdlib-only.
+    try:  # Match the CLI, which reads .env (except in hosted mode); optional so this stays stdlib-only.
         from dotenv import load_dotenv
-        load_dotenv()
+        if os.environ.get("X_READER_HOSTED") != "1":
+            load_dotenv()
     except Exception:  # a missing library or an unreadable .env must not break the report
         pass
     stream = sys.stdout if stream is None else stream

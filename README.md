@@ -3,11 +3,11 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Give your agent a URL. Make it prove what it actually read.**
+**Give your agent a URL. Let x-reader handle the source.**
 
-x-reader is a source-first Agent Skill + CLI for X/Twitter, articles, video, podcasts, WeChat, Xiaohongshu, Telegram, RSS, and the open web.
+x-reader is a universal content reader for AI agents. It reads X/Twitter, articles, YouTube, Bilibili, podcasts, WeChat, Xiaohongshu, Telegram, RSS, and the open web, then normalizes the result into structured source content for downstream research, summarization, and automation.
 
-It does one thing differently: **a search snippet is not the source, a tweet caption is not the attached video, and a video description is not a transcript.** If a material source layer was not actually retrieved, x-reader says so.
+Its differentiator is evidence-aware reading: **a search snippet is not the source, a tweet caption is not the attached video, and a video description is not a transcript.** When a material source layer is still missing, x-reader keeps that gap explicit instead of pretending the read is complete.
 
 **简体中文：** [README.zh-CN.md](./README.zh-CN.md) · **Website:** [xreader.leolabs.me](https://xreader.leolabs.me/en) · [Try it in the browser](https://xreader.leolabs.me/app)
 
@@ -18,6 +18,12 @@ Paste this into your AI agent (Claude Code, Codex, Cursor, …):
 > Set up x-reader on this computer by following the official instructions at https://github.com/runesleo/x-reader/blob/main/install.md.
 
 Your agent installs the skill and the CLI, runs the read-only `x-reader doctor` self-check, and reads a first link with you. The steps it follows are in [install.md](./install.md); to do it by hand, see below.
+
+## Evidence Receipt web utility
+
+The public beta is live for public X, YouTube, and generic web URLs: **[Product](https://xreader.leolabs.me/en) · [中文](https://xreader.leolabs.me/zh) · [Open app](https://xreader.leolabs.me/app)**. Paste a URL and it returns the same canonical evidence states used by x-reader: `PASS`, `PARTIAL`, `FAIL`, or `UNKNOWN`. Results can be copied as a human-readable receipt or JSON, and shared without upgrading missing evidence into success.
+
+Run it locally with `x-reader-web`, or use the hosted beta above. See [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md), the [distribution plan](./docs/DISTRIBUTION.md), and the [public-beta gate](./docs/PUBLIC_BETA_GATE.md).
 
 ## Install the Agent Skill
 
@@ -37,6 +43,21 @@ PARTIAL  some material layer is still missing
 FAIL     the original source could not be fetched reliably
 UNKNOWN  retrieved material is too ambiguous to verify
 ```
+
+## Evidence Receipt web preview (experimental)
+
+Run the same evidence contract through a small local web surface:
+
+```bash
+pip install -e .
+x-reader-web --host 127.0.0.1 --port 8787
+```
+
+The current hosted-MVP policy accepts public X/Twitter, YouTube, and generic web URLs only. It uses a fresh temporary HOME/inbox per request and does not inherit saved browser sessions, Telegram credentials, Groq keys, Obsidian/output paths, or external X cookies.
+
+The web layer does **not** add a second reader or evidence state machine: it invokes the existing `x-reader URL --json` path in the isolated environment and projects the result into `PASS / PARTIAL / FAIL / UNKNOWN`.
+
+See [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md) for API examples, the isolation boundary, and the mixed-media receipt contract.
 
 ## v0.3.1: verified before / after
 
@@ -87,23 +108,25 @@ x-reader makes these distinctions explicit:
 | Search result / preview card | Discovery only — not source evidence |
 | X post text | Claims in the post text only |
 | X post text + unconsumed attached video | Post may pass; video stays `PARTIAL` |
+| First post of a thread, quoted post or X Article not read | `PARTIAL` until that layer is shown absent (a quoted post can also be read; an X Article body never is) |
 | Video page title / description | Metadata only — not spoken content |
-| Subtitle / transcript | Spoken-content evidence |
+| Subtitle track covering the whole video | Spoken-content evidence; the video stays `PARTIAL` because pictures are not analyzed |
 | Login wall / deleted page / empty payload | `FAIL` or `PARTIAL`, never invented completion |
+| Paywall teaser, cookie wall, menu-only page | `PARTIAL`, `FAIL` or `UNKNOWN`; a generic page passes only with substantial prose |
 
 ## What it reads
 
 | Source | Base read path | Media / gated completion |
 |---|---|---|
 | X / Twitter | oEmbed → FxTwitter → Article/Jina → Playwright | Agent Skill can inspect attached media with local media tools |
-| Web / articles | Jina Reader | Browser fallback where supported |
+| Web / articles | Pinned direct read (checks redirects and embedded audio/video) → Jina Reader text | A redirect into X, YouTube, podcasts, etc. is handed to that reader; the hosted beta shows the direct read |
 | YouTube | yt-dlp metadata/subtitles | Groq Whisper fallback when configured |
 | Bilibili | Bilibili API | Subtitle/audio transcription workflow |
 | WeChat | Jina → Playwright | Headless browser fallback for public articles; saved login sessions are not used yet |
 | Xiaohongshu | Jina → Playwright | One-time local login may be required |
 | Telegram | Telethon | Telegram credentials required |
 | RSS | feedparser | — |
-| Xiaoyuzhou / Apple Podcasts | Generic web read (page text and metadata) | Audio is not fetched; transcribe it locally before claiming spoken content |
+| Xiaoyuzhou / Apple Podcasts | Episode page and show notes | Spoken audio only with the opt-in local ASR flags below; notes alone stay `PARTIAL` |
 
 Platform behavior changes over time. x-reader's contract is to expose the gap rather than overclaim coverage.
 
@@ -233,6 +256,36 @@ Use `--scope user` if you want the server available beyond the current project.
 
 The MCP server currently targets FastMCP 1.x; the `mcp` and `all` extras intentionally pin `mcp<2`.
 
+## Podcast reading: metadata versus spoken audio
+
+Podcast episode show notes are **not** an audio transcript. x-reader classifies supported podcast episode URLs as `source_type=podcast` and marks metadata-only reads `PARTIAL`.
+
+For a local, explicitly requested and bounded 12-second sample using free on-device Whisper (still **PARTIAL**, never a full episode):
+
+```bash
+# Local CLI only (not on the hosted web reader); experimental.
+python -m pip install "x-reader[media] @ git+https://github.com/runesleo/x-reader.git"
+# Also install ffmpeg and yt-dlp to PATH
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6abb9b69195d838e2aeb9c2b' --media-preview-seconds 12 --json
+```
+
+For an **explicit complete short-audio read** (public Xiaoyuzhou only, **≤2 MiB encoded / ≤120 seconds**) (experimental, local CLI only):
+
+```bash
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445' --media-full-short --json
+```
+
+Short mode returns **PASS** only after exact HTTP 206 source bytes, SHA-256, audio/PCM durations and full-input local ASR processing are verified. Episodes exceeding the short-mode limits remain **PARTIAL** in that mode.
+
+**Experimental resumable long audio:** The local CLI supports a separately opted-in, **single public Xiaoyuzhou episode** up to **64 MiB encoded and 90 minutes**. It uses verified 1-MiB HTTP 206 chunks, strong-ETag source versioning, local 60-second PCM/ASR segments, temporal coverage checks, and private on-disk checkpoints:
+
+```bash
+# Local CLI only; not available on the hosted web reader.
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6aab4896051af796b9e966c5' --media-full-long --json
+```
+
+One real 277.9-second episode passed full-source proof and resumed all **5/5 source chunks** plus **5/5 ASR checkpoints** on repeat. Very long or inaccessible audio remains **PARTIAL**, not a false PASS. The cached audio chunks and ASR text persist locally in a private directory; use an isolated `X_READER_LONG_CACHE_DIR` for sensitive workflows. Machine transcripts can still be wrong. No background work or paid API is enabled. See [media coverage](./docs/PODCAST_MEDIA_PREVIEW.md), [short-source proof](./docs/FULL_SHORT_AUDIO_PROOF.md), and the [2026-10-10 long-audio verification](./docs/LONG_AUDIO_RESUME_2026-10-10.md).
+
 ## Video / audio dependencies
 
 For local media extraction:
@@ -252,7 +305,7 @@ For Whisper transcription, set a Groq API key:
 export GROQ_API_KEY=your_key_here
 ```
 
-The transcription model is `whisper-large-v3`.
+The current YouTube Groq transcription code uses `whisper-large-v3`.
 
 ## Python library
 

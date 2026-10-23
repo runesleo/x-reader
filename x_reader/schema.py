@@ -6,6 +6,7 @@ Defines the standard data format for all content sources:
 - Telegram channels
 - RSS feeds
 - Bilibili videos
+- Podcasts (show notes vs spoken-media coverage)
 - Xiaohongshu (RED) notes
 - WeChat articles
 - X/Twitter posts
@@ -30,6 +31,7 @@ class SourceType(str, Enum):
     TWITTER = "twitter"
     WECHAT = "wechat"
     YOUTUBE = "youtube"
+    PODCAST = "podcast"
     MANUAL = "manual"
 
 
@@ -123,7 +125,12 @@ def from_telegram(msg: dict, channel_name: str, channel_username: str) -> Unifie
         title=msg.get('text', '')[:100],
         content=msg.get('text', ''),
         url=msg.get('url', f"https://t.me/{channel_username}"),
-        extra={"views": msg.get('views', 0), "channel_username": channel_username},
+        extra={
+            "views": msg.get('views', 0),
+            "channel_username": channel_username,
+            "message_id": msg.get('message_id'),
+            "media_status": msg.get('media_status', 'unknown'),
+        },
     )
 
 
@@ -138,6 +145,11 @@ def from_rss(article: dict) -> UnifiedContent:
         category=article.get('category', ''),
         title_cn=article.get('title_cn'),
         content_cn=article.get('summary_cn'),
+        # "full" only when the feed itself carried the article body; a summary
+        # or teaser must not be reported as the complete source.
+        extra={"rss_content": article.get('content_kind', 'summary'),
+               **({"embedded_media": article['embedded_media']}
+                  if isinstance(article.get('embedded_media'), int) else {})},
     )
 
 
@@ -154,6 +166,9 @@ def from_bilibili(video: dict) -> UnifiedContent:
             "bvid": video.get('bvid', ''),
             "duration": video.get('duration', 0),
             "view_count": video.get('view_count', 0),
+            "fetch_method": video.get('fetch_method', ''),
+            "media_status": video.get('media_status', 'present'),
+            "has_transcript": bool(video.get('has_transcript', False)),
         },
     )
 
@@ -170,6 +185,13 @@ def from_twitter(data: dict) -> UnifiedContent:
         extra["media_status"] = data.get('media_status')
     if data.get('media_probe_method'):
         extra["media_probe_method"] = data.get('media_probe_method')
+    for key in ("structure_status", "quote_status", "poll_status", "article_status"):
+        if data.get(key):
+            extra[key] = data.get(key)
+    if "thread_marker" in data:
+        extra["thread_marker"] = bool(data.get("thread_marker"))
+    if "post_id_verified" in data:
+        extra["post_id_verified"] = data.get("post_id_verified") is True
 
     return UnifiedContent(
         source_type=SourceType.TWITTER,
@@ -182,12 +204,20 @@ def from_twitter(data: dict) -> UnifiedContent:
 
 
 def from_wechat(article: dict) -> UnifiedContent:
+    extra = {"extraction": article.get('extraction', '')} if article.get('extraction') else {}
+    media = article.get('embedded_media')
+    if isinstance(media, int) and not isinstance(media, bool):
+        extra["embedded_media"] = media  # players and frames counted in the article container
+    for key in ("final_url", "visual_risks", "page_signals"):
+        if key in article:
+            extra[key] = article[key]  # where the browser ended up, what it could not vouch for, walls around
     return UnifiedContent(
         source_type=SourceType.WECHAT,
         source_name=article.get('author', ''),
         title=article.get('title', ''),
         content=article.get('content', ''),
         url=article.get('url', ''),
+        extra=extra,
     )
 
 
@@ -217,6 +247,85 @@ def from_youtube(video: dict) -> UnifiedContent:
         extra={
             "duration": video.get('duration', ''),
             "view_count": video.get('view_count', 0),
+            # Preserve whether spoken content was actually read so downstream
+            # Evidence Receipts can distinguish transcript coverage from a
+            # page-description fallback.
+            "has_transcript": bool(video.get('has_transcript', False)),
+            "transcript_source": video.get('transcript_source', ''),
+            "transcript_start_seconds": video.get('transcript_start_seconds'),
+            "transcript_end_seconds": video.get('transcript_end_seconds'),
+            "transcript_covered_seconds": video.get('transcript_covered_seconds'),
+            "transcript_max_gap_seconds": video.get('transcript_max_gap_seconds'),
+            "page_state": video.get('page_state', ''),
+            "video_id": video.get('video_id', ''),
+            "transcript_video_id": video.get('transcript_video_id', ''),
+        },
+    )
+
+
+def from_podcast(episode: dict) -> UnifiedContent:
+    """Normalize podcast notes, previews and audited short full audio."""
+    notes = str(episode.get("description") or "").strip()
+    preview = str(episode.get("preview_transcript") or "").strip()
+    complete_transcript = str(episode.get("full_transcript") or "")
+    has_full_text = bool(complete_transcript.strip())
+    preview_seconds = int(episode.get("preview_seconds") or 0) if preview else 0
+
+    if has_full_text:
+        # For full mode, preserve exact newlines so each segment's transcript
+        # SHA-256 can be independently recomputed from the payload.
+        # This lets the receipt recompute the transcript hash independently.
+        content = complete_transcript
+    elif preview:
+        content = (
+            notes
+            + f"\n\n[Machine-generated audio preview: first {preview_seconds} seconds; "
+            + f"NOT a full-episode transcript]\n{preview}"
+        )
+    else:
+        content = notes
+
+    coverage = "full" if has_full_text else ("preview" if preview else "none")
+    return UnifiedContent(
+        source_type=SourceType.PODCAST,
+        source_name=episode.get("author") or "podcast",
+        title=episode.get("title") or "",
+        content=content,
+        url=episode.get("url") or "",
+        media_type=MediaType.AUDIO,
+        extra={
+            "fetch_method": episode.get("fetch_method") or "",
+            "media_status": "present",
+            "transcript_coverage": coverage,
+            "preview_seconds": preview_seconds,
+            "transcription_method": episode.get("transcription_method") or "",
+            "has_transcript": bool(episode.get("has_transcript", False) and has_full_text),
+            "preview_transcript_chars": len(preview),
+            "preview_error": episode.get("preview_error") or "",
+            "full_error": episode.get("full_error") or "",
+            "notes_chars": len(notes),
+            "coverage_basis": episode.get("coverage_basis") or "",
+            "coverage_intervals": episode.get("coverage_intervals") or [],
+            "media_duration_seconds": episode.get("media_duration_seconds") or 0,
+            "decoded_duration_seconds": episode.get("decoded_duration_seconds") or 0,
+            "processed_seconds": episode.get("processed_seconds") or 0,
+            "coverage_ratio": episode.get("coverage_ratio") or 0,
+            "audio_bytes": episode.get("audio_bytes") or 0,
+            "media_sha256": episode.get("media_sha256") or "",
+            "media_url_sha256": episode.get("media_url_sha256") or "",
+            "transcript_sha256": episode.get("transcript_sha256") or "",
+            "asr_segments": episode.get("asr_segments") or 0,
+            "verified_complete_bytes": episode.get("verified_complete_bytes") is True,
+            "chunk_count": episode.get("chunk_count") or 0,
+            "chunk_manifest_sha256": episode.get("chunk_manifest_sha256") or "",
+            "chunks_manifest": episode.get("chunks_manifest") or {},
+            "segment_count": episode.get("segment_count") or 0,
+            "segments_manifest": episode.get("segments_manifest") or [],
+            "segments_manifest_sha256": episode.get("segments_manifest_sha256") or "",
+            "reused_source_chunks": episode.get("reused_source_chunks") or 0,
+            "reused_asr_segments": episode.get("reused_asr_segments") or 0,
+            "asr_boundary_adjustments": episode.get("asr_boundary_adjustments") or 0,
+            "max_boundary_overrun_seconds": episode.get("max_boundary_overrun_seconds") or 0.0,
         },
     )
 

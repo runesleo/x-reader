@@ -1,0 +1,80 @@
+name: Evidence Receipt Live Canary
+
+# Runs the hosted web surface on the runner and reads live sources through its
+# HTTP API. Nothing is exposed publicly: the server listens on 127.0.0.1 only.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install x-reader
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Start Evidence Receipt on localhost
+        run: |
+          nohup python -m x_reader.web_app --host 127.0.0.1 --port 8787 >/tmp/x-reader-web.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/x-reader-web.log
+          exit 1
+
+      - name: Live canary
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+
+          base = "http://127.0.0.1:8787"
+
+          def read(url):
+              body = json.dumps({"url": url}).encode()
+              request = urllib.request.Request(
+                  base + "/api/read",
+                  data=body,
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  return json.load(response)
+
+          article = read("https://en.wikipedia.org/wiki/Unix")
+          assert article["ok"] is True
+          assert article["receipt"]["status"] == "PASS", article["receipt"]
+
+          thin = read("https://example.com")
+          assert thin["receipt"]["status"] != "PASS", thin["receipt"]
+
+          mixed = read("https://x.com/dontbesilent/status/2103875422522077377")
+          assert mixed["ok"] is True
+          assert mixed["receipt"]["status"] == "PARTIAL", mixed["receipt"]
+          assert mixed["receipt"]["components"]["post_text"] == "PASS"
+          assert mixed["receipt"]["components"]["attached_media"] == "PARTIAL"
+
+          print("HEALTH=PASS")
+          print("GENERIC_ARTICLE=PASS")
+          print("THIN_PAGE=NOT_PASS")
+          print("MIXED_MEDIA_X=PARTIAL_EXPECTED")
+          print("LIVE_CANARY=PASS")
+          PY

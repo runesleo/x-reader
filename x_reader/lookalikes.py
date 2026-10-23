@@ -1,0 +1,137 @@
+"""Letters that look like ASCII letters and digits, mapped to them.
+
+Wall wording is matched after this mapping, so a notice spelled with look-alike
+letters from other scripts ("\u0405ubscribe" with a Cyrillic capital) still counts.
+
+Derived from Unicode's confusables data (UTS #39, confusables.txt, version
+18.0.0; Copyright (c) Unicode, Inc., Unicode License v3,
+https://www.unicode.org/license.txt): single code points whose prototype is one
+or more ASCII letters or digits, leaving out ideographs, kana and Hangul (which
+Chinese wall wording uses) and what NFKC already maps; plus Latin small
+capitals and squared, circled and parenthesized letters, by their Unicode
+names. Each line below is a target followed by the hexadecimal code points
+that map to it.
+"""
+
+_TABLE = """
+2 01a7 03e8 10c7 14bf 1616 1cb7 a644 a6ef a75a
+3 01b7 021c 0417 04e0 0545 0969 0ae9 1702 1c95 2c9c 2cc4 2ccc a76a a7ab 118ca 16f3b 1d206
+4 13ce ab9e 118af 16e82
+5 01bc 118bb
+6 03ec 0431 13ee 2cd2 2cd3 2cdc a543 abbe 118d5
+7 172a 1c84 104d2 118c6 16e8a 1d1fe 1d212
+8 0222 0223 09ea 0a6a 0b03 a589 1031a 11445 169fe 1e8cb
+9 09ed 0a67 0b68 0d6d 2cca 2ccb a76e a76f 118ac 118cc 118d6 169c1 1e2f2
+a 0251 0391 03b1 0410 0430 13aa 15c5 1d00 237a 249c a4ee ab64 102a0 16f40 1d6a8 1d6c2 1d6e2 1d6fc
+a 1d71c 1d736 1d756 1d770 1d790 1d7aa 1df5a 1df6a 1f150 1f170
+b 0184 0299 0392 0412 042c 07d5 13cf 13f4 1472 15af 15f7 249d 2c82 a4d0 a557 a7b4 10282 102a1 10301
+b 1031c 16eb6 1d207 1d6a9 1d6e3 1d71d 1d757 1d791 1f151 1f171
+c 03f2 03f9 0421 0441 1004 105a 13df 1c83 1d04 249e 2ca4 2ca5 a4da abaf 102a2 10302 10415 1043d
+c 1051b 118e9 118f2 1d134 1f152 1f172 1f74c
+d 0501 13a0 13e7 146f 15de 15ea 1d05 249f a4d2 a4d3 1018b 1f153 1f173
+e 0395 0415 0435 04bd 13ac 1d07 212e 22ff 24a0 2d39 a4f0 a5cb ab32 10286 118a6 118ae 1d6ac 1d6e6
+e 1d720 1d75a 1d794 1df81 1f154 1f174
+f 017f 0192 0284 03dc 0584 07d3 15b4 1e9d 24a1 a4dd a730 a798 a799 ab35 1017e 10287 102a5 10525
+f 118a2 118c2 1d213 1d7ca 1f155 1f175
+g 018d 0261 0262 050c 0581 13c0 13f3 1d83 24a2 a4d6 1f156 1f176
+h 029c 0397 041d 04ba 04bb 0570 10b9 13bb 13c2 157c 24a3 2c8e a4e7 102cf 1d6ae 1d6e8 1d722 1d75c
+h 1d796 1f157 1f177
+i 00a1 0131 0269 026a 03b9 0456 0582 13a5 2373 24a4 2c93 a647 ab75 118c3 1d6a4 1d6ca 1d704 1d73e
+i 1d778 1d7b2 1f158 1f178
+j 0237 037f 03f3 0408 0458 0575 13ab 148d 1d0a 24a5 a4d9 a7b2 1d6a5 1f159 1f179
+k 039a 041a 13e6 16d5 1d0b 24a6 2c94 a4d7 10518 1d6b1 1d6eb 1d725 1d75f 1d799 1f15a 1f17a
+l 0196 01c0 029f 0399 0406 04c0 04cf 05c0 05d5 05df 0627 0661 06f1 07ca 0964 104a 13de 14aa 16c1
+l 16d0 2110 2111 2160 21bf 2223 23fd 24a7 2502 2503 2c92 2cd0 2d4a 2d4f a4e1 a4f2 a56f a781 a7ae
+l a7fe a830 a8ce aa5d fe8d fe8e 1028a 10309 10320 1041b 1050e 10526 10926 10c3e 10ca5 10cfa 11047
+l 110c0 11141 111c5 113d4 1144b 115c5 11641 118a3 118b2 11c41 11dda 11de1 16d63 16eaa 16f16 16f28
+l 1ccde 1ccf1 1d100 1d22a 1d377 1d408 1d43c 1d470 1d4d8 1d540 1d574 1d5a8 1d5dc 1d610 1d644 1d678
+l 1d6b0 1d6ea 1d724 1d75e 1d798 1d7cf 1d7d9 1d7e3 1d7ed 1d7f7 1e141 1e8c7 1ed01 1ee00 1ee80 1f15b
+l 1f17b 1fbf1
+m 039c 03fa 041c 13b7 15f0 16d6 1d0d 24a8 2c98 a4df 102b0 10311 10c21 1d6b3 1d6ed 1d727 1d761 1d79b
+m 1f15c 1f17c
+n 0274 039d 0578 057c 24a9 2c9a a4e0 10513 11abe 1d6b4 1d6ee 1d728 1d762 1d79c 1f15d 1f17d
+o 039f 03bf 03c3 03ed 041e 043e 0555 0585 05e1 0647 0665 06be 06c1 06d5 06f5 07c0 07cb 0840 0966
+o 09e6 0a66 0ae6 0b20 0b66 0be6 0c02 0c66 0c82 0ce6 0d02 0d20 0d66 0d82 0e50 0ed0 101d 1040 10ff
+o 12d0 17e0 1a45 1a80 1a90 1bea 1c82 1cbf 1d0f 1d11 24aa 2c9e 2c9f 2d54 a4f3 ab3d fba6 fba7 fba8
+o fba9 fbaa fbab fbac fbad fee9 feea feeb feec 10292 102ab 1030f 10404 1042c 104c2 104ea 10516 1092c
+o 10c17 10d07 11124 11302 114d0 118b5 118c8 118d7 118e0 11de0 16ae9 1ccf0 1d6b6 1d6d0 1d6d4 1d6f0
+o 1d70a 1d70e 1d72a 1d744 1d748 1d764 1d77e 1d782 1d79e 1d7b8 1d7bc 1d7ce 1d7d8 1d7e2 1d7ec 1d7f6
+o 1e140 1e2f0 1ee24 1ee84 1f15e 1f17e 1fbf0
+p 00fe 01bf 03a1 03c1 03f1 03f8 0420 0440 13e2 146d 1d18 2374 24ab 2ca2 2ca3 2cce 2ccf a4d1 10295
+p 1d6b8 1d6d2 1d6e0 1d6f2 1d70c 1d71a 1d72c 1d746 1d754 1d766 1d780 1d78e 1d7a0 1d7ba 1d7c8 1f15f
+p 1f17f
+q 051a 051b 0563 0566 24ac 2d55 a7af 1f160 1f180
+r 01a6 024c 0280 0433 13a1 13d2 1587 1d26 24ad 2c85 a4e3 ab47 ab48 ab81 104b4 16a19 16f35 1d216
+r 1f161 1f181
+s 01bd 0405 0455 054f 0d1f 10bd 10fd 13d5 13da 1cbd 24ae a4e2 a576 a731 abaa 10296 10420 10448 118c1
+s 16ad6 16f3a 1f162 1f182
+t 03a4 0422 07e0 13a2 1d1b 22a4 24af 27d9 2ca6 a4d4 a50b 10297 102b1 10315 118bc 16f0a 1d373 1d6bb
+t 1d6f5 1d72f 1d769 1d7a3 1f163 1f183 1f768
+u 028b 03c5 054d 057d 1200 144c 1d1c 222a 22c3 24b0 a4f4 a79f ab4e ab52 104ce 104f6 118b8 118d8
+u 16f42 1d6d6 1d710 1d74a 1d784 1d7be 1f164 1f184
+v 03bd 0474 0475 05d8 0667 06f7 13d9 142f 1d20 2228 22c1 24b1 2d38 a4e6 a6df aba9 1051d 10c1f 11706
+v 118a0 118c0 16f08 1cefc 1d20d 1d6ce 1d708 1d742 1d77c 1d7b6 1e145 1f165 1f185
+w 026f 0448 0461 051c 051d 0561 13b3 13d4 1d21 24b2 29e2 2cbd a4ea a7fa ab83 aba4 1170a 1170e 1170f
+w 118e6 118ef 1d20c 1df7d 1f166 1f186
+x 00d7 03a7 0425 0445 1541 157d 166d 166e 16b7 1763 1bec 1cf5 24b3 2573 292b 292c 2a2f 2cac 2d5d
+x a4eb a7b3 10290 102b4 10317 10322 10527 10c13 10c82 10cc2 10cfc 118ec 1d6be 1d6f8 1d732 1d76c
+x 1d7a6 1f167 1f187
+y 0263 028f 03a5 03b3 03d2 0423 0443 04ae 04af 07cc 10e7 13a9 13bd 1d8c 1eff 213d 24b4 2ca8 2ca9
+y a4ec ab5a 102b2 10c20 118a4 118c4 118dc 16f43 1d6bc 1d6c4 1d6f6 1d6fe 1d730 1d738 1d76a 1d772
+y 1d7a4 1d7ac 1f168 1f188
+z 0396 10cd 13c3 1d22 24b5 2c6b 2c6c 2c8c 2c8d 2d2d a4dc a6c9 ab93 102f5 10507 118a9 118e5 11abc
+z 1d6ad 1d6e7 1d721 1d75b 1d795 1f169 1f189
+aa a732 a733
+ae 00c6 00e6 04d4 04d5
+ao a734 a735
+ar 1f707
+au a736 a737
+av a738 a739 a73a a73b
+ay a73c a73d
+bl 042b
+co ab43
+dz 02a3
+ft fb05
+ie 1df5d
+lj 0132
+ll 01c1 05f0 0965 104b 1efa 2016 2161 2225 a8cf 11048 110c1 11142 111c6 113d5 1144c 11642 11c42
+ll 1d262
+lo 042e
+ls 02aa
+lt 20b6
+lv 2163
+lx 2168
+lz 02ab
+mb 1f76b
+oe 0152 0153
+oi 1df5e
+ol 1ee64
+oo 221e a698 a699 a74e a74f
+ou 1df5f
+oy 0478 0479
+qe 1f700
+rn 0560 217f 11700 118e3 1d426 1d45a 1d48e 1d4c2 1d4f6 1d52a 1d55e 1d592 1d5c6 1d5fa 1d62e 1d662
+rn 1d696
+t3 a728
+tf a777
+th 1df64
+ts 02a6
+ue 1d6b
+uo ab63
+vb 1f76c
+vl 2165
+wh 1df65
+xl 216a
+lll 2162 a516
+sss 1f75c
+vll 2166
+xll 216b
+vlll 2167
+"""
+
+LOOKALIKES = {
+    int(code, 16): target
+    for line in _TABLE.split("\n") if line
+    for target, *codes in [line.split()]
+    for code in codes
+}

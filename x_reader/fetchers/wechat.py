@@ -47,6 +47,7 @@ async def fetch_wechat(url: str) -> Dict[str, Any]:
                 "author": data.get("author", ""),
                 "url": url,
                 "platform": "wechat",
+                "extraction": "reader",
             }
         logger.warning("[WeChat] Jina returned CAPTCHA/anti-scrape stub, falling back to browser")
     except Exception as e:
@@ -58,13 +59,28 @@ async def fetch_wechat(url: str) -> Dict[str, Any]:
         from x_reader.fetchers.browser import fetch_via_browser
 
         data = await fetch_via_browser(url)
-        return {
+        article = {
             "title": data["title"],
             "content": _proxy_wechat_images(data["content"]),
             "author": data.get("author", ""),
             "url": url,
             "platform": "wechat",
+            "extraction": data.get("extraction", "page_body"),
         }
+        if isinstance(data.get("embedded_media"), int):
+            article["embedded_media"] = data["embedded_media"]  # players and frames the walk counted
+        article["final_url"] = str(data.get("url") or "")  # where the browser ended up
+        if isinstance(data.get("visual_risks"), list):
+            article["visual_risks"] = data["visual_risks"]  # what the page's text read cannot vouch for
+        if "page_text" in data:
+            # walls drawn anywhere on the page (overlays, prompts outside the article); a page text
+            # cut short could hold one past the cut
+            from x_reader.evidence import page_wall_signals
+            signals = set(page_wall_signals(data["title"], str(data["page_text"] or "")))
+            if data.get("page_text_complete") is not True:
+                signals.add("scan_budget_exceeded")
+            article["page_signals"] = sorted(signals)
+        return article
     except RuntimeError:
         # Playwright not installed — re-raise with original Jina error context
         raise

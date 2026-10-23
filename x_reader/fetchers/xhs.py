@@ -12,8 +12,29 @@ Install browser tier: pip install "x-reader[browser]" && playwright install chro
 from loguru import logger
 from typing import Dict, Any
 from pathlib import Path
+from urllib.parse import urlparse
 
 from x_reader.fetchers.jina import fetch_via_jina
+
+
+def _valid_note(data: dict, final_url: str) -> bool:
+    """Fail closed on deleted/login/security pages and empty note content."""
+    path = urlparse(final_url or "").path.lower().rstrip("/")
+    if path in ("/404", "/login", "/loginwithredirect") or path.startswith("/404/"):
+        return False
+
+    title = str(data.get("title") or "").strip()
+    content = str(data.get("content") or "").strip()
+    if not content:
+        return False
+    probe = (title + " " + content[:1000]).lower()
+    blocked = (
+        "安全限制", "账号异常", "account abnormal", "switch account and retry",
+        "你访问的页面不见了", "this page isn't available",
+        "登录后推荐更懂你的笔记", "小红书 - 你的生活兴趣社区",
+        "请打开小红书app扫码查看",
+    )
+    return not any(marker in probe for marker in blocked)
 
 
 async def fetch_xhs(url: str) -> Dict[str, Any]:
@@ -32,11 +53,7 @@ async def fetch_xhs(url: str) -> Dict[str, Any]:
         data = fetch_via_jina(url)
         content = data.get("content", "")
         title = data.get("title", "")
-        is_login_wall = (
-            "小红书 - 你的生活兴趣社区" in title
-            or "登录后推荐更懂你的笔记" in content
-        )
-        if content and not is_login_wall:
+        if _valid_note(data, data.get("url") or url):
             return {
                 "title": title,
                 "content": content,
@@ -69,15 +86,15 @@ async def fetch_xhs(url: str) -> Dict[str, Any]:
 
         data = await fetch_via_browser(url, storage_state=session_path)
 
-        # Session expiry detection: XHS redirects to /explore or login page
-        final_url = data.get("url", "")
-        if final_url and final_url != url:
-            if final_url.rstrip("/").endswith("/explore") or "login" in final_url:
-                raise RuntimeError(
-                    f"❌ XHS session expired (redirected to {final_url}).\n"
-                    f"   Run: x-reader login xhs\n"
-                    f"   Then retry this URL."
-                )
+        # Validate final browser URL's *path*, not the query string:
+        # XHS uses /404?redirectPath=... and can return an empty SPA shell.
+        final_url = data.get("url") or url
+        path = urlparse(final_url).path.lower().rstrip("/")
+        if path in ("/explore", "/login") or not _valid_note(data, final_url):
+            raise RuntimeError(
+                "XHS blocked or empty: note content was not retrieved. "
+                "Check link availability, xsec_token and local session freshness."
+            )
 
         return {
             "title": data["title"],

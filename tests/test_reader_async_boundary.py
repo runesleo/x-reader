@@ -30,20 +30,21 @@ class ReaderAsyncBoundaryTest(unittest.TestCase):
             calls.append(getattr(func, "__name__", str(func)))
             if getattr(func, "__name__", "") == "fetch_via_jina":
                 raise RuntimeError("jina down")
-            if getattr(func, "__name__", "") == "fetch_direct_html":
+            if getattr(func, "__name__", "") == "fetch_html_page":
                 return {
                     "title": "Fallback",
                     "content": "A sufficiently long fallback document body for async routing.",
                     "url": "https://example.com",
                     "fetch_method": "direct_html_pinned",
+                    "embedded_media": 0,
                 }
             return func(*args, **kwargs)
 
         with patch("x_reader.reader.asyncio.to_thread", side_effect=fake_to_thread):
             content = asyncio.run(reader._fetch("generic", "https://example.com"))
 
+        self.assertIn("fetch_html_page", calls)
         self.assertIn("fetch_via_jina", calls)
-        self.assertIn("fetch_direct_html", calls)
         self.assertEqual(content.extra["fetch_method"], "direct_html_pinned")
 
 

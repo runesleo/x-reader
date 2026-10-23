@@ -1,7 +1,7 @@
 [project]
 name = "x-reader"
-version = "0.4.0"
-description = "Source-first Agent Skill and CLI for reading URLs with explicit evidence coverage"
+version = "0.5.0"
+description = "Universal content reader for AI agents with structured sources and evidence coverage"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -15,6 +15,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "loguru>=0.7",
     "idna>=3.6",  # For IDN/homograph attack protection in URL validation
+    "html5lib>=1.1",  # Builds generic pages the way browsers do before judging them
 ]
 
 [project.urls]
@@ -26,11 +27,13 @@ Issues = "https://github.com/runesleo/x-reader/issues"
 telegram = ["telethon>=1.34"]
 mcp = ["mcp[cli]>=1.0,<2"]
 browser = ["playwright>=1.40"]
-all = ["telethon>=1.34", "mcp[cli]>=1.0,<2", "playwright>=1.40"]
+media = ["faster-whisper>=1.0"]
+all = ["telethon>=1.34", "mcp[cli]>=1.0,<2", "playwright>=1.40", "faster-whisper>=1.0"]
 
 [project.scripts]
 x-reader = "x_reader.cli:main"
 x-reader-mcp = "x_reader.mcp_server:main"
+x-reader-web = "x_reader.web_app:main"
 
 [build-system]
 requires = ["hatchling"]

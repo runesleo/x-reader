@@ -17,8 +17,10 @@ import json
 from pathlib import Path
 
 try:
+    import os as _os
     from dotenv import load_dotenv
-    load_dotenv()
+    if _os.environ.get("X_READER_HOSTED") != "1":  # hosted reads must not pick up local secrets
+        load_dotenv()
 
     from x_reader.reader import UniversalReader
     from x_reader.schema import UnifiedInbox, SourceType
@@ -33,14 +35,19 @@ def get_inbox_path() -> str:
     return os.getenv("INBOX_FILE", "unified_inbox.json")
 
 
-def cmd_fetch(urls: list[str], json_output: bool = False):
+def cmd_fetch(urls: list[str], json_output: bool = False, media_preview_seconds: int = 0,
+              full_short_audio: bool = False, full_long_audio: bool = False):
     """Fetch one or more URLs.
 
     When json_output is True, stdout is machine-readable JSON containing the
     complete UnifiedContent payload instead of the human preview.
     """
-    inbox = UnifiedInbox(get_inbox_path())
-    reader = UniversalReader(inbox=inbox)
+    import os
+    inbox = None if os.environ.get("X_READER_HOSTED") == "1" else UnifiedInbox(get_inbox_path())
+    reader = UniversalReader(
+        inbox=inbox, media_preview_seconds=media_preview_seconds,
+        full_short_audio=full_short_audio, full_long_audio=full_long_audio,
+    )
 
     async def run():
         if len(urls) == 1:
@@ -94,7 +101,7 @@ def cmd_list():
 
     emoji_map = {
         SourceType.TELEGRAM: "📢", SourceType.RSS: "📰",
-        SourceType.BILIBILI: "🎬", SourceType.XIAOHONGSHU: "📕",
+        SourceType.BILIBILI: "🎬", SourceType.PODCAST: "🎧", SourceType.XIAOHONGSHU: "📕",
         SourceType.TWITTER: "🐦", SourceType.WECHAT: "💬",
         SourceType.YOUTUBE: "▶️", SourceType.MANUAL: "✏️",
     }
@@ -122,6 +129,24 @@ def cmd_login(platform: str, headless: bool = False):
     login(platform, headless=headless)
 
 
+def parse_media_preview_option(args: list[str]) -> tuple[list[str], int]:
+    """Only explicit --media-preview-seconds N enables bounded audio work."""
+    if "--media-preview-seconds" not in args:
+        return args, 0
+    if args.count("--media-preview-seconds") != 1:
+        raise ValueError("Specify --media-preview-seconds at most once")
+    index = args.index("--media-preview-seconds")
+    if index + 1 >= len(args):
+        raise ValueError("Missing number after --media-preview-seconds")
+    try:
+        seconds = int(args[index + 1])
+    except ValueError as exc:
+        raise ValueError("Media preview seconds must be an integer") from exc
+    if not 1 <= seconds <= 30:
+        raise ValueError("Media preview must be between 1 and 30 seconds")
+    return args[:index] + args[index + 2:], seconds
+
+
 def main():
     if len(sys.argv) < 2:
         print("""
@@ -131,6 +156,12 @@ Usage:
     x-reader <url>              Fetch content from any URL
     x-reader <url1> <url2>      Fetch multiple URLs
     x-reader <url> --json       Print complete UnifiedContent as JSON
+    x-reader <podcast-url> --media-preview-seconds 12 --json
+                                Opt-in local ASR of 1-30s; always PARTIAL
+    x-reader <podcast-url> --media-full-short --json
+                                Opt-in whole-source ASR only if <=2 MiB / <=120s
+    x-reader <podcast-url> --media-full-long --json
+                                Opt-in resumable whole-source <=64 MiB / <=90m
     x-reader login <platform>   Login to a platform (saves session for browser fallback)
     x-reader doctor [--json]    Check what is ready and what is missing (read-only)
     x-reader list               Show inbox contents
@@ -138,7 +169,7 @@ Usage:
 
 Supported platforms:
     WeChat, Telegram, X/Twitter, YouTube,
-    Bilibili, Xiaohongshu, RSS, and any web page
+    Bilibili, podcasts, Xiaohongshu, RSS, and any web page
 
 Examples:
     x-reader https://mp.weixin.qq.com/s/abc123
@@ -151,9 +182,28 @@ Examples:
     args = sys.argv[1:]
     json_output = "--json" in args
     args = [arg for arg in args if arg != "--json"]
+
+    def usage_error(message: str, code: int = 2):
+        # With --json, stdout stays machine-readable even for usage errors.
+        if json_output:
+            print(json.dumps({"ok": False, "error": message, "error_type": "UsageError"}, ensure_ascii=False))
+        else:
+            print(f"❌ {message}")
+        sys.exit(code)
+
+    try:
+        if args.count("--media-full-short") > 1 or args.count("--media-full-long") > 1:
+            raise ValueError("Specify each full-media flag at most once")
+        full_short_audio = "--media-full-short" in args
+        full_long_audio = "--media-full-long" in args
+        args = [arg for arg in args if arg not in ("--media-full-short", "--media-full-long")]
+        args, media_preview_seconds = parse_media_preview_option(args)
+        if sum((full_short_audio, full_long_audio, bool(media_preview_seconds))) > 1:
+            raise ValueError("Full-long, full-short and preview flags are mutually exclusive")
+    except ValueError as exc:
+        usage_error(str(exc))
     if not args:
-        print("❌ Missing URL or command")
-        sys.exit(1)
+        usage_error("Missing URL or command", code=1)
 
     cmd = args[0].lower()
 
@@ -171,9 +221,7 @@ Examples:
 
     if cmd == "login":
         if len(args) < 2:
-            print("❌ Usage: x-reader login <platform> [--headless]")
-            print("   Supported: xhs, wechat, twitter")
-            sys.exit(1)
+            usage_error("Usage: x-reader login <platform> [--headless] (supported: xhs, wechat, twitter)", code=1)
         headless = "--headless" in args
         cmd_login(args[1], headless=headless)
     elif cmd == "list":
@@ -185,10 +233,23 @@ Examples:
             arg for arg in args
             if arg.startswith(("http", "www.")) or "." in arg
         ]
-        cmd_fetch(urls, json_output=json_output)
+        if _os.environ.get("X_READER_HOSTED") == "1":
+            from x_reader.utils.proc import apply_hosted_limits
+            apply_hosted_limits()
+        if full_long_audio:
+            if len(urls) != 1:
+                usage_error("--media-full-long accepts exactly one podcast URL")
+            cmd_fetch(urls, json_output=json_output, full_long_audio=True)
+        elif full_short_audio:
+            if len(urls) != 1:
+                usage_error("--media-full-short accepts exactly one podcast URL")
+            cmd_fetch(urls, json_output=json_output, full_short_audio=True)
+        elif media_preview_seconds:
+            cmd_fetch(urls, json_output=json_output, media_preview_seconds=media_preview_seconds)
+        else:
+            cmd_fetch(urls, json_output=json_output)
     else:
-        print(f"❌ Unknown command: {cmd}")
-        print("   Run 'x-reader' with no args for help")
+        usage_error(f"Unknown command: {cmd}. Run 'x-reader' with no args for help")
 
 
 if __name__ == "__main__":

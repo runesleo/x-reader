@@ -5,15 +5,21 @@
 
 [English](./README.md)
 
-**把一个 URL 丢给 Agent，并要求它证明自己到底读到了什么。**
+**给 Agent 一个 URL，剩下的来源读取交给 x-reader。**
 
-x-reader 是一个 source-first 的 Agent Skill + CLI，支持 X/Twitter、网页文章、视频、播客、微信公众号、小红书、Telegram、RSS 等来源。
+x-reader 是给 AI Agent 用的通用内容读取层（Universal Content Reader）。它负责读取 X/Twitter、网页文章、YouTube、Bilibili、播客、微信公众号、小红书、Telegram、RSS 和开放网页，再把结果统一整理成 Agent 可以继续研究、总结和自动化处理的结构化来源内容。
 
-它解决的不是“再做一个摘要器”，而是一个更基础的问题：
+它的差异化不是“再做一个摘要器”，而是 evidence-aware reading：
 
-**搜索摘要不等于原文，推文正文不等于附件视频，视频简介也不等于视频内容。**
+**搜索摘要不等于原文，推文正文不等于附件视频，视频简介也不等于视频里的口头内容。**
 
-如果关键来源层没有真正读取到，x-reader 必须明确告诉你。
+如果关键来源层还没读到，x-reader 会把缺口保留下来，而不是假装这次读取已经完成。
+
+## Evidence Receipt 网页工具
+
+公开 Beta 已上线：**[中文介绍](https://xreader.leolabs.me/zh) · [English](https://xreader.leolabs.me/en) · [打开工具](https://xreader.leolabs.me/app)**，面向公开 X、YouTube 和普通网页 URL。粘贴链接后，它直接返回与 x-reader 相同的四种证据状态：`PASS`、`PARTIAL`、`FAIL`、`UNKNOWN`。结果可以复制为可读收据或 JSON，也可以分享；任何分享都不会把缺失证据包装成成功。
+
+本地运行使用 `x-reader-web`，也可以直接使用上面的 Hosted Beta。详见 [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md)、[分发方案](./docs/DISTRIBUTION.md) 和 [公开 Beta 发布门](./docs/PUBLIC_BETA_GATE.md)。
 
 ## 一步装好
 
@@ -41,6 +47,21 @@ PARTIAL  只读到了部分来源，仍缺关键层
 FAIL     无法可靠获取原始来源
 UNKNOWN  当前材料不足以确认是否就是用户要求的来源
 ```
+
+## Evidence Receipt 网页预览（实验性）
+
+现在可以把同一套 evidence contract 通过一个很小的本地网页界面跑起来：
+
+```bash
+pip install -e .
+x-reader-web --host 127.0.0.1 --port 8787
+```
+
+当前 hosted MVP 只接受公开的 X/Twitter、YouTube 和普通网页 URL。每次请求都使用独立的临时 HOME / inbox，不继承浏览器登录态、Telegram 凭证、Groq key、Obsidian/output 路径，也不会向外部服务转发 X cookie。
+
+网页层**没有再造第二套 reader 或 evidence 状态机**：它仍然调用现有的 `x-reader URL --json`，只是在隔离环境中运行，再把结果投影为 `PASS / PARTIAL / FAIL / UNKNOWN`。
+
+API 示例、隔离边界和 mixed-media receipt 细节见 [Evidence Receipt](./docs/EVIDENCE_RECEIPT.md)。
 
 ## v0.3.1：真实 before / after
 
@@ -89,23 +110,25 @@ npx skills add runesleo/x-reader --skill x-reader
 | 搜索结果 / preview card | 只能用于发现，不能当原文证据 |
 | X 推文正文 | 只能支持正文里的内容 |
 | 推文正文 + 未读取的附件视频 | 正文可通过；视频必须保持 `PARTIAL` |
+| 线程首帖、引用帖或 X Article 没读到 | 在确认该层不存在之前保持 `PARTIAL`（引用帖也可以被读到；X Article 正文不会被读取） |
 | 视频标题 / 简介 | 只是 metadata，不是视频内容 |
-| 字幕 / transcript | 才能支持视频里的口头内容 |
+| 覆盖整段视频的字幕 | 能支持视频里的口头内容；画面没有分析，视频整体保持 `PARTIAL` |
 | 登录墙 / 删除页 / 空响应 | `FAIL` 或 `PARTIAL`，不能脑补 |
+| 付费墙试读、Cookie 同意页、只有菜单的页面 | `PARTIAL`、`FAIL` 或 `UNKNOWN`；普通网页要有足量正文才能 `PASS` |
 
 ## 支持来源
 
 | 来源 | 基础读取链路 | 媒体 / 登录补全 |
 |---|---|---|
 | X / Twitter | oEmbed → FxTwitter → Article/Jina → Playwright | Skill 可继续读取附件媒体 |
-| 普通网页 / 文章 | Jina Reader | 支持时走 browser fallback |
+| 普通网页 / 文章 | 固定 IP 直连读取（核对跳转和嵌入音视频）→ Jina Reader 正文 | 跳到 X、YouTube、播客等平台时交给对应读取器；网页版展示直连读到的正文 |
 | YouTube | yt-dlp metadata / 字幕 | 配置后可 Groq Whisper |
 | Bilibili | Bilibili API | 字幕 / 音频转录流程 |
 | 微信公众号 | Jina → Playwright | 公开文章走无头浏览器兜底；暂不使用保存的登录态 |
 | 小红书 | Jina → Playwright | 部分页面需一次性本地登录 |
 | Telegram | Telethon | 需要 Telegram 凭证 |
 | RSS | feedparser | — |
-| 小宇宙 / Apple Podcasts | 按普通网页读取（页面文字和元数据） | 不下载音频；要声称读过口头内容，需先在本地转录 |
+| 小宇宙 / Apple Podcasts | 节目页和节目简介 | 只有显式开启下面的本地转录参数才读音频；只读简介时保持 `PARTIAL` |
 
 平台规则会变化。x-reader 的承诺不是“永远全覆盖”，而是**覆盖不到时不装作覆盖到了**。
 
@@ -224,6 +247,36 @@ claude mcp add x-reader -- python /absolute/path/to/x-reader/mcp_server.py
 
 需要全局可用时再加 `--scope user`。
 
+## 播客：节目简介不等于音频内容
+
+x-reader 现将播客 URL 作为 `source_type=podcast` 处理。只读到节目简介时明确标记 `PARTIAL`，不能宣称听完了整期音频。
+
+本地可显式开启**前 12 秒音频预览转录**，不使用付费 API；仍然属于 `PARTIAL`，不是完整 transcript：
+
+```bash
+# 仅本地命令行可用（网页版没有），实验功能。
+python -m pip install "x-reader[media] @ git+https://github.com/runesleo/x-reader.git"
+# 还需在 PATH 中安装 ffmpeg 和 yt-dlp
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6abb9b69195d838e2aeb9c2b' --media-preview-seconds 12 --json
+```
+
+对于真实的**公开短播客**，可显式开启整期短音频转录：源文件**≤2 MiB、音频时长≤120 秒**，所有完整性证据成立才给 `PASS`：
+
+```bash
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6a14e9dd3209346094186445' --media-full-short --json
+```
+
+短音频模式要求严格 HTTP 206、完整源文件字节、SHA-256、音频解码与转录处理时长一致。超过短音频限额时，这个模式继续标记 `PARTIAL`。
+
+**实验性长音频断点续传**（本地命令行）：仅对**单条公开小宇宙播客**显式启用，源文件限 **64 MiB**、时长限 **90 分钟**。通过 1 MiB 的 HTTP 206 字节块、强 ETag 来源版本、SHA-256、60 秒 PCM/ASR 时间段和本地私有检查点核验完整来源：
+
+```bash
+# 仅本地命令行；网页版没有这个功能。
+x-reader 'https://www.xiaoyuzhoufm.com/episode/6aab4896051af796b9e966c5' --media-full-long --json
+```
+
+一条真实 **277.9 秒**节目已通过完整收据，再次运行时复用 **5/5 音频块和 5/5 转录段**。无法完整读取、超过限制或证据缺失时保持 `PARTIAL`。本地缓存会保留音频分块及机器转录，请为需要隔离的数据使用单独的 `X_READER_LONG_CACHE_DIR`。**音频处理覆盖率不等于逐字转录准确率。** 详见 [播客契约](./docs/PODCAST_MEDIA_PREVIEW.md)、[短音频证明](./docs/FULL_SHORT_AUDIO_PROOF.md) 和 [2026-10-10 长音频续传验收](./docs/LONG_AUDIO_RESUME_2026-10-10.md)。
+
 ## 视频 / 音频依赖
 
 ```bash
@@ -241,7 +294,7 @@ Whisper 转录需要：
 export GROQ_API_KEY=your_key_here
 ```
 
-转录模型：`whisper-large-v3`。
+当前 YouTube Groq 转录代码使用 `whisper-large-v3`。
 
 ## Python 库
 
