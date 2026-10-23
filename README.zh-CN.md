@@ -164,9 +164,10 @@ x-reader login xhs
 
 ```text
 skills/
-├── x-reader/    # canonical source-first URL reader
-├── video/       # 视频 / 播客转录
-└── analyzer/    # 基于证据的内容分析
+├── x-reader/      # 拉原文 + CLI bootstrap + PASS/PARTIAL/FAIL 证据契约
+├── link-reader/   # 丢链接就读：先原文、再解读、再判断（与 x-reader 配套）
+├── video/         # 视频 / 播客转录
+└── analyzer/      # 基于证据的内容分析
 ```
 
 查看全部 Skill：
@@ -175,7 +176,21 @@ skills/
 npx skills add runesleo/x-reader --list
 ```
 
-大多数用户只需要安装 `x-reader`。
+**推荐组合**
+
+| 场景 | 安装 |
+|------|------|
+| 只要可靠抓取 URL 与证据状态 | 仅 `x-reader` |
+| 用户只丢链接、要问「这条说了什么」 | `x-reader` + `link-reader` |
+
+```bash
+# 读取 + 解读工作流（Claude Code / Cursor / Codex 等）
+npx skills add runesleo/x-reader --skill x-reader --skill link-reader -g -y
+```
+
+`link-reader` 不替代 `x-reader`：所有正文仍走 x-reader CLI 或 MCP；本 skill 规定默认阅读范围、证据等级、线程/媒体收口，并提供离线校验脚本 `skills/link-reader/scripts/check_reading_coverage.py`。首次使用请按 [install.md](./install.md) 跑通 `x-reader doctor`。
+
+任何支持 [Agent Skills](https://agentskills.io) 的宿主（Claude Code、Cursor、Codex 等）均可安装到全局或项目 skills 目录，然后直接贴链接要求读原文。
 
 ## MCP Server
 

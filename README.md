@@ -162,9 +162,10 @@ By default, local cookies stay local. External cookie forwarding is opt-in only.
 
 ```text
 skills/
-├── x-reader/    # canonical source-first URL reader
-├── video/       # video/podcast transcription workflow
-└── analyzer/    # evidence-grounded content analysis
+├── x-reader/      # canonical source-first URL reader (CLI bootstrap + evidence contract)
+├── link-reader/   # drop-a-link workflow: read original → explain → judge (pairs with x-reader)
+├── video/         # video/podcast transcription workflow
+└── analyzer/      # evidence-grounded content analysis
 ```
 
 List them without installing:
@@ -173,7 +174,21 @@ List them without installing:
 npx skills add runesleo/x-reader --list
 ```
 
-For most users, install only the canonical `x-reader` skill.
+**Recommended install**
+
+| Use case | Skills |
+|----------|--------|
+| Fetch URLs with PASS/PARTIAL/FAIL receipts | `x-reader` only |
+| “Here’s a link — what does it say?” (default bare-link behavior) | `x-reader` + `link-reader` |
+
+```bash
+# Reader + interpretation workflow (Claude Code / Cursor / Codex)
+npx skills add runesleo/x-reader --skill x-reader --skill link-reader -g -y
+```
+
+`link-reader` does not replace `x-reader`: it routes all fetches through the x-reader CLI or MCP tools, adds evidence-level language, thread/media coverage discipline, and an optional offline `check_reading_coverage.py` validator under `skills/link-reader/scripts/`. Follow [install.md](./install.md) once so `x-reader doctor` is green before relying on media or logged-in sources.
+
+Works with any host that supports [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Codex, and compatible agents): install into the agent’s global or project skills directory, then paste a URL and ask for the original source.
 
 ## MCP Server
 

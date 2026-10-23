@@ -10,6 +10,7 @@ class AgentSkillContractTest(unittest.TestCase):
     def test_discoverable_skills_have_uppercase_skill_md_and_frontmatter(self):
         expected = {
             "skills/x-reader/SKILL.md": "x-reader",
+            "skills/link-reader/SKILL.md": "link-reader",
             "skills/video/SKILL.md": "video",
             "skills/analyzer/SKILL.md": "analyzer",
         }
@@ -60,6 +61,18 @@ class AgentSkillContractTest(unittest.TestCase):
         self.assertRegex(text, r'XR_CLI_COMMIT="[0-9a-f]{40}"')
         self.assertIn("git+https://github.com/runesleo/x-reader.git@$XR_CLI_COMMIT", text)
         self.assertNotIn("pip install -U pip", text)
+
+    def test_link_reader_skill_references_x_reader_and_evidence(self):
+        text = (ROOT / "skills/link-reader/SKILL.md").read_text(encoding="utf-8")
+        for required in [
+            "x-reader",
+            "Read the source first",
+            "PASS",
+            "PARTIAL",
+            "check_reading_coverage.py",
+            "untrusted",
+        ]:
+            self.assertIn(required, text, msg=f"missing {required}")
 
 
 if __name__ == "__main__":
