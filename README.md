@@ -213,6 +213,24 @@ npx skills add runesleo/x-reader --skill x-reader --skill link-reader -g -y
 
 Works with any host that supports [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Codex, and compatible agents): install into the agent’s global or project skills directory, then paste a URL and ask for the original source.
 
+### Demo: drop a link → original → explain → judge
+
+```bash
+npx skills add runesleo/x-reader --skill x-reader --skill link-reader -g -y
+```
+
+Then paste any URL with no other instructions. Expected behavior:
+
+1. Fetch the original through `x-reader`, not search snippets.
+2. State the evidence level: `PASS` / `PARTIAL` / `FAIL` / `UNKNOWN`. For example, post text read but the attached video not → `PARTIAL`.
+3. Explain what the source actually says, keep the author's claims apart from checked facts, and add a judgment only when it helps.
+
+Optional offline check on a structured thread receipt:
+
+```bash
+python3 skills/link-reader/scripts/check_reading_coverage.py --target-id "POST_ID" < receipt.json
+```
+
 ## MCP Server
 
 Clone and install the MCP extra:

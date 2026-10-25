@@ -215,6 +215,24 @@ npx skills add runesleo/x-reader --skill x-reader --skill link-reader -g -y
 
 任何支持 [Agent Skills](https://agentskills.io) 的宿主（Claude Code、Cursor、Codex 等）均可安装到全局或项目 skills 目录，然后直接贴链接要求读原文。
 
+### 演示：丢链接 → 读原文 → 解读 → 判断
+
+```bash
+npx skills add runesleo/x-reader --skill x-reader --skill link-reader -g -y
+```
+
+之后直接贴一个链接，不用加别的说明。预期行为：
+
+1. 用 `x-reader` 拉原文，不拿搜索摘要充数。
+2. 标明证据等级：`PASS` / `PARTIAL` / `FAIL` / `UNKNOWN`。例如帖子正文读到了、附带视频没读 → `PARTIAL`。
+3. 讲清原文到底说了什么，把作者观点和可核对的事实分开，有必要时再给判断。
+
+可选：对结构化的线程回执做离线校验：
+
+```bash
+python3 skills/link-reader/scripts/check_reading_coverage.py --target-id "POST_ID" < receipt.json
+```
+
 ## MCP Server
 
 ```bash
