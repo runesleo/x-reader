@@ -64,5 +64,40 @@ class McpDependencyContractTest(unittest.TestCase):
         run.assert_called_once_with("sse", "127.0.0.1", 8123)
 
 
+# What agents see when they call tools/list. Changing a name, adding a required
+# argument or changing an argument type breaks every client that already
+# calls these tools, so it must be a deliberate edit here, not a side effect.
+PUBLISHED_TOOL_ARGUMENTS = {
+    "read_url": {"url": {"type": "string"}},
+    "read_batch": {"urls": {"type": "array", "items": {"type": "string"}}},
+    "list_inbox": {},
+    "detect_platform": {"url": {"type": "string"}},
+}
+
+
+@unittest.skipIf(importlib.util.find_spec("mcp") is None, "MCP extra not installed")
+class McpToolSchemaContractTest(unittest.TestCase):
+    def _published_tools(self):
+        import asyncio
+
+        import x_reader.mcp_server as mcp_server
+
+        return {tool.name: tool.inputSchema for tool in asyncio.run(mcp_server.mcp.list_tools())}
+
+    def test_published_tool_names_stay_stable(self):
+        self.assertEqual(set(self._published_tools()), set(PUBLISHED_TOOL_ARGUMENTS))
+
+    def test_published_tool_arguments_stay_stable(self):
+        for name, schema in self._published_tools().items():
+            with self.subTest(tool=name):
+                expected = PUBLISHED_TOOL_ARGUMENTS[name]
+                properties = {
+                    arg: {key: value for key, value in spec.items() if key != "title"}
+                    for arg, spec in schema.get("properties", {}).items()
+                }
+                self.assertEqual(properties, expected)
+                self.assertEqual(sorted(schema.get("required", [])), sorted(expected))
+
+
 if __name__ == "__main__":
     unittest.main()
