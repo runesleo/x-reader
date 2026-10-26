@@ -54,6 +54,32 @@
         "authentication": "ON_INSTALL"
       },
       "category": "Productivity"
+    },
+    {
+      "name": "talk-human",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/runesleo/talk-human.git",
+        "sha": "1429780d0a770117eb12c5d0af0d654be6e37cb8"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Writing"
+    },
+    {
+      "name": "multi-ai-sync",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/runesleo/multi-ai-sync.git",
+        "sha": "daacd77b85fd2d37312a612b92dfd6da273cd852"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
     }
   ]
 }

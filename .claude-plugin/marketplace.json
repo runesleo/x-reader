@@ -47,7 +47,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/runesleo/talk-human.git",
-        "sha": "6dd02411aaceee2e906e19437da64a65930cbee4"
+        "sha": "1429780d0a770117eb12c5d0af0d654be6e37cb8"
       },
       "description": "Make AI-assisted writing sound like you: build a voice layer from your own speech samples, then run a three-pass de-slop edit.",
       "version": "0.1.0"
@@ -57,7 +57,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/runesleo/multi-ai-sync.git",
-        "sha": "3c2f2038647b2656b0b6295bb6a8d3c7d38cc7de"
+        "sha": "daacd77b85fd2d37312a612b92dfd6da273cd852"
       },
       "description": "For people running several AI agents: check which agents' results and memory never reached your machine, and fix it.",
       "version": "0.1.0"

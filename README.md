@@ -36,8 +36,8 @@ The same `runesleo` marketplace lists Leo's other tools. After adding it, instal
 | [polymarket-toolkit](https://github.com/runesleo/polymarket-toolkit) | Read-only Polymarket wallet profiles, PnL, Brier scores | ✓ | ✓ |
 | [x-signal-digest](https://github.com/runesleo/x-signal-digest) | Turn an X feed into 0–3 useful signals | ✓ | ✓ |
 | [video-explainer-kit](https://github.com/runesleo/claude-video-kit) | Brief → reviewed vertical explainer video | ✓ | ✓ |
-| [talk-human](https://github.com/runesleo/talk-human) | Make drafts sound like you | ✓ | — |
-| [multi-ai-sync](https://github.com/runesleo/multi-ai-sync) | Check every agent's results reach your machine | ✓ | — |
+| [talk-human](https://github.com/runesleo/talk-human) | Make drafts sound like you | ✓ | ✓ |
+| [multi-ai-sync](https://github.com/runesleo/multi-ai-sync) | Check every agent's results reach your machine | ✓ | ✓ |
 
 ## Evidence Receipt web utility
 

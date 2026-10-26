@@ -46,8 +46,8 @@ x-reader 是给 AI Agent 用的通用内容读取层（Universal Content Reader�
 | [polymarket-toolkit](https://github.com/runesleo/polymarket-toolkit) | 只读的 Polymarket 钱包画像、盈亏、Brier 分 | ✓ | ✓ |
 | [x-signal-digest](https://github.com/runesleo/x-signal-digest) | 把 X 信息流压成 0–3 条有用信号 | ✓ | ✓ |
 | [video-explainer-kit](https://github.com/runesleo/claude-video-kit) | 选题 → 审过的竖屏讲解视频 | ✓ | ✓ |
-| [talk-human](https://github.com/runesleo/talk-human) | 让稿子读起来像你自己说话 | ✓ | — |
-| [multi-ai-sync](https://github.com/runesleo/multi-ai-sync) | 查各个 AI 的结果有没有回到你电脑 | ✓ | — |
+| [talk-human](https://github.com/runesleo/talk-human) | 让稿子读起来像你自己说话 | ✓ | ✓ |
+| [multi-ai-sync](https://github.com/runesleo/multi-ai-sync) | 查各个 AI 的结果有没有回到你电脑 | ✓ | ✓ |
 
 ## 一行安装
 
