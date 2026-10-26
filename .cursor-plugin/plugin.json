@@ -1,0 +1,22 @@
+{
+  "name": "x-reader",
+  "displayName": "x-reader",
+  "version": "0.5.0",
+  "description": "Read the original source behind a URL (X/Twitter, articles, YouTube, Bilibili, podcasts, WeChat, Xiaohongshu, Telegram, RSS) and report what was actually read versus missing.",
+  "author": {
+    "name": "Leo"
+  },
+  "homepage": "https://github.com/runesleo/x-reader",
+  "repository": "https://github.com/runesleo/x-reader",
+  "license": "MIT",
+  "keywords": [
+    "reader",
+    "source",
+    "twitter",
+    "youtube",
+    "transcript",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json"
+}

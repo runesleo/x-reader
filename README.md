@@ -19,6 +19,16 @@ Paste this into your AI agent (Claude Code, Codex, Cursor, …):
 
 Your agent installs the skill and the CLI, runs the read-only `x-reader doctor` self-check, and reads a first link with you. The steps it follows are in [install.md](./install.md); to do it by hand, see below.
 
+## Install as a plugin
+
+The plugin bundles the skills in [`skills/`](./skills) and the x-reader MCP server (started with `uvx`, so [uv](https://docs.astral.sh/uv/) must be installed).
+
+- **Claude Code** (2.1.275 or later): `/plugin install x-reader --marketplace runesleo/x-reader`
+- **Codex**: `codex plugin marketplace add runesleo/x-reader`, then `codex plugin add x-reader@runesleo`
+- **Cursor**: the repository root carries a `.cursor-plugin/plugin.json`; Cursor Marketplace listing is not live yet.
+
+Optional sources (logged-in pages, Telegram, transcription) still need the setup in [install.md](./install.md).
+
 ## Evidence Receipt web utility
 
 The public beta is live for public X, YouTube, and generic web URLs: **[Product](https://xreader.leolabs.me/en) · [中文](https://xreader.leolabs.me/zh) · [Open app](https://xreader.leolabs.me/app)**. Paste a URL and it returns the same canonical evidence states used by x-reader: `PASS`, `PARTIAL`, `FAIL`, or `UNKNOWN`. Results can be copied as a human-readable receipt or JSON, and shared without upgrading missing evidence into success.

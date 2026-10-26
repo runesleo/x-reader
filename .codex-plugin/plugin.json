@@ -1,0 +1,37 @@
+{
+  "name": "x-reader",
+  "version": "0.5.0",
+  "description": "Read the original source behind a URL (X/Twitter, articles, YouTube, Bilibili, podcasts, WeChat, Xiaohongshu, Telegram, RSS) and report what was actually read versus missing.",
+  "author": {
+    "name": "Leo",
+    "url": "https://github.com/runesleo"
+  },
+  "homepage": "https://github.com/runesleo/x-reader",
+  "repository": "https://github.com/runesleo/x-reader",
+  "license": "MIT",
+  "keywords": [
+    "reader",
+    "source",
+    "twitter",
+    "youtube",
+    "transcript",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json",
+  "interface": {
+    "displayName": "x-reader",
+    "shortDescription": "Read the original source behind a link, with evidence coverage",
+    "longDescription": "x-reader reads X/Twitter posts, articles, videos, podcasts, WeChat, Xiaohongshu, Telegram and RSS from the original URL, and says which layers (text, attached media, transcript) were actually read and which are missing.",
+    "developerName": "Leo",
+    "category": "Productivity",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": [
+      "Read this link and tell me what it actually says.",
+      "Transcribe and summarize this video."
+    ],
+    "websiteURL": "https://github.com/runesleo/x-reader"
+  }
+}

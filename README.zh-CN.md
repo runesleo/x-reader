@@ -29,6 +29,16 @@ x-reader 是给 AI Agent 用的通用内容读取层（Universal Content Reader�
 
 它会自己装好 skill 和命令行工具，跑一遍只读的 `x-reader doctor` 自检，再陪你读第一个链接。它照着做的步骤写在 [install.md](./install.md)；想手动装，看下面。产品页：[xreader.leolabs.me](https://xreader.leolabs.me/zh) · [网页版试用](https://xreader.leolabs.me/app)
 
+## 作为插件安装
+
+插件里打包了 [`skills/`](./skills) 下的 skill 和 x-reader 的 MCP 服务（用 `uvx` 启动，需要先装 [uv](https://docs.astral.sh/uv/)）。
+
+- **Claude Code**（2.1.275 及以上）：`/plugin install x-reader --marketplace runesleo/x-reader`
+- **Codex**：先 `codex plugin marketplace add runesleo/x-reader`，再 `codex plugin add x-reader@runesleo`
+- **Cursor**：仓库根目录带 `.cursor-plugin/plugin.json`；Cursor Marketplace 还没上架。
+
+登录态网页、Telegram、转写等可选来源，仍按 [install.md](./install.md) 配置。
+
 ## 一行安装
 
 ```bash

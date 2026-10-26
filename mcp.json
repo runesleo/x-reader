@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "x-reader": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "x-reader[mcp] @ git+https://github.com/runesleo/x-reader@v0.5.0",
+        "x-reader-mcp"
+      ]
+    }
+  }
+}
