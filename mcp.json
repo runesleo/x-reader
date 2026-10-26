@@ -5,7 +5,7 @@
       "command": "uvx",
       "args": [
         "--from",
-        "x-reader[mcp] @ git+https://github.com/runesleo/x-reader@v0.5.0",
+        "x-reader[mcp] @ git+https://github.com/runesleo/x-reader@0b6e5f280f8e7527f5b58c76f4c771d356474e51",
         "x-reader-mcp"
       ]
     }
