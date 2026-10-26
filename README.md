@@ -29,6 +29,16 @@ The plugin bundles the skills in [`skills/`](./skills) and the x-reader MCP serv
 
 Optional sources (logged-in pages, Telegram, transcription) still need the setup in [install.md](./install.md).
 
+The same `runesleo` marketplace lists Leo's other tools. After adding it, install any of them by name:
+
+| Plugin | What it does | Claude Code | Codex |
+|---|---|---|---|
+| [polymarket-toolkit](https://github.com/runesleo/polymarket-toolkit) | Read-only Polymarket wallet profiles, PnL, Brier scores | ✓ | ✓ |
+| [x-signal-digest](https://github.com/runesleo/x-signal-digest) | Turn an X feed into 0–3 useful signals | ✓ | ✓ |
+| [video-explainer-kit](https://github.com/runesleo/claude-video-kit) | Brief → reviewed vertical explainer video | ✓ | ✓ |
+| [talk-human](https://github.com/runesleo/talk-human) | Make drafts sound like you | ✓ | — |
+| [multi-ai-sync](https://github.com/runesleo/multi-ai-sync) | Check every agent's results reach your machine | ✓ | — |
+
 ## Evidence Receipt web utility
 
 The public beta is live for public X, YouTube, and generic web URLs: **[Product](https://xreader.leolabs.me/en) · [中文](https://xreader.leolabs.me/zh) · [Open app](https://xreader.leolabs.me/app)**. Paste a URL and it returns the same canonical evidence states used by x-reader: `PASS`, `PARTIAL`, `FAIL`, or `UNKNOWN`. Results can be copied as a human-readable receipt or JSON, and shared without upgrading missing evidence into success.

@@ -1,11 +1,58 @@
 {
   "name": "runesleo",
-  "interface": { "displayName": "runesleo" },
+  "interface": {
+    "displayName": "runesleo"
+  },
   "plugins": [
     {
       "name": "x-reader",
-      "source": { "source": "url", "url": "./" },
-      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "source": {
+        "source": "url",
+        "url": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "polymarket-toolkit",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/runesleo/polymarket-toolkit.git",
+        "sha": "bc7feb32429bed3174c2d10fdc17c5d6fddac316"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "x-signal-digest",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/runesleo/x-signal-digest.git",
+        "sha": "1ec53641abfda29657ac845f47a3fa8856962c8d"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "video-explainer-kit",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/runesleo/claude-video-kit.git",
+        "sha": "401e56184384d3098ab51bcbd67e77daec669178"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
       "category": "Productivity"
     }
   ]
