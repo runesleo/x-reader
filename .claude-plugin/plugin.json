@@ -9,6 +9,7 @@
   "homepage": "https://github.com/runesleo/x-reader",
   "repository": "https://github.com/runesleo/x-reader",
   "license": "MIT",
+  "privacyPolicyUrl": "https://github.com/runesleo/x-reader#data-and-network-access",
   "keywords": [
     "reader",
     "source",
