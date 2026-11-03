@@ -17,5 +17,5 @@
     "transcript",
     "mcp"
   ],
-  "mcpServers": "./mcp.json"
+  "mcpServers": "./.mcp.json"
 }

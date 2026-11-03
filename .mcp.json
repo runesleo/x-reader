@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "x-reader": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--locked",
+        "--directory",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "--extra",
+        "mcp",
+        "x-reader-mcp"
+      ]
+    }
+  }
+}
