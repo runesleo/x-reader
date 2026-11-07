@@ -28,7 +28,11 @@ XR_CLI_COMMIT="0b6e5f280f8e7527f5b58c76f4c771d356474e51"
 XR_VENV="${XDG_CACHE_HOME:-$HOME/.cache}/x-reader/venv-${XR_CLI_COMMIT:0:12}"
 if [ ! -x "$XR_VENV/bin/x-reader" ] || ! "$XR_VENV/bin/x-reader" doctor --json >/dev/null 2>&1; then
   if [ ! -x "$XR_VENV/bin/python" ] || ! "$XR_VENV/bin/python" -m pip --version >/dev/null 2>&1; then
-    python3 -m venv --clear "$XR_VENV"
+    if [ -L "$XR_VENV" ]; then
+      echo "x-reader: $XR_VENV is a symlink; refusing to clear it" >&2
+    else
+      python3 -m venv --clear "$XR_VENV"
+    fi
   fi
   "$XR_VENV/bin/python" -m pip install --disable-pip-version-check --force-reinstall \
     "x-reader @ git+https://github.com/runesleo/x-reader.git@$XR_CLI_COMMIT"
@@ -36,7 +40,7 @@ fi
 XR_BIN="${XR_BIN:-$XR_VENV/bin/x-reader}"
 ```
 
-The cache venv is named after the pinned commit. Recovery reuses the cached Python interpreter when its pip module actually works. If Python or pip cannot run, only this pinned x-reader cache venv is cleared and rebuilt; user projects and system Python are not changed. Rerunning this block after an interrupted install first checks whether the cached CLI can complete its read-only core self-check; a failed core self-check triggers force-reinstallation of the same pinned x-reader revision and its dependencies, including when a damaged dependency is still marked installed by pip. This check **does not fetch a real URL**. Verify a first source read below before claiming first-use success.
+The cache venv is named after the pinned commit. Recovery reuses the cached Python interpreter when its pip module actually works. If Python or pip cannot run, only this pinned x-reader cache venv is cleared and rebuilt (never when that path is a symlink, so a redirected cache cannot wipe its target); user projects and system Python are not changed. Rerunning this block after an interrupted install first checks whether the cached CLI can complete its read-only core self-check; a failed core self-check triggers force-reinstallation of the same pinned x-reader revision and its dependencies, including when a damaged dependency is still marked installed by pip. This check **does not fetch a real URL**. Verify a first source read below before claiming first-use success.
 
 If `x-reader` is already on PATH, use `XR_BIN=x-reader`. Each shell command may start a fresh shell: keep the full path from `echo "$XR_BIN"` and reuse it.
 

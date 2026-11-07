@@ -53,6 +53,10 @@ class MediaPreviewSecurityTests(unittest.TestCase):
         self.assertNotIn("HF_TOKEN", env)
         self.assertNotIn("TG_API_HASH", env)
 
+    def test_preview_mode_rejects_multi_url_batch(self):
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            asyncio.run(UniversalReader(media_preview_seconds=10).read_batch([EPISODE, EPISODE]))
+
     def test_preview_rejects_zero_or_long_duration_before_network(self):
         for seconds in (0, 31, -1, True, 2.5):
             with self.subTest(seconds=seconds):
