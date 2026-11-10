@@ -1,0 +1,51 @@
+{
+  "$schema": "https://fundingjson.org/schema/v1.1.0.json",
+  "version": "v1.1.0",
+  "entity": {
+    "type": "individual",
+    "role": "owner",
+    "name": "Leo (@runes_leo)",
+    "email": "runes.leo@gmail.com",
+    "description": "Independent developer building open-source tools that make AI agents work from original sources instead of summaries. I write, test and release x-reader myself, and use it in my own daily research workflow.",
+    "webpageUrl": {
+      "url": "https://github.com/runesleo"
+    }
+  },
+  "projects": [
+    {
+      "guid": "x-reader",
+      "name": "x-reader",
+      "description": "x-reader is a source-first Agent Skill, CLI and MCP server for reading URLs from X/Twitter, articles, video, podcasts, WeChat, Xiaohongshu, Telegram, RSS and the open web. It reports which source layers were actually retrieved (PASS / PARTIAL / FAIL / UNKNOWN), so an agent does not mistake a search snippet, a caption or a video description for the source itself.\n\nMIT-licensed since its first release in February 2026; 988 GitHub stars and 97 forks as of November 2026. Works with Claude Code, Codex, Cursor and other MCP clients.",
+      "webpageUrl": {
+        "url": "https://github.com/runesleo/x-reader"
+      },
+      "repositoryUrl": {
+        "url": "https://github.com/runesleo/x-reader"
+      },
+      "licenses": ["spdx:MIT"],
+      "tags": ["developer-tools", "artificial-intelligence", "mcp", "ai-agents", "content-extraction", "web-scraping", "cli", "python"]
+    }
+  ],
+  "funding": {
+    "channels": [
+      {
+        "guid": "bank-wire",
+        "type": "bank",
+        "address": "",
+        "description": "International bank wire (SWIFT) to the maintainer's personal account. Account details are shared privately by e-mail on request."
+      }
+    ],
+    "plans": [
+      {
+        "guid": "maintenance-yearly",
+        "status": "active",
+        "name": "x-reader maintenance",
+        "description": "One year of part-time maintenance: keeping platform adapters working as sites change, security fixes, regression tests against live sources, MCP and agent-client compatibility, and documentation.",
+        "amount": 10000,
+        "currency": "USD",
+        "frequency": "yearly",
+        "channels": ["bank-wire"]
+      }
+    ]
+  }
+}
