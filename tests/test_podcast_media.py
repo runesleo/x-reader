@@ -53,6 +53,26 @@ class MediaPreviewSecurityTests(unittest.TestCase):
         self.assertNotIn("HF_TOKEN", env)
         self.assertNotIn("TG_API_HASH", env)
 
+    def test_preview_mode_rejects_multi_url_batch(self):
+        with patch.object(UniversalReader, "read", new_callable=AsyncMock) as read:
+            with self.assertRaisesRegex(ValueError, "exactly one"):
+                asyncio.run(UniversalReader(media_preview_seconds=10).read_batch([EPISODE, EPISODE]))
+            read.assert_not_awaited()
+
+    def test_preview_single_url_and_plain_multi_url_still_work(self):
+        urls = ["https://example.invalid/one", "https://example.invalid/two"]
+        with patch.object(UniversalReader, "read", new_callable=AsyncMock) as read:
+            read.side_effect = lambda url: "fetched:" + url
+            items = asyncio.run(UniversalReader(media_preview_seconds=10).read_batch(urls[:1]))
+            self.assertEqual(items, ["fetched:" + urls[0]])
+            read.assert_awaited_once_with(urls[0])
+
+        with patch.object(UniversalReader, "read", new_callable=AsyncMock) as read:
+            read.side_effect = lambda url: "fetched:" + url
+            items = asyncio.run(UniversalReader().read_batch(urls))
+            self.assertEqual(items, ["fetched:" + url for url in urls])
+            self.assertEqual(read.await_count, 2)
+
     def test_preview_rejects_zero_or_long_duration_before_network(self):
         for seconds in (0, 31, -1, True, 2.5):
             with self.subTest(seconds=seconds):

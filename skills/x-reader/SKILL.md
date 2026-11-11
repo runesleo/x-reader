@@ -25,18 +25,50 @@ The default bootstrap is pinned to the immutable, verified v0.5.0 release commit
 
 ```bash
 XR_CLI_COMMIT="0b6e5f280f8e7527f5b58c76f4c771d356474e51"
-XR_VENV="${XDG_CACHE_HOME:-$HOME/.cache}/x-reader/venv-${XR_CLI_COMMIT:0:12}"
+XR_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+while [ "${XR_CACHE_HOME%/}" != "$XR_CACHE_HOME" ]; do XR_CACHE_HOME="${XR_CACHE_HOME%/}"; done
+case "$XR_CACHE_HOME" in
+  /*) ;;
+  *) echo "x-reader: cache home must be an absolute path" >&2; exit 1 ;;
+esac
+XR_VENV="$XR_CACHE_HOME/x-reader/venv-${XR_CLI_COMMIT:0:12}"
+for XR_CHECK_PATH in "$XR_CACHE_HOME" "$XR_CACHE_HOME/x-reader" "$XR_VENV" "$XR_VENV/bin"; do
+  if [ -L "$XR_CHECK_PATH" ]; then
+    echo "x-reader: $XR_CHECK_PATH is a symlink; refusing bootstrap" >&2
+    exit 1
+  fi
+done
+python3 -c '
+import os, pathlib, stat, sys
+path = pathlib.Path(sys.argv[1])
+for component in (path, *path.parents):
+    try:
+        info = component.lstat()
+    except FileNotFoundError:
+        continue
+    if stat.S_ISLNK(info.st_mode) and (info.st_uid != 0 or os.geteuid() == 0):
+        sys.exit(1)
+' "$XR_VENV" || { echo "x-reader: cache ancestry contains a redirected symlink" >&2; exit 1; }
 if [ ! -x "$XR_VENV/bin/x-reader" ] || ! "$XR_VENV/bin/x-reader" doctor --json >/dev/null 2>&1; then
   if [ ! -x "$XR_VENV/bin/python" ] || ! "$XR_VENV/bin/python" -m pip --version >/dev/null 2>&1; then
-    python3 -m venv --clear "$XR_VENV"
+    python3 -m venv --clear "$XR_VENV" || exit 1
   fi
-  "$XR_VENV/bin/python" -m pip install --disable-pip-version-check --force-reinstall \
-    "x-reader @ git+https://github.com/runesleo/x-reader.git@$XR_CLI_COMMIT"
+  "$XR_VENV/bin/python" -c '
+import os, sys, sysconfig
+root = os.path.realpath(sys.argv[1])
+paths = [sys.prefix] + [sysconfig.get_path(key) for key in ("purelib", "platlib", "scripts", "data")]
+safe = sys.prefix != sys.base_prefix and os.path.realpath(sys.prefix) == root
+safe = safe and all(os.path.commonpath((root, os.path.realpath(path))) == root for path in paths)
+sys.exit(0 if safe else 1)
+' "$XR_VENV" || { echo "x-reader: cached Python is not isolated to $XR_VENV" >&2; exit 1; }
+  PIP_CONFIG_FILE=/dev/null "$XR_VENV/bin/python" -m pip --isolated --require-virtualenv install \
+    --disable-pip-version-check --force-reinstall \
+    "x-reader @ git+https://github.com/runesleo/x-reader.git@$XR_CLI_COMMIT" || exit 1
 fi
 XR_BIN="${XR_BIN:-$XR_VENV/bin/x-reader}"
 ```
 
-The cache venv is named after the pinned commit. Recovery reuses the cached Python interpreter when its pip module actually works. If Python or pip cannot run, only this pinned x-reader cache venv is cleared and rebuilt; user projects and system Python are not changed. Rerunning this block after an interrupted install first checks whether the cached CLI can complete its read-only core self-check; a failed core self-check triggers force-reinstallation of the same pinned x-reader revision and its dependencies, including when a damaged dependency is still marked installed by pip. This check **does not fetch a real URL**. Verify a first source read below before claiming first-use success.
+The cache venv is named after the pinned commit. Recovery reuses the cached Python interpreter when its pip module actually works. If Python or pip cannot run, only this pinned x-reader cache venv is cleared and rebuilt. Bootstrap refuses redirected cache symlinks (while allowing root-owned OS path aliases above the cache home for non-root users) and refuses pip installs unless the interpreter and its package destinations stay in the expected venv. Pip runs without project/user/global configuration overrides. Failed rebuilds or installs stop immediately; user projects and system Python are not installation targets. Rerunning this block after an interrupted install first checks whether the cached CLI can complete its read-only core self-check; a failed core self-check triggers force-reinstallation of the same pinned x-reader revision and its dependencies, including when a damaged dependency is still marked installed by pip. This check **does not fetch a real URL**. Verify a first source read below before claiming first-use success.
 
 If `x-reader` is already on PATH, use `XR_BIN=x-reader`. Each shell command may start a fresh shell: keep the full path from `echo "$XR_BIN"` and reuse it.
 

@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -118,6 +119,7 @@ class AgentSkillContractTest(unittest.TestCase):
                 python_template = home / "python-template.sh"
                 python_template.write_text(
                     '#!/bin/sh\n'
+                    'if [ "$1" = "-c" ]; then exit 0; fi\n'
                     'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then\n'
                     ' shift 2\n'
                     ' if [ -f "$XR_TEST_VENV/.broken_pip" ]; then echo pip_missing >&2; exit 43; fi\n'
@@ -135,6 +137,7 @@ class AgentSkillContractTest(unittest.TestCase):
                 python_stub = bindir / "python3"
                 python_stub.write_text(
                     '#!/bin/sh\n'
+                    'if [ "$1" = "-c" ]; then exec "$XR_TEST_REAL_PYTHON" "$@"; fi\n'
                     'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ "$3" = "--clear" ]; then\n'
                     ' echo venv >> "$XR_TEST_LOG"\n'
                     ' mkdir -p "$XR_TEST_VENV/bin"\n'
@@ -153,6 +156,7 @@ class AgentSkillContractTest(unittest.TestCase):
                     "XR_TEST_HEALTHY": str(good),
                     "XR_TEST_PIP_TEMPLATE": str(pip_template),
                     "XR_TEST_PYTHON_TEMPLATE": str(python_template),
+                    "XR_TEST_REAL_PYTHON": sys.executable,
                 }
                 result = subprocess.run(
                     ["bash", "-c", bootstrap + '\n"$XR_BIN" doctor --json'],
@@ -166,6 +170,297 @@ class AgentSkillContractTest(unittest.TestCase):
                     else ["venv", "pip"]
                 )
                 self.assertEqual(calls, expected_calls)
+
+    def test_bootstrap_refuses_to_clear_symlinked_cache_venv(self):
+        """A symlinked cache venv must never be passed to venv --clear."""
+        text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        fence = re.escape(chr(96) * 3)
+        bootstrap = re.search(fence + r"bash\n(XR_CLI_COMMIT=[\s\S]*?)\n" + fence, text).group(1)
+        pin = re.search(r'XR_CLI_COMMIT="([0-9a-f]{40})"', bootstrap).group(1)
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            bindir = home / "stub-bin"
+            bindir.mkdir()
+            target = home / "precious"
+            target.mkdir()
+            (target / "keep.txt").write_text("user data")
+            venv = home / "cache" / "x-reader" / ("venv-" + pin[:12])
+            venv.parent.mkdir(parents=True)
+            venv.symlink_to(target, target_is_directory=True)
+            log = home / "calls.log"
+            stub = bindir / "python3"
+            stub.write_text('#!/bin/sh\necho "python3 $*" >> "$XR_TEST_LOG"\nexit 0\n')
+            stub.chmod(0o755)
+            env = {
+                "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+                "HOME": temp, "XDG_CACHE_HOME": str(home / "cache"),
+                "XR_TEST_LOG": str(log),
+            }
+            result = subprocess.run(["bash", "-c", bootstrap], cwd=temp, env=env,
+                                    capture_output=True, text=True, timeout=15)
+            calls = log.read_text() if log.exists() else ""
+            self.assertNotIn("venv --clear", calls)
+            self.assertIn("refusing bootstrap", result.stderr)
+            self.assertEqual((target / "keep.txt").read_text(), "user data")
+
+    def test_bootstrap_rejects_symlinked_cache_paths_before_any_write(self):
+        """Refuse redirected cache root, inner paths and a symlinked ancestor."""
+        text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        bootstrap = re.search(r"```bash\n(XR_CLI_COMMIT=[\s\S]*?)\n```", text).group(1)
+        pin = re.search(r'XR_CLI_COMMIT="([0-9a-f]{40})"', bootstrap).group(1)
+        name = "venv-" + pin[:12]
+
+        for link_at in ("cache", "x-reader", "venv", "bin", "ancestor"):
+            for pip_ready in ("yes", "no"):
+                with self.subTest(link_at=link_at, pip_ready=pip_ready), tempfile.TemporaryDirectory() as temp:
+                    home = Path(temp)
+                    cache = home / "cache"
+                    venv = cache / "x-reader" / name
+                    precious = home / "fictional-archive"
+                    precious.mkdir()
+                    if link_at == "ancestor":
+                        alias = home / "alias"
+                        alias.symlink_to(precious, target_is_directory=True)
+                        cache = alias / "cache"
+                        venv = cache / "x-reader" / name
+                        redirected_venv = precious / "cache" / "x-reader" / name
+                    elif link_at == "cache":
+                        cache.symlink_to(precious, target_is_directory=True)
+                        redirected_venv = precious / "x-reader" / name
+                    elif link_at == "x-reader":
+                        cache.mkdir()
+                        (cache / "x-reader").symlink_to(precious, target_is_directory=True)
+                        redirected_venv = precious / name
+                    elif link_at == "venv":
+                        venv.parent.mkdir(parents=True)
+                        venv.symlink_to(precious, target_is_directory=True)
+                        redirected_venv = precious
+                    else:
+                        venv.mkdir(parents=True)
+                        (venv / "bin").symlink_to(precious, target_is_directory=True)
+                        redirected_venv = venv
+                    if link_at != "bin":
+                        (redirected_venv / "bin").mkdir(parents=True)
+                    marker = redirected_venv / "keep.txt"
+                    marker.write_text("fictional data")
+                    fake_python = redirected_venv / "bin/python"
+                    fake_python.write_text(
+                        '#!/bin/sh\n'
+                        'echo "pip $*" >> "$XR_TEST_LOG"\n'
+                        'if [ "$3" = "--version" ]; then\n'
+                        '  [ "$XR_TEST_PIP_READY" = "yes" ]; exit $?\n'
+                        'fi\n'
+                        'touch "$XR_TEST_PROTECTED/pip-wrote"\n'
+                        'exit 0\n'
+                    )
+                    fake_python.chmod(0o755)
+                    bindir = home / "stub-bin"
+                    bindir.mkdir()
+                    fake_python3 = bindir / "python3"
+                    fake_python3.write_text(
+                        '#!/bin/sh\n'
+                        'if [ "$1" = "-c" ]; then exec "$XR_TEST_REAL_PYTHON" "$@"; fi\n'
+                        'echo "venv $*" >> "$XR_TEST_LOG"\nexit 0\n'
+                    )
+                    fake_python3.chmod(0o755)
+                    log = home / "calls.log"
+                    env = {
+                        "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+                        "HOME": temp,
+                        "XDG_CACHE_HOME": str(cache) + ("///" if link_at == "cache" and pip_ready == "no" else ""),
+                        "XR_TEST_LOG": str(log), "XR_TEST_PROTECTED": str(precious),
+                        "XR_TEST_PIP_READY": pip_ready,
+                        "XR_TEST_REAL_PYTHON": sys.executable,
+                    }
+                    result = subprocess.run(["bash", "-c", bootstrap], cwd=temp, env=env,
+                                            capture_output=True, text=True, timeout=15)
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(log.read_text() if log.exists() else "", "")
+                    self.assertFalse((precious / "pip-wrote").exists())
+                    self.assertEqual(marker.read_text(), "fictional data")
+
+    def test_bootstrap_stops_if_venv_recovery_fails(self):
+        """A failed venv --clear must not fall through into pip install."""
+        text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        bootstrap = re.search(r"```bash\n(XR_CLI_COMMIT=[\s\S]*?)\n```", text).group(1)
+        pin = re.search(r'XR_CLI_COMMIT="([0-9a-f]{40})"', bootstrap).group(1)
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            venv = home / "cache/x-reader" / ("venv-" + pin[:12])
+            (venv / "bin").mkdir(parents=True)
+            fake_python = venv / "bin/python"
+            fake_python.write_text(
+                '#!/bin/sh\n'
+                'if [ "$3" = "--version" ]; then exit 42; fi\n'
+                'echo pip-install >> "$XR_TEST_LOG"\n'
+                'exit 0\n'
+            )
+            fake_python.chmod(0o755)
+            bindir = home / "stub-bin"
+            bindir.mkdir()
+            fake_python3 = bindir / "python3"
+            fake_python3.write_text(
+                '#!/bin/sh\n'
+                'if [ "$1" = "-c" ]; then exec "$XR_TEST_REAL_PYTHON" "$@"; fi\n'
+                'echo venv >> "$XR_TEST_LOG"\nexit 43\n'
+            )
+            fake_python3.chmod(0o755)
+            log = home / "calls.log"
+            env = {
+                "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+                "HOME": temp, "XDG_CACHE_HOME": str(home / "cache"),
+                "XR_TEST_LOG": str(log), "XR_TEST_REAL_PYTHON": sys.executable,
+            }
+            result = subprocess.run(["bash", "-c", bootstrap], cwd=temp, env=env,
+                                    capture_output=True, text=True, timeout=15)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(log.read_text().splitlines(), ["venv"])
+
+    def test_bootstrap_reports_pip_install_failure(self):
+        """A failed installation must not be masked by XR_BIN assignment."""
+        text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        bootstrap = re.search(r"```bash\n(XR_CLI_COMMIT=[\s\S]*?)\n```", text).group(1)
+        pin = re.search(r'XR_CLI_COMMIT="([0-9a-f]{40})"', bootstrap).group(1)
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            venv = home / "cache/x-reader" / ("venv-" + pin[:12])
+            (venv / "bin").mkdir(parents=True)
+            fake_python = venv / "bin/python"
+            fake_python.write_text(
+                '#!/bin/sh\n'
+                'if [ "$1" = "-c" ]; then exit 0; fi\n'
+                'if [ "$3" = "--version" ]; then exit 0; fi\n'
+                'echo pip-install >> "$XR_TEST_LOG"\n'
+                'exit 44\n'
+            )
+            fake_python.chmod(0o755)
+            log = home / "calls.log"
+            env = {
+                "PATH": os.environ.get("PATH", ""), "HOME": temp,
+                "XDG_CACHE_HOME": str(home / "cache"), "XR_TEST_LOG": str(log),
+            }
+            result = subprocess.run(["bash", "-c", bootstrap], cwd=temp, env=env,
+                                    capture_output=True, text=True, timeout=15)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(log.read_text().splitlines(), ["pip-install"])
+
+    def test_bootstrap_does_not_install_into_non_venv_python(self):
+        """A valid pip command does not prove the interpreter belongs to XR_VENV."""
+        text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        bootstrap = re.search(r"```bash\n(XR_CLI_COMMIT=[\s\S]*?)\n```", text).group(1)
+        pin = re.search(r'XR_CLI_COMMIT="([0-9a-f]{40})"', bootstrap).group(1)
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            venv = home / "cache/x-reader" / ("venv-" + pin[:12])
+            (venv / "bin").mkdir(parents=True)
+            fake_python = venv / "bin/python"
+            fake_python.write_text(
+                '#!/bin/sh\n'
+                'if [ "$1" = "-c" ]; then exit 45; fi\n'
+                'if [ "$3" = "--version" ]; then exit 0; fi\n'
+                'echo foreign-pip-install >> "$XR_TEST_LOG"\n'
+                'exit 0\n'
+            )
+            fake_python.chmod(0o755)
+            log = home / "calls.log"
+            env = {
+                "PATH": os.environ.get("PATH", ""), "HOME": temp,
+                "XDG_CACHE_HOME": str(home / "cache"), "XR_TEST_LOG": str(log),
+            }
+            result = subprocess.run(["bash", "-c", bootstrap], cwd=temp, env=env,
+                                    capture_output=True, text=True, timeout=15)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(log.read_text() if log.exists() else "", "")
+
+    def test_bootstrap_ignores_pip_target_when_installing(self):
+        """Project pip settings must not select an unrelated install destination."""
+        text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        bootstrap = re.search(r"```bash\n(XR_CLI_COMMIT=[\s\S]*?)\n```", text).group(1)
+        pin = re.search(r'XR_CLI_COMMIT="([0-9a-f]{40})"', bootstrap).group(1)
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            venv = home / "cache/x-reader" / ("venv-" + pin[:12])
+            (venv / "bin").mkdir(parents=True)
+            fake_python = venv / "bin/python"
+            fake_python.write_text(
+                '#!/bin/sh\n'
+                'if [ "$1" = "-c" ]; then exit 0; fi\n'
+                'if [ "$3" = "--version" ]; then exit 0; fi\n'
+                'if [ "$3" = "--isolated" ] && [ "$4" = "--require-virtualenv" ] '
+                '&& [ "$PIP_CONFIG_FILE" = "/dev/null" ]; then\n'
+                '  echo isolated-pip >> "$XR_TEST_LOG"; exit 0\n'
+                'fi\n'
+                'touch "$PIP_TARGET/escaped"; exit 0\n'
+            )
+            fake_python.chmod(0o755)
+            foreign = home / "fictional-foreign-install"
+            foreign.mkdir()
+            log = home / "calls.log"
+            env = {
+                "PATH": os.environ.get("PATH", ""), "HOME": temp,
+                "XDG_CACHE_HOME": str(home / "cache"),
+                "PIP_TARGET": str(foreign), "XR_TEST_LOG": str(log),
+            }
+            result = subprocess.run(["bash", "-c", bootstrap], cwd=temp, env=env,
+                                    capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(log.read_text().splitlines(), ["isolated-pip"])
+            self.assertFalse((foreign / "escaped").exists())
+
+    def test_bootstrap_identity_check_with_real_temporary_venv(self):
+        """Check the embedded Python guard against actual venv and redirected site paths."""
+        text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        bootstrap = re.search(r"```bash\n(XR_CLI_COMMIT=[\s\S]*?)\n```", text).group(1)
+        prefix = '"$XR_VENV/bin/python" -c \'\n'
+        start = bootstrap.index(prefix) + len(prefix)
+        script = bootstrap[start:bootstrap.index("\n' \"$XR_VENV\"", start)]
+
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            venv = home / "legitimate-venv"
+            subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)],
+                           check=True, capture_output=True, text=True, timeout=30)
+            python = venv / "bin/python"
+            def valid_for(path):
+                return subprocess.run([str(python), "-c", script, str(path)],
+                                      cwd=temp, capture_output=True, text=True, timeout=15)
+
+            self.assertEqual(valid_for(venv).returncode, 0)
+            another = home / "fictional-foreign"
+            another.mkdir()
+            self.assertNotEqual(valid_for(another).returncode, 0)
+
+            site_result = subprocess.run(
+                [str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+                capture_output=True, text=True, check=True, timeout=15,
+            )
+            site = Path(site_result.stdout.strip())
+            self.assertTrue(site.is_dir())
+            site.rename(site.with_name("site-packages-original"))
+            site.symlink_to(another, target_is_directory=True)
+            self.assertNotEqual(valid_for(venv).returncode, 0)
+
+    def test_bootstrap_pip_config_file_disables_external_install_target(self):
+        """Exercise real pip config lookup without contacting a package index."""
+        text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        bootstrap = re.search(r"```bash\n(XR_CLI_COMMIT=[\s\S]*?)\n```", text).group(1)
+        self.assertIn('PIP_CONFIG_FILE=/dev/null "$XR_VENV/bin/python" -m pip --isolated', bootstrap)
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            venv = home / "real-venv"
+            subprocess.run([sys.executable, "-m", "venv", str(venv)],
+                           check=True, capture_output=True, text=True, timeout=30)
+            foreign = home / "fictional-foreign"
+            (venv / "pip.conf").write_text(f"[global]\ntarget = {foreign}\n", encoding="utf-8")
+            python = venv / "bin/python"
+            command = [str(python), "-m", "pip", "--isolated", "config", "list"]
+            default = subprocess.run(command, cwd=temp, capture_output=True,
+                                     text=True, check=True, timeout=15)
+            disabled = subprocess.run(command, cwd=temp,
+                                      env=dict(os.environ, PIP_CONFIG_FILE=os.devnull),
+                                      capture_output=True, text=True, check=True, timeout=15)
+            self.assertIn(str(foreign), default.stdout)
+            self.assertNotIn(str(foreign), disabled.stdout)
 
     def test_canonical_skill_treats_source_as_untrusted_and_pins_bootstrap(self):
         text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
