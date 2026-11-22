@@ -37,10 +37,10 @@
       "source": {
         "source": "url",
         "url": "https://github.com/runesleo/claude-video-kit.git",
-        "sha": "38e6c9bb35aa2fbe84fc8df9f246180f92931f11"
+        "sha": "3a908d8ae3a59d9f9aee83604665a4180e347111"
       },
       "description": "Turn a brief, script or MP4 into a reviewed, verified vertical explainer video, with review receipts before publishing.",
-      "version": "0.3.0-rc.2"
+      "version": "0.3.0-rc.3"
     },
     {
       "name": "talk-human",
