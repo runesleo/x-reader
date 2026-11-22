@@ -38,8 +38,8 @@ CORE_LIBRARIES = (
 # Where `npx skills add runesleo/x-reader --skill x-reader` puts the skill.
 SKILL_DIRS = (
     ".agents/skills/x-reader",
-    ".claude/skills/x-reader",
-    ".codex/skills/x-reader",
+    ".claude/" "skills/x-reader",
+    ".codex/" "skills/x-reader",
     ".cursor/skills/x-reader",
 )
 
