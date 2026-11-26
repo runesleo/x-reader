@@ -233,6 +233,8 @@ Examples:
             arg for arg in args
             if arg.startswith(("http", "www.")) or "." in arg
         ]
+        if media_preview_seconds and len(urls) != 1:
+            usage_error("--media-preview-seconds accepts exactly one URL")
         if _os.environ.get("X_READER_HOSTED") == "1":
             from x_reader.utils.proc import apply_hosted_limits
             apply_hosted_limits()

@@ -262,9 +262,10 @@ class UniversalReader:
         return await self._fetch(platform, url, redirected=True)
 
     async def read_batch(self, urls: list[str]) -> list[UnifiedContent]:
-        """Fetch multiple URLs concurrently, except costly full-short audio."""
-        if (self.full_short_audio or self.full_long_audio) and len(urls) != 1:
-            raise ValueError("Full-audio mode supports exactly one URL")
+        """Fetch multiple URLs concurrently, except costly audio preview/transcription."""
+        if (self.media_preview_seconds or self.full_short_audio or self.full_long_audio) \
+                and len(urls) != 1:
+            raise ValueError("Audio preview and full-audio modes support exactly one URL")
         tasks = [self.read(url) for url in urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
