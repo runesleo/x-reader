@@ -171,6 +171,29 @@ class AgentSkillContractTest(unittest.TestCase):
                 )
                 self.assertEqual(calls, expected_calls)
 
+    def test_bootstrap_stat_lookup_supports_nixos_system_directory(self):
+        """Simulate a system where stat exists only in the trusted NixOS directory."""
+        text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        lookups = re.findall(r"PATH=([^ ]+) stat (-[cf])", text)
+        self.assertEqual(len(lookups), 2)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            nix_bin = root / "run/current-system/sw/bin"
+            nix_bin.mkdir(parents=True)
+            stat_tool = nix_bin / "stat"
+            stat_tool.write_text("#!/bin/sh\nprintf '0\\n'\n")
+            stat_tool.chmod(0o755)
+            for lookup, flag in lookups:
+                self.assertIn("/run/current-system/sw/bin", lookup.split(":"))
+                simulated_path = os.pathsep.join(
+                    str(root / entry.lstrip("/")) for entry in lookup.split(":")
+                )
+                result = subprocess.run(
+                    ["stat", flag, "%u", str(root)], env={"PATH": simulated_path},
+                    capture_output=True, text=True, check=True, timeout=10,
+                )
+                self.assertEqual(result.stdout.strip(), "0")
+
     def test_bootstrap_reuses_healthy_cache_without_python_on_path(self):
         """A cached executable can work even if no caller-side python3 is available."""
         text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")

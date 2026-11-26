@@ -43,8 +43,8 @@ XR_CHECK_PATH="$XR_VENV"
 while [ -n "$XR_CHECK_PATH" ] && [ "$XR_CHECK_PATH" != / ]; do
   if [ -L "$XR_CHECK_PATH" ]; then
     # Preserve root-owned OS aliases (for example, macOS /var) for non-root callers.
-    XR_LINK_UID=$(PATH=/usr/bin:/bin stat -c '%u' -- "$XR_CHECK_PATH" 2>/dev/null) ||
-      XR_LINK_UID=$(PATH=/usr/bin:/bin stat -f '%u' "$XR_CHECK_PATH" 2>/dev/null) ||
+    XR_LINK_UID=$(PATH=/usr/bin:/bin:/run/current-system/sw/bin stat -c '%u' -- "$XR_CHECK_PATH" 2>/dev/null) ||
+      XR_LINK_UID=$(PATH=/usr/bin:/bin:/run/current-system/sw/bin stat -f '%u' "$XR_CHECK_PATH" 2>/dev/null) ||
       { echo "x-reader: cannot verify cache ancestry" >&2; exit 1; }
     if [ "$EUID" -eq 0 ] || [ "$XR_LINK_UID" != 0 ]; then
       echo "x-reader: cache ancestry contains a redirected symlink" >&2
