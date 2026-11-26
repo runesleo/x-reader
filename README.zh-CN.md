@@ -160,6 +160,26 @@ npx skills add runesleo/x-reader --skill x-reader
 - URL 校验会在支持的网络抓取前拦截 private / localhost 目标。
 - 本地浏览器 cookie 默认只保留在本机。
 
+## 数据与网络访问
+
+x-reader、它的 MCP server 和 skills 都在你自己的电脑上运行。没有遥测，也不会把任何东西发到作者的服务器：xreader.leolabs.me 上的网页版是独立服务，CLI、MCP server 和插件都不会调用它。
+
+让它读一个链接时，数据只会去这些地方：
+
+| 内容 | 发往哪里 |
+|---|---|
+| 你要读的链接 | 直接从该网站读取 |
+| X / Twitter 帖子链接 | `publish.twitter.com`（oEmbed）、`api.fxtwitter.com`（FxTwitter），再兜底 `r.jina.ai`（Jina Reader） |
+| 文章、微信公众号、小红书链接 | `r.jina.ai`（Jina Reader）兜底读取；最后兜底本机无头浏览器（Playwright） |
+| YouTube、Bilibili | 平台本身，经 `yt-dlp` 和 `api.bilibili.com` |
+| 需要转录的音频 | 只有设置了 `GROQ_API_KEY` 才发往 `api.groq.com`。显式开启的本地转录在本机运行，首次使用时从 Hugging Face 下载 Whisper `tiny` 模型 |
+| Telegram | Telegram 官方 API，用你自己设置的凭证 |
+| 输出里的微信图片 | 图片链接改写为经 `wsrv.nl` 加载，因为微信禁止外链图片 |
+
+安装插件时，MCP server 由 `uvx` 从本 GitHub 仓库的固定 commit 启动，uv 会从 PyPI 下载 Python 依赖。Agent Skill 的 bootstrap 会把同一个固定 commit 装进缓存 venv。
+
+只存在你本机的：阅读收件箱（`unified_inbox.json`，或 `INBOX_FILE` 指定的路径）、可选的 Markdown 输出（`OUTPUT_DIR`、`OBSIDIAN_VAULT`）、用 `x-reader login` 建的登录会话（`~/.x-reader/sessions/`），以及本地转录模型缓存（`~/.cache/x-reader/asr`）。
+
 ## CLI
 
 从 GitHub 安装：

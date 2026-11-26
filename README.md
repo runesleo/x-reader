@@ -158,6 +158,26 @@ Platform behavior changes over time. x-reader's contract is to expose the gap ra
 - URL validation blocks private/local targets before supported network fetches.
 - Local browser cookies stay local unless the user explicitly opts into a supported authenticated path.
 
+## Data and network access
+
+x-reader, its MCP server, and its skills run on your machine. There is no telemetry, and nothing is sent to the author's servers: the hosted web beta at xreader.leolabs.me is a separate service that the CLI, MCP server, and plugin never call.
+
+When you ask it to read a URL, data goes only to these places:
+
+| What | Where it goes |
+|---|---|
+| The URL you asked to read | Fetched directly from that site |
+| X / Twitter post URLs | `publish.twitter.com` (oEmbed), `api.fxtwitter.com` (FxTwitter), then `r.jina.ai` (Jina Reader) as fallbacks |
+| Article, WeChat, and Xiaohongshu URLs | `r.jina.ai` (Jina Reader) as a fallback reader; a local headless browser (Playwright) as the last fallback |
+| YouTube and Bilibili | The platform itself, through `yt-dlp` and `api.bilibili.com` |
+| Audio for transcription | `api.groq.com`, only if you set `GROQ_API_KEY`. The opt-in local transcription runs on your machine and downloads the Whisper `tiny` model from Hugging Face on first use |
+| Telegram | Telegram's API, with the credentials you set |
+| WeChat images in the output | Image links are rewritten to load through `wsrv.nl`, because WeChat blocks hotlinking |
+
+Installing the plugin starts the MCP server with `uvx` from this GitHub repository at a pinned commit, and uv downloads its Python dependencies from PyPI. The Agent Skill bootstrap installs the same pinned commit into a cache venv.
+
+Stored only on your machine: the reading inbox (`unified_inbox.json`, or the path in `INBOX_FILE`), optional Markdown output (`OUTPUT_DIR`, `OBSIDIAN_VAULT`), login sessions you create with `x-reader login` (`~/.x-reader/sessions/`), and the local transcription model cache (`~/.cache/x-reader/asr`).
+
 ## CLI
 
 Install directly from GitHub:
