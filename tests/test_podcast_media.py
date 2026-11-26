@@ -1,6 +1,8 @@
 """No-key media-preview correctness, opt-in boundaries and podcast source contract."""
 import asyncio
+import io
 import json
+from contextlib import redirect_stdout
 from pathlib import Path
 import subprocess
 import sys
@@ -8,7 +10,7 @@ import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from x_reader.cli import parse_media_preview_option
+from x_reader.cli import main, parse_media_preview_option
 from x_reader.evidence import build_receipt, classify_payload
 from x_reader.fetchers.podcast import fetch_podcast
 from x_reader.media_preview import (
@@ -58,6 +60,27 @@ class MediaPreviewSecurityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exactly one"):
                 asyncio.run(UniversalReader(media_preview_seconds=10).read_batch([EPISODE, EPISODE]))
             read.assert_not_awaited()
+
+    def test_cli_preview_batch_is_usage_error_before_fetch(self):
+        with patch("x_reader.cli.cmd_fetch") as fetch, patch.object(
+            sys, "argv", ["x-reader", EPISODE, EPISODE, "--media-preview-seconds", "10", "--json"]
+        ):
+            output = io.StringIO()
+            with self.assertRaises(SystemExit) as raised, redirect_stdout(output):
+                main()
+            self.assertEqual(raised.exception.code, 2)
+            payload = json.loads(output.getvalue())
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["error_type"], "UsageError")
+            self.assertIn("exactly one URL", payload["error"])
+            fetch.assert_not_called()
+
+    def test_cli_single_preview_is_dispatched(self):
+        with patch("x_reader.cli.cmd_fetch") as fetch, patch.object(
+            sys, "argv", ["x-reader", EPISODE, "--media-preview-seconds", "10", "--json"]
+        ):
+            main()
+            fetch.assert_called_once_with([EPISODE], json_output=True, media_preview_seconds=10)
 
     def test_preview_single_url_and_plain_multi_url_still_work(self):
         urls = ["https://example.invalid/one", "https://example.invalid/two"]

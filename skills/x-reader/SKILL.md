@@ -38,17 +38,21 @@ for XR_CHECK_PATH in "$XR_CACHE_HOME" "$XR_CACHE_HOME/x-reader" "$XR_VENV" "$XR_
     exit 1
   fi
 done
-python3 -c '
-import os, pathlib, stat, sys
-path = pathlib.Path(sys.argv[1])
-for component in (path, *path.parents):
-    try:
-        info = component.lstat()
-    except FileNotFoundError:
-        continue
-    if stat.S_ISLNK(info.st_mode) and (info.st_uid != 0 or os.geteuid() == 0):
-        sys.exit(1)
-' "$XR_VENV" || { echo "x-reader: cache ancestry contains a redirected symlink" >&2; exit 1; }
+# A healthy cache needs no caller-side Python. Check ancestry before running cached code.
+XR_CHECK_PATH="$XR_VENV"
+while [ -n "$XR_CHECK_PATH" ] && [ "$XR_CHECK_PATH" != / ]; do
+  if [ -L "$XR_CHECK_PATH" ]; then
+    # Preserve root-owned OS aliases (for example, macOS /var) for non-root callers.
+    XR_LINK_UID=$(PATH=/usr/bin:/bin stat -c '%u' -- "$XR_CHECK_PATH" 2>/dev/null) ||
+      XR_LINK_UID=$(PATH=/usr/bin:/bin stat -f '%u' "$XR_CHECK_PATH" 2>/dev/null) ||
+      { echo "x-reader: cannot verify cache ancestry" >&2; exit 1; }
+    if [ "$EUID" -eq 0 ] || [ "$XR_LINK_UID" != 0 ]; then
+      echo "x-reader: cache ancestry contains a redirected symlink" >&2
+      exit 1
+    fi
+  fi
+  XR_CHECK_PATH=${XR_CHECK_PATH%/*}
+done
 if [ ! -x "$XR_VENV/bin/x-reader" ] || ! "$XR_VENV/bin/x-reader" doctor --json >/dev/null 2>&1; then
   if [ ! -x "$XR_VENV/bin/python" ] || ! "$XR_VENV/bin/python" -m pip --version >/dev/null 2>&1; then
     python3 -m venv --clear "$XR_VENV" || exit 1

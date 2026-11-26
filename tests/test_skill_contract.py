@@ -171,6 +171,30 @@ class AgentSkillContractTest(unittest.TestCase):
                 )
                 self.assertEqual(calls, expected_calls)
 
+    def test_bootstrap_reuses_healthy_cache_without_python_on_path(self):
+        """A cached executable can work even if no caller-side python3 is available."""
+        text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
+        fence = re.escape(chr(96) * 3)
+        bootstrap = re.search(fence + r"bash\n(XR_CLI_COMMIT=[\s\S]*?)\n" + fence, text).group(1)
+        pin = re.search(r'XR_CLI_COMMIT="([0-9a-f]{40})"', bootstrap).group(1)
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp).resolve()
+            bindir = home / "empty-path"
+            bindir.mkdir()
+            cache = home / "cache"
+            venv = cache / "x-reader" / ("venv-" + pin[:12])
+            (venv / "bin").mkdir(parents=True)
+            binary = venv / "bin/x-reader"
+            binary.write_text('#!/bin/sh\n[ "$1" = "doctor" ] && echo \'{"ready":true}\'\n')
+            binary.chmod(0o755)
+            result = subprocess.run(
+                ["/bin/bash", "-c", bootstrap + '\n"$XR_BIN" doctor --json'],
+                cwd=temp, env={"PATH": str(bindir), "HOME": str(home), "XDG_CACHE_HOME": str(cache)},
+                capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('{"ready":true}', result.stdout)
+
     def test_bootstrap_refuses_to_clear_symlinked_cache_venv(self):
         """A symlinked cache venv must never be passed to venv --clear."""
         text = (ROOT / "skills/x-reader/SKILL.md").read_text(encoding="utf-8")
@@ -454,10 +478,12 @@ class AgentSkillContractTest(unittest.TestCase):
             (venv / "pip.conf").write_text(f"[global]\ntarget = {foreign}\n", encoding="utf-8")
             python = venv / "bin/python"
             command = [str(python), "-m", "pip", "--isolated", "config", "list"]
-            default = subprocess.run(command, cwd=temp, capture_output=True,
-                                     text=True, check=True, timeout=15)
+            control_env = dict(os.environ)
+            control_env.pop("PIP_CONFIG_FILE", None)
+            default = subprocess.run(command, cwd=temp, env=control_env,
+                                     capture_output=True, text=True, check=True, timeout=15)
             disabled = subprocess.run(command, cwd=temp,
-                                      env=dict(os.environ, PIP_CONFIG_FILE=os.devnull),
+                                      env=dict(control_env, PIP_CONFIG_FILE=os.devnull),
                                       capture_output=True, text=True, check=True, timeout=15)
             self.assertIn(str(foreign), default.stdout)
             self.assertNotIn(str(foreign), disabled.stdout)
